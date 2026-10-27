@@ -1,0 +1,265 @@
+# ===================================================================
+# TR-BUDGET-SERVICE: BOOTSTRAP & FALLBACK CONFIGURATION
+# -------------------------------------------------------------------
+# PORT: 8503
+# ===================================================================
+
+server:
+  port: ${SERVER_PORT:8503}
+  shutdown: graceful
+  compression:
+    enabled: true
+    mime-types: application/json,application/xml,text/html,text/xml,text/plain,application/javascript,text/css,image/svg+xml
+    min-response-size: 2048
+
+spring:
+  application:
+    name: tr-budget-service
+  threads:
+    virtual:
+      enabled: true
+  messages:
+    basename: i18n/messages
+    encoding: UTF-8
+
+  config:
+    import: "optional:configserver:${SPRING_CLOUD_CONFIG_URI:http://localhost:8888}"
+  cloud:
+    config:
+      fail-fast: false
+      uri: ${SPRING_CLOUD_CONFIG_URI:http://localhost:8888}
+      username: ${SPRING_CLOUD_CONFIG_USERNAME:admin}
+      password: ${SPRING_CLOUD_CONFIG_PASSWORD:admin}
+      retry:
+        initial-interval: 3000
+        multiplier: 1.5
+        max-attempts: 5
+    openfeign:
+      circuitbreaker:
+        enabled: true
+
+  jackson:
+    default-property-inclusion: always
+    time-zone: Asia/Ho_Chi_Minh
+
+  servlet:
+    multipart:
+      max-file-size: 100MB
+      max-request-size: 100MB
+
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/tr_budget}
+    username: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD:DnictPro@123}
+    driver-class-name: org.postgresql.Driver
+    type: com.zaxxer.hikari.HikariDataSource
+    hikari:
+      pool-name: HikariPool-${spring.application.name}
+      maximum-pool-size: ${HIKARI_MAX_POOL:15}
+      minimum-idle: ${HIKARI_MIN_IDLE:3}
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+      keepalive-time: 30000
+      auto-commit: true
+
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: update
+    show-sql: ${JPA_SHOW_SQL:false}
+    properties:
+      hibernate:
+        "[order_by.default_null_ordering]": last
+        "[jdbc.batch_size]": 50
+
+  flyway:
+    enabled: ${FLYWAY_ENABLED:false}
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+    baseline-version: '0'
+
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:DnictPro@123}
+      database: ${REDIS_DATABASE:0}
+      timeout: 10s
+      lettuce:
+        pool:
+          max-active: ${REDIS_MAX_ACTIVE:8}
+          max-idle: ${REDIS_MAX_IDLE:4}
+          min-idle: ${REDIS_MIN_IDLE:1}
+
+  cache:
+    type: redis
+    redis:
+      time-to-live: 1800000
+      cache-null-values: false
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:29092}
+    consumer:
+      group-id: ${spring.application.name}
+      auto-offset-reset: earliest
+      enable-auto-commit: false
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring.json.trusted.packages: "*"
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+    listener:
+      missing-topics-fatal: false
+
+  boot:
+    admin:
+      client:
+        enabled: ${SPRING_BOOT_ADMIN_ENABLED:true}
+        url: ${BOOT_ADMIN_URL:http://localhost:9090}
+        instance:
+          metadata:
+            user:
+              name: ${BOOT_ADMIN_USERNAME:admin}
+              password: ${BOOT_ADMIN_PASSWORD:DnictPro@123}
+
+eureka:
+  client:
+    serviceUrl:
+      defaultZone: ${EUREKA_ZONE:http://localhost:8061/eureka/}
+    fetch-registry: true
+    register-with-eureka: true
+    registry-fetch-interval-seconds: 10
+  instance:
+    prefer-ip-address: true
+    lease-renewal-interval-in-seconds: 10
+    instance-id: ${spring.application.name}:${spring.application.instance_id:${random.value}}
+
+sa-token:
+  token-name: Authorization
+  timeout: 604800
+  active-timeout: ${SA_TOKEN_ACTIVE_TIMEOUT:259200}
+  is-concurrent: true
+  is-share: true
+  token-style: jwt
+  jwt-secret-key: ${SA_TOKEN_JWT_SECRET:DnictPro@123}
+  is-log: false
+
+redisson:
+  keyPrefix: ${REDISSON_KEY_PREFIX:${spring.application.name}}
+  threads: ${REDISSON_THREADS:4}
+  nettyThreads: ${REDISSON_NETTY_THREADS:8}
+  singleServerConfig:
+    clientName: ${spring.application.name}
+    connectionMinimumIdleSize: ${REDISSON_POOL_MIN_IDLE:8}
+    connectionPoolSize: ${REDISSON_POOL_MAX_SIZE:32}
+    idleConnectionTimeout: ${REDISSON_IDLE_TIMEOUT:10000}
+    timeout: ${REDISSON_CMD_TIMEOUT:3000}
+    subscriptionConnectionPoolSize: ${REDISSON_SUB_POOL_SIZE:50}
+  clusterServersConfig:
+    enabled: ${REDIS_CLUSTER_ENABLED:false}
+    nodeAddresses: ${REDIS_CLUSTER_NODES:}
+    clientName: ${spring.application.name}
+    masterConnectionMinimumIdleSize: ${REDISSON_CLUSTER_MASTER_MIN_IDLE:8}
+    masterConnectionPoolSize: ${REDISSON_CLUSTER_MASTER_MAX_SIZE:32}
+    slaveConnectionMinimumIdleSize: ${REDISSON_CLUSTER_SLAVE_MIN_IDLE:8}
+    slaveConnectionPoolSize: ${REDISSON_CLUSTER_SLAVE_MAX_SIZE:32}
+    idleConnectionTimeout: ${REDISSON_IDLE_TIMEOUT:10000}
+    timeout: ${REDISSON_CMD_TIMEOUT:10000}
+    subscriptionConnectionPoolSize: ${REDISSON_SUB_POOL_SIZE:50}
+    scanInterval: ${REDISSON_CLUSTER_SCAN_INTERVAL:2000}
+    readMode: ${REDISSON_CLUSTER_READ_MODE:SLAVE}
+    subscriptionMode: ${REDISSON_CLUSTER_SUB_MODE:SLAVE}
+
+tr:
+  app-code: budget
+  app-shorthand: Budget
+  feign:
+    core-service-name: ${CORE_SERVICE_NAME:tr-core-service}
+    catalog-service-name: ${CATALOG_SERVICE_NAME:tr-catalog-service}
+    directory-service-name: ${DIRECTORY_SERVICE_NAME:tr-directory-service}
+    file-service-name: ${FILE_SERVICE_NAME:tr-file-service}
+    notification-service-name: ${NOTIFICATION_SERVICE_NAME:tr-notification-service}
+    workflow-service-name: ${WORKFLOW_SERVICE_NAME:tr-workflow-service}
+    reporting-service-name: ${REPORTING_SERVICE_NAME:tr-reporting-service}
+    planning-service-name: ${PLANNING_SERVICE_NAME:tr-planning-service}
+    payment-service-name: ${PAYMENT_SERVICE_NAME:tr-payment-service}
+    budget-service-name: ${BUDGET_SERVICE_NAME:tr-budget-service}
+
+security:
+  excludes:
+    - /error
+    - /swagger-ui.html
+    - /swagger-ui/**
+    - /webjars/**
+    - /v3/api-docs/**
+    - /actuator/**
+
+xss:
+  enabled: true
+  excludes: []
+
+springdoc:
+  api-docs:
+    enabled: true
+    path: /v3/api-docs
+  info:
+    title: 'TR Budget Service — API'
+    description: 'API Quản lý Kinh phí Đa cấp, Cây Dự toán Thu - Chi, Phân quyền Tự chủ Tài chính Đơn vị, Phân bổ Kinh phí, Sổ cái Biến động Nguồn (Bổ sung, Chuyển nguồn liên năm, Điều chuyển nội bộ), Giải ngân Kho bạc và Báo cáo Quyết toán'
+    version: '${revision:4.1.2.20261026.1}'
+    contact:
+      name: tyran8x
+      email: tyran8x@gmail.com
+      url: https://github.com/tyran8x
+    license:
+      name: Apache 2.0
+      url: https://www.apache.org/licenses/LICENSE-2.0.html
+  servers:
+    - url: /v1/budget
+      description: Budget Service
+  components:
+    security-schemes:
+      Authorization:
+        type: HTTP
+        scheme: bearer
+        bearer-format: JWT
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include:
+          - health
+          - info
+          - metrics
+          - loggers
+          - refresh
+          - prometheus
+  endpoint:
+    health:
+      show-details: when_authorized
+  prometheus:
+    metrics:
+      export:
+        enabled: true
+
+logging:
+  charset:
+    console: UTF-8
+    file: UTF-8
+  config: classpath:logback-spring.xml
+  file:
+    name: ${LOG_PATH:/opt/logs}/${spring.application.name}/sys-info.log
+    path: ${LOG_PATH:/opt/logs}
+  logback:
+    rollingpolicy:
+      max-file-size: ${LOG_MAX_FILE_SIZE:50MB}
+      max-history: ${LOG_MAX_HISTORY:60}
+      total-size-cap: ${LOG_TOTAL_SIZE_CAP:10GB}
+  level:
+    vn:
+      tr: ${LOGGING_LEVEL_VN_TR:INFO}
+    org:
+      springframework: ${LOGGING_LEVEL_SPRINGFRAMEWORK:INFO}

@@ -1,0 +1,54 @@
+# ===================================================================
+# TR-BUDGET-SERVICE: LOCAL STANDALONE PROFILE (PORT 8503)
+# ===================================================================
+
+server:
+  port: ${SERVER_PORT:8503}
+
+spring:
+  config:
+    import: ""
+  cloud:
+    config:
+      enabled: false
+      fail-fast: false
+  boot:
+    admin:
+      client:
+        enabled: false
+  autoconfigure:
+    exclude:
+      - org.redisson.spring.starter.RedissonAutoConfigurationV2
+      - org.redisson.spring.starter.RedissonAutoConfigurationV4
+      - com.baomidou.lock.spring.boot.autoconfigure.RedissonLockAutoConfiguration
+      - com.baomidou.lock.spring.boot.autoconfigure.LockAutoConfiguration
+      - org.springframework.boot.data.redis.autoconfigure.DataRedisAutoConfiguration
+      - org.springframework.boot.data.redis.autoconfigure.DataRedisRepositoriesAutoConfiguration
+      - org.springframework.boot.kafka.autoconfigure.KafkaAutoConfiguration
+      - org.javers.spring.boot.sql.JaversSqlAutoConfiguration
+      - vn.tr.common.redis.config.RedisConfig
+      - vn.tr.common.redis.config.CacheConfig
+      - vn.tr.common.ratelimiter.config.RateLimiterConfig
+      - vn.tr.common.kafka.config.KafkaConfig
+      - vn.tr.common.jpa.config.PostgresExtensionInitializer
+  datasource:
+    url: jdbc:h2:mem:tr_budget;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH;DB_CLOSE_DELAY=-1
+    username: sa
+    password: ""
+    driver-class-name: org.h2.Driver
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: update
+  cache:
+    type: simple
+
+eureka:
+  client:
+    enabled: false
+    register-with-eureka: false
+    fetch-registry: false
+
+security:
+  actuator:
+    auth-enabled: false

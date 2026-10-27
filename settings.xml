@@ -1,0 +1,122 @@
+<settings xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xmlns="http://maven.apache.org/SETTINGS/1.2.0"
+          xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.2.0 http://maven.apache.org/xsd/settings-1.2.0.xsd">
+
+    <servers>
+        <server>
+            <id>nexus-repo</id>
+            <username>tr-deloyment</username>
+            <password>DnictPro@123</password>
+        </server>
+        <server>
+            <id>central</id>
+            <username>qZWt17</username>
+            <password>3vHJBiq1727jj7DRI7Cc4qhb9SssUXtb1</password>
+        </server>
+        <server>
+            <id>nexus-releases</id>
+            <username>tr-deloyment</username>
+            <password>DnictPro@123</password>
+            <repositoryOrigins>
+                <repositoryOrigin>http://49.156.54.118</repositoryOrigin>
+            </repositoryOrigins>
+        </server>
+        <server>
+            <id>nexus-snapshots</id>
+            <username>tr-deloyment</username>
+            <password>DnictPro@123</password>
+            <repositoryOrigins>
+                <repositoryOrigin>http://49.156.54.118</repositoryOrigin>
+            </repositoryOrigins>
+        </server>
+    </servers>
+
+    <mirrors>
+        <mirror>
+            <id>nexus-repo</id>
+            <mirrorOf>nexus-repo</mirrorOf>
+            <name>Allow HTTP for TR Nexus repository</name>
+            <url>http://49.156.54.118/nexus/repository/tr-public/</url>
+            <blocked>false</blocked>
+        </mirror>
+    </mirrors>
+
+    <profiles>
+        <profile>
+            <id>tr-standard</id>
+            <repositories>
+                <!-- 1. Ưu tiên Nexus nội bộ chứa tr-common và proxy Maven Central -->
+                <repository>
+                    <id>nexus-repo</id>
+                    <name>TR Nexus Repository</name>
+                    <url>http://49.156.54.118/nexus/repository/tr-public/</url>
+                    <releases>
+                        <enabled>true</enabled>
+                    </releases>
+                    <snapshots>
+                        <enabled>true</enabled>
+                        <updatePolicy>always</updatePolicy>
+                    </snapshots>
+                </repository>
+                <!-- 2. Maven Central dự phòng -->
+                <repository>
+                    <id>central</id>
+                    <name>Maven Central</name>
+                    <url>https://repo.maven.apache.org/maven2</url>
+                    <releases>
+                        <enabled>true</enabled>
+                    </releases>
+                    <snapshots>
+                        <enabled>false</enabled>
+                    </snapshots>
+                </repository>
+                <repository>
+                    <id>spring-milestone</id>
+                    <snapshots>
+                        <enabled>false</enabled>
+                    </snapshots>
+                    <url>https://repo.spring.io/milestone</url>
+                </repository>
+                <repository>
+                    <id>spring-snapshot</id>
+                    <snapshots>
+                        <enabled>true</enabled>
+                    </snapshots>
+                    <url>https://repo.spring.io/snapshot</url>
+                </repository>
+                <repository>
+                    <id>sonatype-nexus-snapshots</id>
+                    <name>Sonatype Nexus Snapshots</name>
+                    <url>https://oss.sonatype.org/content/repositories/snapshots/</url>
+                    <snapshots>
+                        <enabled>true</enabled>
+                    </snapshots>
+                    <releases>
+                        <enabled>false</enabled>
+                    </releases>
+                </repository>
+            </repositories>
+            <pluginRepositories>
+                <pluginRepository>
+                    <id>nexus-repo</id>
+                    <name>TR Nexus Plugin Repository</name>
+                    <url>http://49.156.54.118/nexus/repository/tr-public/</url>
+                    <releases>
+                        <enabled>true</enabled>
+                    </releases>
+                    <snapshots>
+                        <enabled>true</enabled>
+                    </snapshots>
+                </pluginRepository>
+                <pluginRepository>
+                    <id>central</id>
+                    <url>https://repo.maven.apache.org/maven2</url>
+                </pluginRepository>
+            </pluginRepositories>
+        </profile>
+    </profiles>
+
+    <activeProfiles>
+        <activeProfile>tr-standard</activeProfile>
+    </activeProfiles>
+</settings>
