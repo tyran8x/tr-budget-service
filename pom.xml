@@ -6,7 +6,7 @@
     <parent>
         <groupId>io.github.tyran8x</groupId>
         <artifactId>tr-pro-app</artifactId>
-        <version>4.1.2.20261026.1</version>
+        <version>4.1.2.20261028.1</version>
         <relativePath/>
     </parent>
 
@@ -16,7 +16,7 @@
     <description>Enterprise Multi-Level Budget, Revenue-Expenditure Tree, Unit Autonomy, Allocation, Carry-Over, Supplement, Disbursement and Settlement Service</description>
 
     <properties>
-        <revision>4.1.2.20261026.1</revision>
+        <revision>4.1.2.20261028.1</revision>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
         <java.version>25</java.version>
