@@ -60,13 +60,13 @@ tr-budget-service/
 
 | # | Entity Class | Tên Bảng (`@Table`) | Package | Mô tả Nghiệp vụ |
 | --- | --- | --- | --- | --- |
-| 1 | `BudgetAllocation` | `budget_allocation` | `vn.tr.budget.dao.model` | Entity đại diện cho Phương án & Quyết định Phân bổ Dự toán Kinh phí Đa kỳ (BudgetAllocation). Mapping: Table {@code budget_allocation}. |
-| 2 | `BudgetCategory` | `budget_category` | `vn.tr.budget.dao.model` | Entity đại diện cho Danh mục Loại - Khoản Mục lục Ngân sách & Nguồn Kinh phí (BudgetCategory). Mapping: Table {@code budget_category}. |
-| 3 | `BudgetDisbursement` | `budget_disbursement` | `vn.tr.budget.dao.model` | Entity đại diện cho Hồ sơ Cam kết chi, Tạm ứng, Giải ngân Kho bạc & Quyết toán (BudgetDisbursement). Mapping: Table {@code budget_disbursement}. |
-| 4 | `BudgetEstimateItem` | `budget_estimate_item` | `vn.tr.budget.dao.model` | Entity đại diện cho Cây Danh mục & Cấu hình Dự toán Thu - Chi Đa cấp (BudgetEstimateItem). Mapping: Table {@code budget_estimate_item}. |
-| 5 | `BudgetReport` | `budget_report` | `vn.tr.budget.dao.model` | Entity đại diện cho Báo cáo Thực hiện Thu - Chi & Tổng hợp Quyết toán Định kỳ (BudgetReport). Mapping: Table {@code budget_report}. |
-| 6 | `BudgetTransaction` | `budget_transaction` | `vn.tr.budget.dao.model` | Entity đại diện cho Sổ cái Biến động Nguồn Kinh phí Bút toán kép (BudgetTransaction). Mapping: Table {@code budget_transaction}. |
-| 7 | `BudgetUnitConfig` | `budget_unit_config` | `vn.tr.budget.dao.model` | Entity đại diện cho Cấu hình Đơn vị Sử dụng Ngân sách & Tự chủ Tài chính (BudgetUnitConfig). Mapping: Table {@code budget_unit_config}. |
+| 1 | `BudgetAllocation` | `budget_allocation` | `vn.tr.budget.dao.model` | Entity đại diện cho Phương án & Quyết định Phân bổ Dự toán Kinh phí Đa kỳ (BudgetAllocation). |
+| 2 | `BudgetCategory` | `budget_category` | `vn.tr.budget.dao.model` | Entity đại diện cho Danh mục Loại - Khoản Mục lục Ngân sách & Nguồn Kinh phí (BudgetCategory). |
+| 3 | `BudgetDisbursement` | `budget_disbursement` | `vn.tr.budget.dao.model` | Entity đại diện cho Hồ sơ Cam kết chi, Tạm ứng, Giải ngân Kho bạc & Quyết toán (BudgetDisbursement). |
+| 4 | `BudgetEstimateItem` | `budget_estimate_item` | `vn.tr.budget.dao.model` | Entity đại diện cho Cây Danh mục & Cấu hình Dự toán Thu - Chi Đa cấp (BudgetEstimateItem). |
+| 5 | `BudgetReport` | `budget_report` | `vn.tr.budget.dao.model` | Entity đại diện cho Báo cáo Thực hiện Thu - Chi & Tổng hợp Quyết toán Định kỳ (BudgetReport). |
+| 6 | `BudgetTransaction` | `budget_transaction` | `vn.tr.budget.dao.model` | Entity đại diện cho Sổ cái Biến động Nguồn Kinh phí Bút toán kép (BudgetTransaction). |
+| 7 | `BudgetUnitConfig` | `budget_unit_config` | `vn.tr.budget.dao.model` | Entity đại diện cho Cấu hình Đơn vị Sử dụng Ngân sách & Tự chủ Tài chính (BudgetUnitConfig). |
 
 ### 3. Danh mục REST Controllers, Endpoints & Phân quyền (`8` Controllers / `113` Endpoints)
 
