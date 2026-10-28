@@ -259,4 +259,11 @@ public class BudgetDisbursementController extends BaseController {
     return success(budgetDisbursementBusiness.rejectDisbursement(id, body));
   }
 
+  @SaCheckPermission("BudgetDisbursementCreate")
+  @PostMapping("/reserve-commitment")
+  @Operation(summary = "Khởi tạo nhanh hồ sơ Cam kết chi (COMMITMENT) liên thông từ Nhiệm vụ Kế hoạch / Công việc")
+  public R<Map<String, Object>> reserveCommitment(@RequestBody Map<String, Object> body) {
+    return success(budgetDisbursementBusiness.reserveCommitment(body));
+  }
+
 }

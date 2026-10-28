@@ -91,6 +91,7 @@ public class BudgetTransactionBusiness {
             budgetTransactionService.getRepository());
     if ("APPROVED".equalsIgnoreCase(entity.getApprovalStatus())) {
       workflowEngineHelper.executeDoubleEntryLedger(entity);
+      syncAffectedAllocationsToPlan(entity);
     }
     return budgetTransactionMapper.toData(entity);
   }
@@ -239,10 +240,43 @@ public class BudgetTransactionBusiness {
     }
     BudgetTransaction saved = budgetTransactionService.save(tx);
     workflowEngineHelper.executeDoubleEntryLedger(saved);
+    syncAffectedAllocationsToPlan(saved);
     if (integrationOrchestrator != null) {
       integrationOrchestrator.notifyTransactionEvent(saved, "APPROVED");
     }
     return budgetTransactionMapper.toData(saved);
+  }
+
+  private void syncAffectedAllocationsToPlan(BudgetTransaction tx) {
+    if (integrationOrchestrator == null || tx == null) {
+      return;
+    }
+    if (tx.getAllocationId() != null) {
+      budgetAllocationRepo
+          .findById(tx.getAllocationId())
+          .ifPresent(
+              alloc ->
+                  integrationOrchestrator.syncAllocationToLinkedPlan(
+                      alloc,
+                      tx.getTxType(),
+                      tx.getAmount(),
+                      tx.getCode(),
+                      tx.getName()));
+    }
+    if (tx.getCounterpartAllocationId() != null) {
+      budgetAllocationRepo
+          .findById(tx.getCounterpartAllocationId())
+          .ifPresent(
+              targetAlloc ->
+                  integrationOrchestrator.syncAllocationToLinkedPlan(
+                      targetAlloc,
+                      "CARRY_OVER_OUT".equalsIgnoreCase(tx.getTxType())
+                          ? "CARRY_OVER_IN"
+                          : tx.getTxType(),
+                      tx.getAmount(),
+                      tx.getCode(),
+                      "Nhận điều chuyển / chuyển nguồn từ [" + tx.getCode() + "]"));
+    }
   }
 
   /** Từ chối giao dịch biến động nguồn kinh phí. */

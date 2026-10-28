@@ -1,7 +1,10 @@
 package vn.tr.budget.config;
 
+import cn.dev33.satoken.SaManager;
+import cn.dev33.satoken.same.SaSameTemplate;
 import cn.dev33.satoken.stp.StpUtil;
 import cn.dev33.satoken.stp.parameter.SaLoginParameter;
+import jakarta.annotation.PostConstruct;
 import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -32,6 +35,17 @@ import vn.tr.common.satoken.utils.LoginHelper;
 @Profile("local")
 @Order(Ordered.HIGHEST_PRECEDENCE)
 public class LocalStandaloneConfig implements WebMvcConfigurer {
+
+  @PostConstruct
+  public void initLocalSameTokenBypass() {
+    SaManager.setSaSameTemplate(
+        new SaSameTemplate() {
+          @Override
+          public boolean isValid(String token) {
+            return true;
+          }
+        });
+  }
 
   @Bean
   @ConditionalOnMissingBean(AuditRollbackHelper.class)
@@ -81,6 +95,7 @@ public class LocalStandaloneConfig implements WebMvcConfigurer {
                         user.getFullName(),
                         user.getUsername());
                   }
+                  StpUtil.setTokenValue(rawToken);
                 } catch (Exception e) {
                   log.debug(
                       "[LocalStandaloneConfig] Could not bridge token session: {}",

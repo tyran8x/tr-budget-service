@@ -44,4 +44,8 @@ public interface BudgetAllocationRepo
   List<BudgetAllocation> findByBudgetYearOrderByIdAsc(Integer budgetYear);
 
   List<BudgetAllocation> findByNodeIdAndBudgetYearOrderByIdAsc(Long nodeId, Integer budgetYear);
+
+  List<BudgetAllocation> findByLinkedPlanCodeIgnoreCaseOrderByIdAsc(String linkedPlanCode);
+
+  List<BudgetAllocation> findByLinkedPlanIdOrderByIdAsc(Long linkedPlanId);
 }

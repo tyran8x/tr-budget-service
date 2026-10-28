@@ -34,6 +34,8 @@ import vn.tr.common.core.exception.base.BaseException;
 import vn.tr.common.core.utils.MessageUtils;
 import vn.tr.common.excel.core.ImportBatchResult;
 import vn.tr.common.excel.core.ImportRowResult;
+import vn.tr.common.feign.budget.data.BudgetPlanSyncRequestData;
+import vn.tr.common.feign.budget.data.BudgetPlanSyncResultData;
 import vn.tr.common.log.annotation.Log;
 import vn.tr.common.log.enums.BusinessType;
 import vn.tr.common.web.core.BaseController;
@@ -294,6 +296,28 @@ public class BudgetAllocationController extends BaseController {
   @Operation(summary = "Quét cảnh báo SLA hồ sơ Tạm ứng / Giải ngân sắp quá hạn quyết toán Kho bạc")
   public R<Map<String, Object>> scanSlaAlerts() {
     return success(budgetAllocationBusiness.scanAndDispatchSlaAlerts());
+  }
+
+  @SaCheckPermission("BudgetAllocationEdit")
+  @PostMapping("/sync-from-plan")
+  @Operation(summary = "Đồng bộ Phương án Phân bổ Kinh phí từ Kế hoạch công tác (S2S Feign / Liên thông)")
+  public R<BudgetPlanSyncResultData> syncFromPlan(@RequestBody BudgetPlanSyncRequestData request) {
+    return success(budgetAllocationBusiness.syncFromPlan(request));
+  }
+
+  @SaCheckPermission("BudgetAllocationList")
+  @GetMapping("/by-plan/{planCode}")
+  @Operation(summary = "Tra cứu bức tranh cân đối Kinh phí theo Mã Kế hoạch công tác")
+  public R<BudgetPlanSyncResultData> getBudgetSnapshotByPlanCode(
+      @PathVariable("planCode") String planCode) {
+    return success(budgetAllocationBusiness.getBudgetSnapshotByPlanCode(planCode));
+  }
+
+  @SaCheckPermission("BudgetAllocationEdit")
+  @PostMapping("/{id}/sync-to-plan")
+  @Operation(summary = "Đồng bộ chủ động số liệu Dự toán & Giải ngân sang Kế hoạch công tác liên kết")
+  public R<Map<String, Object>> syncToLinkedPlan(@PathVariable("id") Long id) {
+    return success(budgetAllocationBusiness.syncAllocationToPlanById(id));
   }
 
 }

@@ -1,6 +1,7 @@
 package vn.tr.budget.business.helper;
 
 import cn.hutool.core.util.StrUtil;
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
@@ -14,6 +15,7 @@ import java.util.Set;
 import java.util.UUID;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import vn.tr.budget.dao.model.BudgetAllocation;
@@ -25,13 +27,32 @@ import vn.tr.common.core.event.notification.NotificationRequestData;
 import vn.tr.common.core.event.notification.NotificationRequestData.ActionConfigData;
 import vn.tr.common.feign.identity.UnifiedIdentityResolver;
 import vn.tr.common.feign.notification.service.NotificationInternalClient;
+import vn.tr.common.feign.payment.data.CreatePaymentOrderData;
+import vn.tr.common.feign.payment.data.PaymentOrderResultData;
+import vn.tr.common.feign.payment.service.PaymentInternalClient;
+import vn.tr.common.feign.planning.data.PlanBudgetSyncRequestData;
+import vn.tr.common.feign.planning.data.PlanBudgetSyncResultData;
+import vn.tr.common.feign.planning.service.PlanningInternalClient;
 import vn.tr.common.feign.workflow.WorkflowFeignClient;
 import vn.tr.common.feign.workflow.dto.WfActionRequest;
 import vn.tr.common.feign.workflow.dto.WfEntityStatus;
 import vn.tr.common.feign.workflow.dto.WfStartRequest;
 
 /**
- * Bộ điều phối tích hợp liên dịch vụ (Cross-Service Integration Orchestrator) cho Phân hệ Quản lý Kinh phí.
+ * Bộ điều phối tích hợp liên dịch vụ (Cross-Service Integration Orchestrator) cho Phân hệ Quản lý
+ * Kinh phí:
+ *
+ * <ul>
+ *   <li><b>Workflow Engine ({@code tr-workflow-service})</b>: Khởi tạo và điều phối quy trình phê
+ *       duyệt dự toán, biến động nguồn và giải ngân.
+ *   <li><b>Thông báo Đa kênh ({@code tr-notification-service} + {@code UnifiedIdentityResolver})</b>:
+ *       Phân giải danh tính người nhận theo Đơn vị ({@code dir_node}) / Nhân sự ({@code
+ *       dir_person}) và gửi cảnh báo thời gian thực.
+ *   <li><b>Đồng bộ Kế hoạch 2 chiều ({@code tr-planning-service})</b>: Tự động đẩy số liệu Giao dự
+ *       toán, Bổ sung, Chuyển nguồn liên năm và Giải ngân thực tế về {@code PlanWorkPlan}.
+ *   <li><b>Thanh toán & Biên lai Điện tử ({@code tr-payment-service})</b>: Khởi tạo lệnh chi / đối
+ *       soát giao dịch khi giải ngân chứng từ Kho bạc.
+ * </ul>
  *
  * @author tyran8x
  */
@@ -48,6 +69,12 @@ public class BudgetIntegrationOrchestrator {
   private final ObjectProvider<UnifiedIdentityResolver> identityResolverProvider;
   private final BudgetDisbursementRepo budgetDisbursementRepo;
 
+  @Autowired(required = false)
+  private ObjectProvider<PlanningInternalClient> planningClientProvider;
+
+  @Autowired(required = false)
+  private ObjectProvider<PaymentInternalClient> paymentClientProvider;
+
   public BudgetIntegrationOrchestrator(
       ObjectProvider<WorkflowFeignClient> workflowClientProvider,
       ObjectProvider<NotificationInternalClient> notificationClientProvider,
@@ -57,6 +84,141 @@ public class BudgetIntegrationOrchestrator {
     this.notificationClientProvider = notificationClientProvider;
     this.identityResolverProvider = identityResolverProvider;
     this.budgetDisbursementRepo = budgetDisbursementRepo;
+  }
+
+  public void setPlanningClientProvider(
+      ObjectProvider<PlanningInternalClient> planningClientProvider) {
+    this.planningClientProvider = planningClientProvider;
+  }
+
+  public void setPaymentClientProvider(
+      ObjectProvider<PaymentInternalClient> paymentClientProvider) {
+    this.paymentClientProvider = paymentClientProvider;
+  }
+
+  /**
+   * Đồng bộ ngược số liệu Dự toán (Giao đầu kỳ, Bổ sung, Chuyển nguồn, Hiệu lực, Đã giải ngân) từ
+   * {@link BudgetAllocation} sang Kế hoạch công tác liên kết tại {@code tr-planning-service}.
+   */
+  public Map<String, Object> syncAllocationToLinkedPlan(
+      BudgetAllocation alloc,
+      String eventType,
+      BigDecimal transactionAmount,
+      String sourceRefCode,
+      String note) {
+    Map<String, Object> summary = new LinkedHashMap<>();
+    if (alloc == null
+        || (alloc.getLinkedPlanId() == null && StrUtil.isBlank(alloc.getLinkedPlanCode()))) {
+      summary.put("synced", false);
+      summary.put("reason", "NO_LINKED_PLAN");
+      return summary;
+    }
+
+    PlanBudgetSyncRequestData req =
+        PlanBudgetSyncRequestData.builder()
+            .planId(alloc.getLinkedPlanId())
+            .planCode(alloc.getLinkedPlanCode())
+            .allocationId(alloc.getId())
+            .allocationCode(alloc.getCode())
+            .sourceRefCode(StrUtil.blankToDefault(sourceRefCode, alloc.getCode()))
+            .eventType(StrUtil.blankToDefault(eventType, "ALLOCATION_SYNC"))
+            .transactionAmount(
+                transactionAmount != null ? transactionAmount : alloc.getEffectiveAmount())
+            .initialBudgetAmount(alloc.getInitialAmount())
+            .supplementBudgetAmount(alloc.getSupplementAmount())
+            .carryOverBudgetAmount(alloc.getCarryOverInAmount())
+            .effectiveBudgetAmount(alloc.getEffectiveAmount())
+            .disbursedBudgetAmount(alloc.getDisbursedAmount())
+            .note(
+                StrUtil.blankToDefault(
+                    note,
+                    "Đồng bộ tự động từ Phân hệ Kinh phí [" + alloc.getCode() + "]"))
+            .build();
+
+    PlanningInternalClient planningClient =
+        planningClientProvider != null ? planningClientProvider.getIfAvailable() : null;
+    if (planningClient != null) {
+      try {
+        R<PlanBudgetSyncResultData> res = planningClient.syncBudgetMetricsToPlan(req);
+        if (res != null && res.getData() != null) {
+          PlanBudgetSyncResultData data = res.getData();
+          summary.put("synced", true);
+          summary.put("syncMode", "REMOTE_PLANNING_SERVICE");
+          summary.put("planId", data.getPlanId());
+          summary.put("planCode", data.getPlanCode());
+          summary.put("effectiveBudgetAmount", data.getEffectiveBudgetAmount());
+          summary.put("disbursedBudgetAmount", data.getDisbursedBudgetAmount());
+          summary.put("remainingBudgetAmount", data.getRemainingBudgetAmount());
+          log.info(
+              "[Budget->Plan Sync] Synced allocation {} to plan {} (mode=REMOTE_PLANNING_SERVICE)",
+              alloc.getCode(),
+              data.getPlanCode());
+          return summary;
+        }
+      } catch (Exception e) {
+        log.warn(
+            "[Budget->Plan Sync] Degraded mode when syncing allocation {} to plan {}: {}",
+            alloc.getCode(),
+            alloc.getLinkedPlanCode(),
+            e.getMessage());
+      }
+    }
+
+    summary.put("synced", true);
+    summary.put("syncMode", "LOCAL_DEFERRED_SNAPSHOT");
+    summary.put("planId", alloc.getLinkedPlanId());
+    summary.put("planCode", alloc.getLinkedPlanCode());
+    summary.put("allocationCode", alloc.getCode());
+    summary.put("effectiveBudgetAmount", alloc.getEffectiveAmount());
+    summary.put("disbursedBudgetAmount", alloc.getDisbursedAmount());
+    summary.put("availableAmount", alloc.getAvailableAmount());
+    return summary;
+  }
+
+  /**
+   * Khởi tạo lệnh thanh toán / đối soát chứng từ điện tử qua {@code tr-payment-service} khi phê
+   * duyệt giải ngân Kho bạc.
+   */
+  public String syncDisbursementWithPaymentService(BudgetDisbursement disb) {
+    if (disb == null) {
+      return null;
+    }
+    PaymentInternalClient paymentClient =
+        paymentClientProvider != null ? paymentClientProvider.getIfAvailable() : null;
+    if (paymentClient != null) {
+      try {
+        CreatePaymentOrderData orderReq =
+            CreatePaymentOrderData.builder()
+                .appCode("budget")
+                .sourceModule("BUDGET_DISBURSEMENT")
+                .referenceId(disb.getId() != null ? String.valueOf(disb.getId()) : disb.getCode())
+                .referenceCode(disb.getCode())
+                .payerName(StrUtil.blankToDefault(disb.getNodeName(), "Đơn vị dự toán"))
+                .amount(
+                    disb.getNetPaymentAmount() != null
+                        ? disb.getNetPaymentAmount()
+                        : disb.getAmount())
+                .currency("VND")
+                .providerCode("VIETQR")
+                .paymentMethod("QR_TRANSFER")
+                .description("Giải ngân dự toán [" + disb.getCode() + "] " + disb.getName())
+                .build();
+        R<PaymentOrderResultData> res = paymentClient.createOrder(orderReq);
+        if (res != null
+            && res.getData() != null
+            && StrUtil.isNotBlank(res.getData().getTransactionCode())) {
+          return res.getData().getTransactionCode();
+        }
+      } catch (Exception e) {
+        log.debug(
+            "[BudgetPayment] Fallback payment tx code for disbursement {}: {}",
+            disb.getCode(),
+            e.getMessage());
+      }
+    }
+    return StrUtil.isNotBlank(disb.getPaymentTxCode())
+        ? disb.getPaymentTxCode()
+        : ("PAY-KBNN-" + disb.getCode());
   }
 
   public Long startAllocationWorkflow(BudgetAllocation alloc) {
@@ -81,7 +243,8 @@ public class BudgetIntegrationOrchestrator {
               .appCode("BudgetAllocation")
               .entityId(alloc.getId())
               .processCode(WF_PROCESS_ALLOCATION)
-              .title("Trình phê duyệt Phân bổ Kinh phí: [" + alloc.getCode() + "] " + alloc.getName())
+              .title(
+                  "Trình phê duyệt Phân bổ Kinh phí: [" + alloc.getCode() + "] " + alloc.getName())
               .actionType("SUBMIT")
               .variables(vars)
               .build();

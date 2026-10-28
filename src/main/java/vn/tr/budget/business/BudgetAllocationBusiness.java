@@ -31,7 +31,10 @@ import java.time.LocalDate;
 import org.springframework.beans.factory.annotation.Autowired;
 import vn.tr.budget.business.helper.BudgetIntegrationOrchestrator;
 import vn.tr.budget.business.helper.BudgetWorkflowEngineHelper;
+import vn.tr.budget.dao.service.BudgetAllocationRepo;
 import vn.tr.common.core.exception.base.BaseException;
+import vn.tr.common.feign.budget.data.BudgetPlanSyncRequestData;
+import vn.tr.common.feign.budget.data.BudgetPlanSyncResultData;
 
 /**
  * Lớp điều phối nghiệp vụ cho BudgetAllocation.
@@ -51,6 +54,7 @@ public class BudgetAllocationBusiness {
   private final AuditRollbackHelper auditRollbackHelper;
   private final BusinessLogicHelper businessLogicHelper;
   private final BudgetWorkflowEngineHelper workflowEngineHelper;
+  private final BudgetAllocationRepo budgetAllocationRepo;
 
   @Autowired(required = false)
   private BudgetIntegrationOrchestrator integrationOrchestrator;
@@ -236,10 +240,16 @@ public class BudgetAllocationBusiness {
     alloc.setApprovalScope("UNIT_SELF");
     alloc.setWorkflowStatus("APPROVED");
     BudgetAllocation saved = budgetAllocationService.save(alloc);
-    workflowEngineHelper.recalculateAllocationMetrics(saved.getId());
+    saved = workflowEngineHelper.recalculateAllocationMetrics(saved.getId());
     if (integrationOrchestrator != null) {
       integrationOrchestrator.notifyAllocationLifecycleEvent(
           saved, "SELF_APPROVED", extractActor(body), extractComment(body));
+      integrationOrchestrator.syncAllocationToLinkedPlan(
+          saved,
+          "ALLOCATION_APPROVED",
+          saved.getEffectiveAmount(),
+          saved.getCode(),
+          "Đơn vị tự phê duyệt phân bổ kinh phí");
     }
     return findById(saved.getId());
   }
@@ -258,12 +268,18 @@ public class BudgetAllocationBusiness {
     }
     alloc.setWorkflowStatus("APPROVED");
     BudgetAllocation saved = budgetAllocationService.save(alloc);
-    workflowEngineHelper.recalculateAllocationMetrics(saved.getId());
+    saved = workflowEngineHelper.recalculateAllocationMetrics(saved.getId());
     if (integrationOrchestrator != null) {
       integrationOrchestrator.executeWorkflowAction(
           "BudgetAllocation", saved.getId(), "APPROVE", extractComment(body));
       integrationOrchestrator.notifyAllocationLifecycleEvent(
           saved, "APPROVED", extractActor(body), extractComment(body));
+      integrationOrchestrator.syncAllocationToLinkedPlan(
+          saved,
+          "ALLOCATION_APPROVED",
+          saved.getEffectiveAmount(),
+          saved.getCode(),
+          "Phê duyệt giao dự toán kinh phí theo QĐ " + StrUtil.nullToEmpty(saved.getDecisionNo()));
     }
     return findById(saved.getId());
   }
@@ -328,6 +344,147 @@ public class BudgetAllocationBusiness {
       return integrationOrchestrator.scanAndDispatchDisbursementSlaAlerts();
     }
     return Map.of("totalScanned", 0, "overdueCount", 0, "dueSoonCount", 0);
+  }
+
+  /** Đồng bộ phương án phân bổ kinh phí từ Kế hoạch công tác (S2S Feign từ tr-planning-service). */
+  public BudgetPlanSyncResultData syncFromPlan(BudgetPlanSyncRequestData req) {
+    if (req == null || StrUtil.isBlank(req.getPlanCode())) {
+      throw new BaseException("Mã kế hoạch công tác (planCode) không được để trống khi đồng bộ kinh phí.");
+    }
+    List<BudgetAllocation> existingList =
+        budgetAllocationRepo.findByLinkedPlanCodeIgnoreCaseOrderByIdAsc(req.getPlanCode());
+    BudgetAllocation alloc;
+    String syncStatus;
+    if (!existingList.isEmpty()) {
+      alloc = existingList.get(0);
+      if (req.getPlanId() != null) {
+        alloc.setLinkedPlanId(req.getPlanId());
+      }
+      if (StrUtil.isNotBlank(req.getPlanName())) {
+        alloc.setLinkedPlanName(req.getPlanName());
+      }
+      if (req.getInitialBudgetAmount() != null
+          && (alloc.getInitialAmount() == null
+              || alloc.getInitialAmount().compareTo(BigDecimal.ZERO) == 0)) {
+        alloc.setInitialAmount(req.getInitialBudgetAmount());
+        alloc.setProposedAmount(req.getInitialBudgetAmount());
+      }
+      alloc = budgetAllocationService.save(alloc);
+      alloc = workflowEngineHelper.recalculateAllocationMetrics(alloc.getId());
+      syncStatus = "UPDATED_ALLOCATION";
+    } else {
+      BigDecimal initAmt =
+          req.getInitialBudgetAmount() != null
+              ? req.getInitialBudgetAmount()
+              : (req.getEffectiveBudgetAmount() != null
+                  ? req.getEffectiveBudgetAmount()
+                  : BigDecimal.ZERO);
+      BudgetAllocation newAlloc =
+          BudgetAllocation.builder()
+              .code("PB-" + req.getPlanCode())
+              .name("Dự toán kinh phí thực hiện: " + StrUtil.blankToDefault(req.getPlanName(), req.getPlanCode()))
+              .budgetYear(
+                  req.getBudgetYear() != null ? req.getBudgetYear() : LocalDate.now().getYear())
+              .periodType(StrUtil.blankToDefault(req.getPeriodType(), "ANNUAL"))
+              .budgetQuarter(req.getBudgetQuarter())
+              .budgetMonth(req.getBudgetMonth())
+              .nodeId(req.getNodeId() != null ? req.getNodeId() : 101L)
+              .nodeCode(StrUtil.blankToDefault(req.getNodeCode(), "VAN_PHONG_SO"))
+              .nodeName(StrUtil.blankToDefault(req.getNodeName(), "Văn phòng Sở"))
+              .itemType("EXPENDITURE")
+              .categoryCode(StrUtil.blankToDefault(req.getCategoryCode(), "LK_340_345"))
+              .categoryName("Chi sự nghiệp kinh tế & Quản lý chuyên ngành")
+              .fundingSourceCode("NSNN_TX")
+              .fundingSourceName("Ngân sách Nhà nước - Kinh phí thường xuyên")
+              .decisionNo(req.getDecisionNo())
+              .decisionDate(LocalDate.now())
+              .linkedPlanId(req.getPlanId())
+              .linkedPlanCode(req.getPlanCode())
+              .linkedPlanName(req.getPlanName())
+              .approvalScope("DIRECTORATE")
+              .workflowStatus("APPROVED")
+              .currentVersion(1)
+              .proposedAmount(initAmt)
+              .initialAmount(initAmt)
+              .supplementAmount(
+                  req.getSupplementBudgetAmount() != null
+                      ? req.getSupplementBudgetAmount()
+                      : BigDecimal.ZERO)
+              .carryOverInAmount(
+                  req.getCarryOverBudgetAmount() != null
+                      ? req.getCarryOverBudgetAmount()
+                      : BigDecimal.ZERO)
+              .status(LifecycleStatus.ACTIVE)
+              .build();
+      alloc = budgetAllocationService.save(newAlloc);
+      alloc = workflowEngineHelper.recalculateAllocationMetrics(alloc.getId());
+      syncStatus = "CREATED_ALLOCATION";
+    }
+    return toPlanSyncResult(alloc, syncStatus);
+  }
+
+  /** Tra cứu nhanh bức tranh kinh phí của một Mã kế hoạch công tác. */
+  @Transactional(readOnly = true)
+  public BudgetPlanSyncResultData getBudgetSnapshotByPlanCode(String planCode) {
+    List<BudgetAllocation> list =
+        budgetAllocationRepo.findByLinkedPlanCodeIgnoreCaseOrderByIdAsc(planCode);
+    if (list.isEmpty()) {
+      return BudgetPlanSyncResultData.builder()
+          .linkedPlanCode(planCode)
+          .initialAmount(BigDecimal.ZERO)
+          .supplementAmount(BigDecimal.ZERO)
+          .carryOverInAmount(BigDecimal.ZERO)
+          .effectiveAmount(BigDecimal.ZERO)
+          .committedAmount(BigDecimal.ZERO)
+          .disbursedAmount(BigDecimal.ZERO)
+          .settledAmount(BigDecimal.ZERO)
+          .availableAmount(BigDecimal.ZERO)
+          .disbursementRatePercent(BigDecimal.ZERO)
+          .syncStatus("NO_ALLOCATION_FOUND")
+          .build();
+    }
+    return toPlanSyncResult(list.get(0), "REMOTE_BUDGET_SERVICE");
+  }
+
+  /** Đồng bộ chủ động từ một Phân bổ Kinh phí sang Kế hoạch công tác liên kết. */
+  public Map<String, Object> syncAllocationToPlanById(Long id) {
+    BudgetAllocation alloc = workflowEngineHelper.recalculateAllocationMetrics(id);
+    if (alloc == null) {
+      throw new EntityNotFoundException(BudgetAllocation.class, id);
+    }
+    if (integrationOrchestrator != null) {
+      return integrationOrchestrator.syncAllocationToLinkedPlan(
+          alloc,
+          "MANUAL_SYNC",
+          alloc.getEffectiveAmount(),
+          alloc.getCode(),
+          "Đồng bộ chủ động số liệu dự toán sang Kế hoạch công tác");
+    }
+    return Map.of("synced", false, "allocationCode", alloc.getCode());
+  }
+
+  private BudgetPlanSyncResultData toPlanSyncResult(BudgetAllocation alloc, String syncStatus) {
+    return BudgetPlanSyncResultData.builder()
+        .allocationId(alloc.getId())
+        .allocationCode(alloc.getCode())
+        .linkedPlanId(alloc.getLinkedPlanId())
+        .linkedPlanCode(alloc.getLinkedPlanCode())
+        .linkedPlanName(alloc.getLinkedPlanName())
+        .budgetYear(alloc.getBudgetYear())
+        .nodeCode(alloc.getNodeCode())
+        .nodeName(alloc.getNodeName())
+        .workflowStatus(alloc.getWorkflowStatus())
+        .initialAmount(alloc.getInitialAmount())
+        .supplementAmount(alloc.getSupplementAmount())
+        .carryOverInAmount(alloc.getCarryOverInAmount())
+        .effectiveAmount(alloc.getEffectiveAmount())
+        .committedAmount(alloc.getCommittedAmount())
+        .disbursedAmount(alloc.getDisbursedAmount())
+        .settledAmount(alloc.getSettledAmount())
+        .availableAmount(alloc.getAvailableAmount())
+        .disbursementRatePercent(alloc.getDisbursementRatePercent())
+        .syncStatus(syncStatus)
+        .build();
   }
 
   private String extractActor(Map<String, Object> body) {

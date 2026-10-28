@@ -52,3 +52,7 @@ eureka:
 security:
   actuator:
     auth-enabled: false
+
+client:
+  planning-service:
+    url: ${CLIENT_PLANNING_SERVICE_URL:http://localhost:8306}

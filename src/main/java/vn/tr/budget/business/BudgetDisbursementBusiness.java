@@ -238,12 +238,24 @@ public class BudgetDisbursementBusiness {
     if (StrUtil.isBlank(disb.getApprovedByPersonName())) {
       disb.setApprovedByPersonName("Đinh Quang Huy");
     }
+    if (integrationOrchestrator != null && StrUtil.isBlank(disb.getPaymentTxCode())) {
+      disb.setPaymentTxCode(integrationOrchestrator.syncDisbursementWithPaymentService(disb));
+    }
     BudgetDisbursement saved = budgetDisbursementService.save(disb);
+    BudgetAllocation updatedAlloc = null;
     if (saved.getAllocationId() != null) {
-      workflowEngineHelper.recalculateAllocationMetrics(saved.getAllocationId());
+      updatedAlloc = workflowEngineHelper.recalculateAllocationMetrics(saved.getAllocationId());
     }
     if (integrationOrchestrator != null) {
       integrationOrchestrator.notifyDisbursementEvent(saved, "APPROVED");
+      if (updatedAlloc != null) {
+        integrationOrchestrator.syncAllocationToLinkedPlan(
+            updatedAlloc,
+            "DISBURSEMENT_APPROVED",
+            saved.getAmount(),
+            saved.getCode(),
+            "Giải ngân dự toán [" + saved.getCode() + "] " + saved.getName());
+      }
     }
     return budgetDisbursementMapper.toData(saved);
   }
@@ -265,13 +277,79 @@ public class BudgetDisbursementBusiness {
     disb.setDisbursementType("SETTLEMENT");
     disb.setApprovalStatus("SETTLED");
     BudgetDisbursement saved = budgetDisbursementService.save(disb);
+    BudgetAllocation updatedAlloc = null;
     if (saved.getAllocationId() != null) {
-      workflowEngineHelper.recalculateAllocationMetrics(saved.getAllocationId());
+      updatedAlloc = workflowEngineHelper.recalculateAllocationMetrics(saved.getAllocationId());
     }
     if (integrationOrchestrator != null) {
       integrationOrchestrator.notifyDisbursementEvent(saved, "SETTLED");
+      if (updatedAlloc != null) {
+        integrationOrchestrator.syncAllocationToLinkedPlan(
+            updatedAlloc,
+            "DISBURSEMENT_SETTLED",
+            saved.getAmount(),
+            saved.getCode(),
+            "Quyết toán chứng từ Kho bạc [" + saved.getVoucherNo() + "]");
+      }
     }
     return budgetDisbursementMapper.toData(saved);
+  }
+
+  /** Khởi tạo nhanh hồ sơ Cam kết chi (COMMITMENT) từ Nhiệm vụ Kế hoạch hoặc Công việc. */
+  public Map<String, Object> reserveCommitment(Map<String, Object> body) {
+    String planCode = body != null && body.get("planCode") != null ? String.valueOf(body.get("planCode")) : "";
+    Long allocationId =
+        body != null && body.get("allocationId") != null
+            ? Long.valueOf(String.valueOf(body.get("allocationId")))
+            : null;
+    BudgetAllocation alloc = null;
+    if (allocationId != null) {
+      alloc = budgetAllocationRepo.findById(allocationId).orElse(null);
+    } else if (StrUtil.isNotBlank(planCode)) {
+      List<BudgetAllocation> list =
+          budgetAllocationRepo.findByLinkedPlanCodeIgnoreCaseOrderByIdAsc(planCode);
+      if (!list.isEmpty()) {
+        alloc = list.get(0);
+      }
+    }
+    BigDecimal amount =
+        body != null && body.get("amount") != null
+            ? new BigDecimal(String.valueOf(body.get("amount")))
+            : BigDecimal.ZERO;
+    String code =
+        body != null && body.get("code") != null
+            ? String.valueOf(body.get("code"))
+            : ("CKC-" + (StrUtil.isNotBlank(planCode) ? planCode : "AUTO") + "-" + System.currentTimeMillis() % 10000);
+    String name =
+        body != null && body.get("name") != null
+            ? String.valueOf(body.get("name"))
+            : ("Cam kết chi thực hiện nhiệm vụ kế hoạch " + planCode);
+
+    BudgetDisbursementData data =
+        BudgetDisbursementData.builder()
+            .code(code)
+            .name(name)
+            .allocationId(alloc != null ? alloc.getId() : null)
+            .allocationCode(alloc != null ? alloc.getCode() : null)
+            .allocationName(alloc != null ? alloc.getName() : null)
+            .nodeId(alloc != null ? alloc.getNodeId() : 101L)
+            .nodeCode(alloc != null ? alloc.getNodeCode() : "VAN_PHONG_SO")
+            .nodeName(alloc != null ? alloc.getNodeName() : "Văn phòng Sở")
+            .budgetYear(alloc != null ? alloc.getBudgetYear() : LocalDate.now().getYear())
+            .disbursementType("COMMITMENT")
+            .amount(amount)
+            .netPaymentAmount(amount)
+            .linkedPlanCode(planCode)
+            .approvalStatus("COMMITTED")
+            .status(LifecycleStatus.ACTIVE)
+            .build();
+    BudgetDisbursementData saved = create(data);
+    return Map.of(
+        "reserved", true,
+        "disbursementId", saved.getId(),
+        "disbursementCode", saved.getCode(),
+        "amount", saved.getAmount(),
+        "allocationCode", StrUtil.nullToEmpty(saved.getAllocationCode()));
   }
 
   /** Từ chối hồ sơ giải ngân. */
