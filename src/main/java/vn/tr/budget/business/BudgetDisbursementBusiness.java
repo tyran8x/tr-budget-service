@@ -236,7 +236,11 @@ public class BudgetDisbursementBusiness {
     }
     disb.setApprovalStatus("APPROVED_DISBURSED");
     if (StrUtil.isBlank(disb.getApprovedByPersonName())) {
-      disb.setApprovedByPersonName("Đinh Quang Huy");
+      disb.setApprovedByPersonName(
+          integrationOrchestrator != null
+              ? integrationOrchestrator.resolveCurrentActorName(
+                  body, "actorName", "approvedByPersonName")
+              : "Cán bộ Tài chính - Kế toán");
     }
     if (integrationOrchestrator != null && StrUtil.isBlank(disb.getPaymentTxCode())) {
       disb.setPaymentTxCode(integrationOrchestrator.syncDisbursementWithPaymentService(disb));
@@ -364,6 +368,74 @@ public class BudgetDisbursementBusiness {
       workflowEngineHelper.recalculateAllocationMetrics(saved.getAllocationId());
     }
     return budgetDisbursementMapper.toData(saved);
+  }
+
+  /**
+   * Tự động đối soát và nghiệm thu quyết toán hồ sơ giải ngân khi nhận Webhook xác nhận thanh toán
+   * thành công từ {@code tr-payment-service} (UPG-01).
+   */
+  public Map<String, Object> settleFromPaymentWebhook(Long id, Map<String, Object> body) {
+    BudgetDisbursement disb =
+        budgetDisbursementService
+            .findById(id)
+            .orElseThrow(() -> new EntityNotFoundException(BudgetDisbursement.class, id));
+
+    String paymentTxCode =
+        body != null && body.get("paymentTxCode") != null
+            ? String.valueOf(body.get("paymentTxCode")).trim()
+            : ("PAY-WH-" + disb.getCode());
+    String treasuryRefCode =
+        body != null && body.get("treasuryRefCode") != null
+            ? String.valueOf(body.get("treasuryRefCode")).trim()
+            : (StrUtil.isNotBlank(disb.getTreasuryRefCode())
+                ? disb.getTreasuryRefCode()
+                : "KBNN-AUTO-" + disb.getId());
+    String voucherNo =
+        body != null && body.get("voucherNo") != null
+            ? String.valueOf(body.get("voucherNo")).trim()
+            : (StrUtil.isNotBlank(disb.getVoucherNo())
+                ? disb.getVoucherNo()
+                : "UNC-WH-" + disb.getCode());
+
+    disb.setPaymentTxCode(paymentTxCode);
+    disb.setTreasuryRefCode(treasuryRefCode);
+    disb.setVoucherNo(voucherNo);
+    disb.setDisbursementType("SETTLEMENT");
+    disb.setApprovalStatus("SETTLED");
+    if (StrUtil.isBlank(disb.getApprovedByPersonName())) {
+      disb.setApprovedByPersonName(
+          integrationOrchestrator != null
+              ? integrationOrchestrator.resolveCurrentActorName(
+                  body, "actorName", "approvedByPersonName")
+              : "Hệ thống Đối soát Thanh toán Tự động");
+    }
+
+    BudgetDisbursement saved = budgetDisbursementService.save(disb);
+    BudgetAllocation updatedAlloc = null;
+    if (saved.getAllocationId() != null) {
+      updatedAlloc = workflowEngineHelper.recalculateAllocationMetrics(saved.getAllocationId());
+    }
+    if (integrationOrchestrator != null) {
+      integrationOrchestrator.notifyDisbursementEvent(saved, "WEBHOOK_SETTLED");
+      if (updatedAlloc != null) {
+        integrationOrchestrator.syncAllocationToLinkedPlan(
+            updatedAlloc,
+            "DISBURSEMENT_WEBHOOK_SETTLED",
+            saved.getAmount(),
+            saved.getCode(),
+            "Đối soát tự động qua Webhook Thanh toán [" + paymentTxCode + "]");
+      }
+    }
+
+    return Map.of(
+        "settled", true,
+        "disbursementId", saved.getId(),
+        "disbursementCode", saved.getCode(),
+        "paymentTxCode", paymentTxCode,
+        "treasuryRefCode", treasuryRefCode,
+        "voucherNo", voucherNo,
+        "approvalStatus", saved.getApprovalStatus(),
+        "data", budgetDisbursementMapper.toData(saved));
   }
 
 }

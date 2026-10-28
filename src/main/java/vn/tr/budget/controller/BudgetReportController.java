@@ -253,4 +253,17 @@ public class BudgetReportController extends BaseController {
     return success(budgetReportBusiness.approveReport(id, body));
   }
 
+  @SaCheckPermission("BudgetReportList")
+  @GetMapping("/kbnn-reconciliation")
+  @Operation(
+      summary =
+          "Kết xuất Biểu mẫu Đối chiếu Dự toán & Tình hình Sử dụng Kinh phí tại Kho bạc Nhà nước (Mẫu 01a/SDKP-ĐVDT & 02/SDKP-ĐVDT)")
+  public R<Map<String, Object>> getKbnnReconciliationStatement(
+      @RequestParam(value = "budgetYear", required = false) Integer budgetYear,
+      @RequestParam(value = "quarter", required = false) Integer quarter,
+      @RequestParam(value = "nodeId", required = false) Long nodeId) {
+    return success(
+        budgetReportBusiness.generateKbnnReconciliationStatement(budgetYear, quarter, nodeId));
+  }
+
 }

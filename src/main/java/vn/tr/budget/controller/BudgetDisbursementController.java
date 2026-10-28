@@ -266,4 +266,14 @@ public class BudgetDisbursementController extends BaseController {
     return success(budgetDisbursementBusiness.reserveCommitment(body));
   }
 
+  @SaCheckPermission("BudgetDisbursementEdit")
+  @PostMapping("/{id}/payment-webhook-settle")
+  @Operation(
+      summary =
+          "Tự động đối soát và nghiệm thu quyết toán hồ sơ giải ngân từ Webhook Thanh toán (VietQR / SePay / KBNN)")
+  public R<Map<String, Object>> settleFromPaymentWebhook(
+      @PathVariable("id") Long id, @RequestBody(required = false) Map<String, Object> body) {
+    return success(budgetDisbursementBusiness.settleFromPaymentWebhook(id, body));
+  }
+
 }

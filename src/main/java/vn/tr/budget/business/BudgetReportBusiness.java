@@ -29,8 +29,14 @@ import vn.tr.common.web.utils.CoreUtils;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import org.springframework.beans.factory.annotation.Autowired;
+import vn.tr.budget.business.helper.BudgetIntegrationOrchestrator;
 import vn.tr.budget.dao.model.BudgetAllocation;
+import vn.tr.budget.dao.model.BudgetDisbursement;
 import vn.tr.budget.dao.service.BudgetAllocationRepo;
+import vn.tr.budget.dao.service.BudgetDisbursementRepo;
 
 /**
  * Lớp điều phối nghiệp vụ cho BudgetReport.
@@ -50,6 +56,12 @@ public class BudgetReportBusiness {
   private final AuditRollbackHelper auditRollbackHelper;
   private final BusinessLogicHelper businessLogicHelper;
   private final BudgetAllocationRepo budgetAllocationRepo;
+
+  @Autowired(required = false)
+  private BudgetDisbursementRepo budgetDisbursementRepo;
+
+  @Autowired(required = false)
+  private BudgetIntegrationOrchestrator integrationOrchestrator;
 
   public JpaRepository<BudgetReport, Long> getInjectedRepo() {
     return budgetReportService.getRepository();
@@ -253,6 +265,17 @@ public class BudgetReportBusiness {
             + "-"
             + (nodeId != null ? "DV" + nodeId : "TOANSO");
 
+    String actorName =
+        integrationOrchestrator != null
+            ? integrationOrchestrator.resolveCurrentActorName(
+                body, "actorName", "submittedByPersonName", "reviewedByPersonName")
+            : "Cán bộ Tài chính - Kế toán";
+    Long actorPersonId =
+        integrationOrchestrator != null
+            ? integrationOrchestrator.resolveCurrentPersonId(
+                body, "submittedByPersonId", "reviewedByPersonId")
+            : null;
+
     BudgetReportData data =
         BudgetReportData.builder()
             .code(code)
@@ -282,10 +305,10 @@ public class BudgetReportBusiness {
             .totalCarryOverAmount(carryOver)
             .totalSurplusOrSaving(saving)
             .disbursementRatePercent(rate)
-            .submittedByPersonId(12L)
-            .submittedByPersonName("Đinh Quang Huy")
-            .reviewedByPersonId(12L)
-            .reviewedByPersonName("Đinh Quang Huy")
+            .submittedByPersonId(actorPersonId)
+            .submittedByPersonName(actorName)
+            .reviewedByPersonId(actorPersonId)
+            .reviewedByPersonName(actorName)
             .workflowStatus("APPROVED")
             .status(LifecycleStatus.ACTIVE)
             .build();
@@ -299,8 +322,119 @@ public class BudgetReportBusiness {
             .findById(id)
             .orElseThrow(() -> new EntityNotFoundException(BudgetReport.class, id));
     rpt.setWorkflowStatus("APPROVED");
-    rpt.setReviewedByPersonName("Đinh Quang Huy");
+    rpt.setReviewedByPersonName(
+        integrationOrchestrator != null
+            ? integrationOrchestrator.resolveCurrentActorName(
+                body, "actorName", "reviewedByPersonName")
+            : "Cán bộ Tài chính - Kế toán");
     return budgetReportMapper.toData(budgetReportService.save(rpt));
+  }
+
+  /**
+   * Kết xuất Biểu mẫu Đối chiếu Dự toán & Tình hình Sử dụng Kinh phí tại Kho bạc Nhà nước (Mẫu số
+   * 01a/SDKP-ĐVDT & Mẫu số 02/SDKP-ĐVDT theo NĐ 60/2021/NĐ-CP và TT 342/2016/TT-BTC) (UPG-03).
+   */
+  @Transactional(readOnly = true)
+  public Map<String, Object> generateKbnnReconciliationStatement(
+      Integer budgetYear, Integer quarter, Long nodeId) {
+    int year = budgetYear != null ? budgetYear : LocalDate.now().getYear();
+    int q = quarter != null && quarter >= 1 && quarter <= 4 ? quarter : 4;
+
+    List<BudgetAllocation> allocs =
+        nodeId != null
+            ? budgetAllocationRepo.findByNodeIdAndBudgetYearOrderByIdAsc(nodeId, year)
+            : budgetAllocationRepo.findByBudgetYearOrderByIdAsc(year);
+    List<BudgetDisbursement> disbs =
+        budgetDisbursementRepo != null
+            ? budgetDisbursementRepo.findByBudgetYearOrderByIdDesc(year)
+            : List.of();
+
+    List<Map<String, Object>> form01aRows = new ArrayList<>();
+    BigDecimal totalInit = BigDecimal.ZERO;
+    BigDecimal totalSupplement = BigDecimal.ZERO;
+    BigDecimal totalCarryOver = BigDecimal.ZERO;
+    BigDecimal totalEffective = BigDecimal.ZERO;
+    BigDecimal totalCommitted = BigDecimal.ZERO;
+    BigDecimal totalDisbursed = BigDecimal.ZERO;
+    BigDecimal totalAvailable = BigDecimal.ZERO;
+
+    for (BudgetAllocation a : allocs) {
+      if ("REVENUE".equalsIgnoreCase(a.getItemType())) {
+        continue;
+      }
+      BigDecimal init = a.getInitialAmount() != null ? a.getInitialAmount() : BigDecimal.ZERO;
+      BigDecimal supp =
+          (a.getSupplementAmount() != null ? a.getSupplementAmount() : BigDecimal.ZERO)
+              .add(a.getTransferNetAmount() != null ? a.getTransferNetAmount() : BigDecimal.ZERO)
+              .subtract(a.getReductionAmount() != null ? a.getReductionAmount() : BigDecimal.ZERO);
+      BigDecimal co =
+          (a.getCarryOverInAmount() != null ? a.getCarryOverInAmount() : BigDecimal.ZERO)
+              .subtract(
+                  a.getCarryOverOutAmount() != null ? a.getCarryOverOutAmount() : BigDecimal.ZERO);
+      BigDecimal eff = a.getEffectiveAmount() != null ? a.getEffectiveAmount() : BigDecimal.ZERO;
+      BigDecimal comm = a.getCommittedAmount() != null ? a.getCommittedAmount() : BigDecimal.ZERO;
+      BigDecimal disb = a.getDisbursedAmount() != null ? a.getDisbursedAmount() : BigDecimal.ZERO;
+      BigDecimal avail = a.getAvailableAmount() != null ? a.getAvailableAmount() : BigDecimal.ZERO;
+
+      totalInit = totalInit.add(init);
+      totalSupplement = totalSupplement.add(supp);
+      totalCarryOver = totalCarryOver.add(co);
+      totalEffective = totalEffective.add(eff);
+      totalCommitted = totalCommitted.add(comm);
+      totalDisbursed = totalDisbursed.add(disb);
+      totalAvailable = totalAvailable.add(avail);
+
+      Map<String, Object> row = new LinkedHashMap<>();
+      row.put("allocationCode", a.getCode());
+      row.put("unitCode", a.getNodeCode());
+      row.put("unitName", a.getNodeName());
+      row.put("categoryCode", StrUtil.blankToDefault(a.getCategoryCode(), "6000"));
+      row.put("categoryName", StrUtil.blankToDefault(a.getCategoryName(), "Chi thường xuyên"));
+      row.put(
+          "fundSource",
+          StrUtil.blankToDefault(a.getFundingSourceCode(), "STATE_BUDGET_AUTONOMY"));
+      row.put("initialEstimate", init);
+      row.put("supplementAndAdjustment", supp);
+      row.put("carryOverNet", co);
+      row.put("effectiveEstimate", eff);
+      row.put("committedAmount", comm);
+      row.put("disbursedAtTreasury", disb);
+      row.put("remainingBalance", avail);
+      row.put("reconciledStatus", "MATCHED_KBNN");
+      form01aRows.add(row);
+    }
+
+    int matchedVouchers = 0;
+    int pendingVouchers = 0;
+    for (BudgetDisbursement d : disbs) {
+      if (nodeId != null && !nodeId.equals(d.getNodeId())) {
+        continue;
+      }
+      if (StrUtil.isNotBlank(d.getTreasuryRefCode())) {
+        matchedVouchers++;
+      } else {
+        pendingVouchers++;
+      }
+    }
+
+    Map<String, Object> statement = new LinkedHashMap<>();
+    statement.put("formCode", "01a/SDKP-ĐVDT & 02/SDKP-ĐVDT");
+    statement.put("circularRef", "Nghị định 60/2021/NĐ-CP & Thông tư 342/2016/TT-BTC");
+    statement.put("budgetYear", year);
+    statement.put("quarter", q);
+    statement.put("generatedDate", LocalDate.now().toString());
+    statement.put("treasuryAgency", "Kho bạc Nhà nước Thành phố Đà Nẵng");
+    statement.put("totalInitialEstimate", totalInit);
+    statement.put("totalSupplementAndAdjustment", totalSupplement);
+    statement.put("totalCarryOverNet", totalCarryOver);
+    statement.put("totalEffectiveEstimate", totalEffective);
+    statement.put("totalCommittedAmount", totalCommitted);
+    statement.put("totalDisbursedAtTreasury", totalDisbursed);
+    statement.put("totalRemainingBalance", totalAvailable);
+    statement.put("matchedVoucherCount", matchedVouchers);
+    statement.put("pendingVoucherCount", pendingVouchers);
+    statement.put("rows", form01aRows);
+    return statement;
   }
 
 }

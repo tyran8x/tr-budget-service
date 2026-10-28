@@ -272,17 +272,23 @@ public class BudgetDashboardBusiness {
   }
 
   public List<Map<String, Object>> getDisbursementScorecard(Integer budgetYear) {
-    List<Map<String, Object>> matrix = getUnitMatrix(budgetYear);
+    int year = budgetYear != null ? budgetYear : LocalDate.now().getYear();
+    List<Map<String, Object>> matrix = getUnitMatrix(year);
+    List<BudgetDisbursement> disbs = budgetDisbursementRepo.findByBudgetYearOrderByIdDesc(year);
     List<Map<String, Object>> scorecards = new ArrayList<>();
 
     for (Map<String, Object> unit : matrix) {
+      Long unitNodeId = (Long) unit.get("nodeId");
+      BigDecimal init = (BigDecimal) unit.get("initialAmount");
       BigDecimal eff = (BigDecimal) unit.get("effectiveAmount");
       BigDecimal disb = (BigDecimal) unit.get("disbursedAmount");
       BigDecimal settled = (BigDecimal) unit.get("settledAmount");
       BigDecimal rate = (BigDecimal) unit.get("disbursementRatePercent");
 
       BigDecimal disbursementScore =
-          rate.multiply(new BigDecimal("0.40")).min(new BigDecimal("40.00")).setScale(1, RoundingMode.HALF_UP);
+          rate.multiply(new BigDecimal("0.40"))
+              .min(new BigDecimal("40.00"))
+              .setScale(1, RoundingMode.HALF_UP);
       BigDecimal settlementRatio =
           disb.compareTo(BigDecimal.ZERO) > 0
               ? settled.multiply(new BigDecimal("100")).divide(disb, 2, RoundingMode.HALF_UP)
@@ -292,8 +298,37 @@ public class BudgetDashboardBusiness {
               .multiply(new BigDecimal("0.25"))
               .min(new BigDecimal("25.00"))
               .setScale(1, RoundingMode.HALF_UP);
-      BigDecimal accuracyScore = new BigDecimal("18.5");
-      BigDecimal voucherComplianceScore = new BigDecimal("14.5");
+
+      // Tính động điểm sát thực tế lập dự toán (Thang 20 điểm)
+      BigDecimal varianceRatio =
+          init != null && init.compareTo(BigDecimal.ZERO) > 0
+              ? eff.subtract(init).abs().divide(init, 4, RoundingMode.HALF_UP)
+              : BigDecimal.ZERO;
+      BigDecimal accuracyScore =
+          new BigDecimal("20.0")
+              .subtract(varianceRatio.multiply(new BigDecimal("20.0")))
+              .max(new BigDecimal("12.0"))
+              .min(new BigDecimal("20.0"))
+              .setScale(1, RoundingMode.HALF_UP);
+
+      // Tính động điểm tuân thủ chứng từ Kho bạc (Thang 15 điểm)
+      int unitDisbCount = 0;
+      int compliantVoucherCount = 0;
+      for (BudgetDisbursement d : disbs) {
+        if (unitNodeId != null && unitNodeId.equals(d.getNodeId())) {
+          unitDisbCount++;
+          if ((d.getVoucherNo() != null && !d.getVoucherNo().isBlank())
+              || (d.getTreasuryRefCode() != null && !d.getTreasuryRefCode().isBlank())) {
+            compliantVoucherCount++;
+          }
+        }
+      }
+      BigDecimal voucherComplianceScore =
+          unitDisbCount > 0
+              ? BigDecimal.valueOf(compliantVoucherCount)
+                  .multiply(new BigDecimal("15.0"))
+                  .divide(BigDecimal.valueOf(unitDisbCount), 1, RoundingMode.HALF_UP)
+              : new BigDecimal("14.5");
 
       BigDecimal totalScore =
           disbursementScore.add(settlementScore).add(accuracyScore).add(voucherComplianceScore);
@@ -321,6 +356,25 @@ public class BudgetDashboardBusiness {
     int year = budgetYear != null ? budgetYear : LocalDate.now().getYear();
     Map<String, Object> overview = getOverview(year, null, null);
     List<Map<String, Object>> unitMatrix = getUnitMatrix(year);
+    Map<String, Object> burnForecast = getBurnRateForecast(year);
+
+    String slowestUnitName = "Các đơn vị trực thuộc";
+    BigDecimal slowestRate = new BigDecimal("100");
+    String highestSurplusUnitName = "Văn phòng Sở";
+    BigDecimal highestSurplusAmount = BigDecimal.ZERO;
+
+    for (Map<String, Object> u : unitMatrix) {
+      BigDecimal r = (BigDecimal) u.get("disbursementRatePercent");
+      BigDecimal avail = (BigDecimal) u.get("availableAmount");
+      if (r != null && r.compareTo(slowestRate) < 0) {
+        slowestRate = r;
+        slowestUnitName = String.valueOf(u.get("nodeName"));
+      }
+      if (avail != null && avail.compareTo(highestSurplusAmount) > 0) {
+        highestSurplusAmount = avail;
+        highestSurplusUnitName = String.valueOf(u.get("nodeName"));
+      }
+    }
 
     List<Map<String, Object>> recommendations = new ArrayList<>();
     recommendations.add(
@@ -328,24 +382,37 @@ public class BudgetDashboardBusiness {
             "id", "AI-BUD-01",
             "category", "DISBURSEMENT_ACCELERATION",
             "severity", "HIGH",
-            "title", "Đẩy nhanh tiến độ nghiệm thu & giải ngân Kho bạc Quý II/2026",
+            "title",
+                "Đẩy nhanh tiến độ nghiệm thu & giải ngân Kho bạc tại " + slowestUnitName,
             "analysis",
-                "Tỷ lệ giải ngân bình quân hiện đạt "
+                "Tỷ lệ giải ngân bình quân toàn ngành đạt "
                     + overview.get("disbursementRatePercent")
-                    + "%. Một số khoản mục Mua sắm thiết bị & Thuê dịch vụ CNTT đã có Cam kết chi hợp đồng nhưng chưa lập Giấy rút dự toán Kho bạc.",
+                    + "%, trong đó "
+                    + slowestUnitName
+                    + " đang ở mức "
+                    + slowestRate
+                    + "%. Một số khoản mục đã có Cam kết chi hợp đồng nhưng chưa lập Giấy rút dự toán Kho bạc (C2-02a/NS).",
             "suggestedAction",
-                "Đề nghị Phòng KHTC đôn đốc các đơn vị hoàn thiện hồ sơ nghiệm thu giai đoạn 1 để chuyển từ Cam kết chi sang Thực chi Kho bạc trước ngày 25 hàng tháng."));
+                "Đề nghị Phòng KHTC đôn đốc "
+                    + slowestUnitName
+                    + " hoàn thiện hồ sơ nghiệm thu giai đoạn 1 để chuyển từ Cam kết chi sang Thực chi Kho bạc trước ngày 25 hàng tháng."));
 
     recommendations.add(
         Map.of(
             "id", "AI-BUD-02",
             "category", "INTERNAL_TRANSFER_OPTIMIZATION",
             "severity", "MEDIUM",
-            "title", "Đề xuất điều chuyển nội bộ từ khoản mục tiết kiệm đấu thầu sang nhiệm vụ phát sinh",
+            "title",
+                "Đề xuất điều chuyển nội bộ từ nguồn dự kiến kết dư của " + highestSurplusUnitName,
             "analysis",
-                "Khoản mục Hội nghị, tập huấn & công tác phí của Văn phòng Sở dự kiến tiết kiệm 120.000.000 VNĐ, trong khi hạng mục Kiểm tra chuyên đề đột xuất đang cần bổ sung nguồn.",
+                highestSurplusUnitName
+                    + " hiện còn khả dụng "
+                    + highestSurplusAmount.toPlainString()
+                    + " VNĐ. Dự báo cuối năm toàn ngành có thể dư "
+                    + burnForecast.get("totalProjectedUnspentAtYearEnd")
+                    + " VNĐ nếu giữ tốc độ tiêu dùng hiện tại.",
             "suggestedAction",
-                "Tạo giao dịch Điều chuyển dự toán nội bộ (INTERNAL_TRANSFER) trong phạm vi kinh phí giao tự chủ (Khoản 281) để tối ưu hiệu quả sử dụng ngân sách."));
+                "Tạo giao dịch Điều chuyển dự toán nội bộ (INTERNAL_TRANSFER) trong phạm vi kinh phí giao tự chủ (Khoản 281) từ đơn vị thừa vốn sang nhiệm vụ phát sinh cấp bách."));
 
     recommendations.add(
         Map.of(
@@ -363,9 +430,160 @@ public class BudgetDashboardBusiness {
     Map<String, Object> res = new LinkedHashMap<>();
     res.put("budgetYear", year);
     res.put("generatedAt", LocalDate.now().toString());
-    res.put("advisorModel", "TR-Finance-Advisor-v4.1");
+    res.put("advisorModel", "TR-Finance-Advisor-v4.2");
     res.put("unitCountAnalyzed", unitMatrix.size());
+    res.put("burnRateSummary", burnForecast);
     res.put("recommendations", recommendations);
+    return res;
+  }
+
+  /**
+   * Dự báo tốc độ tiêu dùng kinh phí (Burn-rate Projection), cảnh báo nguy cơ huỷ dự toán cuối năm
+   * và tự động đề xuất phương án điều chuyển nội bộ (UPG-02).
+   */
+  public Map<String, Object> getBurnRateForecast(Integer budgetYear) {
+    int year = budgetYear != null ? budgetYear : LocalDate.now().getYear();
+    int elapsedMonths = Math.max(LocalDate.now().getMonthValue(), 6);
+    int remainingMonths = Math.max(12 - elapsedMonths, 1);
+
+    List<Map<String, Object>> unitMatrix = getUnitMatrix(year);
+    List<Map<String, Object>> unitForecasts = new ArrayList<>();
+    List<Map<String, Object>> reallocationSuggestions = new ArrayList<>();
+
+    BigDecimal totalProjectedYearEndDisbursed = BigDecimal.ZERO;
+    BigDecimal totalProjectedUnspent = BigDecimal.ZERO;
+
+    Map<String, Object> topSurplusUnit = null;
+    BigDecimal maxSurplus = BigDecimal.ZERO;
+    Map<String, Object> topDeficitUnit = null;
+    BigDecimal maxBurnRate = BigDecimal.ZERO;
+
+    for (Map<String, Object> unit : unitMatrix) {
+      BigDecimal eff = safe((BigDecimal) unit.get("effectiveAmount"));
+      BigDecimal disb = safe((BigDecimal) unit.get("disbursedAmount"));
+      BigDecimal comm = safe((BigDecimal) unit.get("committedAmount"));
+
+      BigDecimal monthlyBurnRate =
+          disb.divide(BigDecimal.valueOf(elapsedMonths), 0, RoundingMode.HALF_UP);
+      BigDecimal projectedAdditional =
+          monthlyBurnRate
+              .multiply(BigDecimal.valueOf(remainingMonths))
+              .add(comm.multiply(new BigDecimal("0.85")).setScale(0, RoundingMode.HALF_UP));
+      BigDecimal projectedYearEndDisbursed = disb.add(projectedAdditional).min(eff);
+      BigDecimal projectedUnspent = eff.subtract(projectedYearEndDisbursed).max(BigDecimal.ZERO);
+      BigDecimal projectedRate =
+          eff.compareTo(BigDecimal.ZERO) > 0
+              ? projectedYearEndDisbursed
+                  .multiply(new BigDecimal("100"))
+                  .divide(eff, 2, RoundingMode.HALF_UP)
+              : BigDecimal.ZERO;
+
+      String riskLevel =
+          projectedRate.compareTo(new BigDecimal("75")) < 0
+              ? "HIGH_SURPLUS_RISK"
+              : (projectedRate.compareTo(new BigDecimal("92")) < 0 ? "MODERATE" : "OPTIMAL_HIGH_BURN");
+
+      totalProjectedYearEndDisbursed = totalProjectedYearEndDisbursed.add(projectedYearEndDisbursed);
+      totalProjectedUnspent = totalProjectedUnspent.add(projectedUnspent);
+
+      Map<String, Object> f = new LinkedHashMap<>();
+      f.put("nodeId", unit.get("nodeId"));
+      f.put("nodeCode", unit.get("nodeCode"));
+      f.put("nodeName", unit.get("nodeName"));
+      f.put("effectiveAmount", eff);
+      f.put("currentDisbursedAmount", disb);
+      f.put("monthlyBurnRate", monthlyBurnRate);
+      f.put("projectedYearEndDisbursed", projectedYearEndDisbursed);
+      f.put("projectedYearEndUnspent", projectedUnspent);
+      f.put("projectedYearEndRatePercent", projectedRate);
+      f.put("riskLevel", riskLevel);
+      unitForecasts.add(f);
+
+      if (projectedUnspent.compareTo(maxSurplus) > 0) {
+        maxSurplus = projectedUnspent;
+        topSurplusUnit = f;
+      }
+      if (projectedRate.compareTo(maxBurnRate) > 0) {
+        maxBurnRate = projectedRate;
+        topDeficitUnit = f;
+      }
+    }
+
+    if (topSurplusUnit != null
+        && topDeficitUnit != null
+        && !String.valueOf(topSurplusUnit.get("nodeCode"))
+            .equals(String.valueOf(topDeficitUnit.get("nodeCode")))
+        && maxSurplus.compareTo(BigDecimal.ZERO) > 0) {
+      BigDecimal suggestedTransfer =
+          maxSurplus.multiply(new BigDecimal("0.40")).setScale(0, RoundingMode.HALF_UP);
+      Map<String, Object> suggestion = new LinkedHashMap<>();
+      suggestion.put("txType", "INTERNAL_TRANSFER");
+      suggestion.put("sourceUnitCode", topSurplusUnit.get("nodeCode"));
+      suggestion.put("sourceUnitName", topSurplusUnit.get("nodeName"));
+      suggestion.put("targetUnitCode", topDeficitUnit.get("nodeCode"));
+      suggestion.put("targetUnitName", topDeficitUnit.get("nodeName"));
+      suggestion.put("suggestedTransferAmount", suggestedTransfer);
+      suggestion.put(
+          "reason",
+          "Điều chuyển tối ưu nguồn dự kiến dư cuối năm từ "
+              + topSurplusUnit.get("nodeName")
+              + " sang bổ sung cho "
+              + topDeficitUnit.get("nodeName"));
+      reallocationSuggestions.add(suggestion);
+    }
+
+    Map<String, Object> res = new LinkedHashMap<>();
+    res.put("budgetYear", year);
+    res.put("elapsedMonths", elapsedMonths);
+    res.put("remainingMonths", remainingMonths);
+    res.put("totalProjectedYearEndDisbursed", totalProjectedYearEndDisbursed);
+    res.put("totalProjectedUnspentAtYearEnd", totalProjectedUnspent);
+    res.put("unitForecasts", unitForecasts);
+    res.put("reallocationSuggestions", reallocationSuggestions);
+    return res;
+  }
+
+  /**
+   * Tổng hợp Khung Kế hoạch Tài chính - Ngân sách Trung hạn 3 năm cuốn chiếu (3-Year Rolling MTEF)
+   * theo Luật Ngân sách Nhà nước 2015 (UPG-04).
+   */
+  public Map<String, Object> getMtefSummary(Integer baseYear) {
+    int yearN = baseYear != null ? baseYear : LocalDate.now().getYear();
+    Map<String, Object> currentOverview = getOverview(yearN, null, null);
+    BigDecimal baseEffective = safe((BigDecimal) currentOverview.get("totalEffectiveBudget"));
+    BigDecimal baseRevenue = safe((BigDecimal) currentOverview.get("totalRevenueEstimate"));
+
+    List<Map<String, Object>> rollingYears = new ArrayList<>();
+    BigDecimal[] growthMultipliers = {
+      BigDecimal.ONE, new BigDecimal("1.08"), new BigDecimal("1.16")
+    };
+    String[] stageLabels = {
+      "Năm hiện hành (N) — Dự toán đang chấp hành",
+      "Năm kế hoạch (N+1) — Dự kiến trần phân bổ",
+      "Năm định hướng (N+2) — Khung MTEF trung hạn"
+    };
+
+    for (int i = 0; i < 3; i++) {
+      int y = yearN + i;
+      BigDecimal mult = growthMultipliers[i];
+      BigDecimal expCeiling = baseEffective.multiply(mult).setScale(0, RoundingMode.HALF_UP);
+      BigDecimal revProjection = baseRevenue.multiply(mult).setScale(0, RoundingMode.HALF_UP);
+      Map<String, Object> row = new LinkedHashMap<>();
+      row.put("fiscalYear", y);
+      row.put("stageLabel", stageLabels[i]);
+      row.put("projectedRevenue", revProjection);
+      row.put("expenditureCeiling", expCeiling);
+      row.put(
+          "autonomySharePercent",
+          i == 0 ? new BigDecimal("68.5") : (i == 1 ? new BigDecimal("72.0") : new BigDecimal("75.0")));
+      rollingYears.add(row);
+    }
+
+    Map<String, Object> res = new LinkedHashMap<>();
+    res.put("baseYear", yearN);
+    res.put("periodRange", yearN + "-" + (yearN + 2));
+    res.put("legalBasis", "Luật Ngân sách Nhà nước 2015 & Nghị định 45/2017/NĐ-CP");
+    res.put("rollingYears", rollingYears);
     return res;
   }
 

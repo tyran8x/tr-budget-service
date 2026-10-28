@@ -488,9 +488,13 @@ public class BudgetAllocationBusiness {
   }
 
   private String extractActor(Map<String, Object> body) {
+    if (integrationOrchestrator != null) {
+      return integrationOrchestrator.resolveCurrentActorName(
+          body, "actorName", "approvedByPersonName", "submittedByPersonName");
+    }
     return body != null && body.get("actorName") != null
         ? String.valueOf(body.get("actorName"))
-        : "Đinh Quang Huy";
+        : "Cán bộ Tài chính - Kế toán";
   }
 
   private String extractComment(Map<String, Object> body) {

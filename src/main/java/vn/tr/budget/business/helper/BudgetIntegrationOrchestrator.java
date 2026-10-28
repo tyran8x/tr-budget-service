@@ -97,6 +97,70 @@ public class BudgetIntegrationOrchestrator {
   }
 
   /**
+   * Phân giải họ tên người thực hiện thao tác từ request body hoặc ngữ cảnh người dùng đăng nhập
+   * hiện tại qua {@link UnifiedIdentityResolver#resolveCurrentUser()}.
+   */
+  public String resolveCurrentActorName(Map<String, Object> body, String... keys) {
+    if (body != null && keys != null) {
+      for (String key : keys) {
+        Object val = body.get(key);
+        if (val != null && StrUtil.isNotBlank(val.toString())) {
+          return val.toString().trim();
+        }
+      }
+    }
+    UnifiedIdentityResolver resolver = identityResolverProvider.getIfAvailable();
+    if (resolver != null) {
+      try {
+        var ctxOpt = resolver.resolveCurrentUser();
+        if (ctxOpt.isPresent()) {
+          var ctx = ctxOpt.get();
+          if (StrUtil.isNotBlank(ctx.getDisplayName())) {
+            return ctx.getDisplayName();
+          }
+          if (StrUtil.isNotBlank(ctx.getUsername())) {
+            return ctx.getUsername();
+          }
+        }
+      } catch (Exception e) {
+        log.debug("[BudgetIdentity] Fallback current user actor resolution: {}", e.getMessage());
+      }
+    }
+    return "Cán bộ Tài chính - Kế toán";
+  }
+
+  /**
+   * Phân giải {@code personId} ({@code dir_person.id}) của người thực hiện từ request body hoặc
+   * phiên đăng nhập hiện tại qua {@link UnifiedIdentityResolver#resolveCurrentUser()}.
+   */
+  public Long resolveCurrentPersonId(Map<String, Object> body, String... keys) {
+    if (body != null && keys != null) {
+      for (String key : keys) {
+        Object val = body.get(key);
+        if (val != null && StrUtil.isNotBlank(val.toString())) {
+          try {
+            return Long.parseLong(val.toString().trim());
+          } catch (NumberFormatException ignored) {
+            // Bỏ qua nếu không phải số
+          }
+        }
+      }
+    }
+    UnifiedIdentityResolver resolver = identityResolverProvider.getIfAvailable();
+    if (resolver != null) {
+      try {
+        var ctxOpt = resolver.resolveCurrentUser();
+        if (ctxOpt.isPresent() && ctxOpt.get().getPersonId() != null) {
+          return ctxOpt.get().getPersonId();
+        }
+      } catch (Exception e) {
+        log.debug("[BudgetIdentity] Fallback current personId resolution: {}", e.getMessage());
+      }
+    }
+    return null;
+  }
+
+  /**
    * Đồng bộ ngược số liệu Dự toán (Giao đầu kỳ, Bổ sung, Chuyển nguồn, Hiệu lực, Đã giải ngân) từ
    * {@link BudgetAllocation} sang Kế hoạch công tác liên kết tại {@code tr-planning-service}.
    */

@@ -80,4 +80,24 @@ public class BudgetDashboardController extends BaseController {
             : null;
     return success(budgetDashboardBusiness.generateAiAdvisorInsights(budgetYear));
   }
+
+  @SaCheckPermission("BudgetAllocationList")
+  @GetMapping("/burn-rate-forecast")
+  @Operation(
+      summary =
+          "Dự báo tốc độ tiêu dùng kinh phí (Burn-rate Projection), cảnh báo tồn dư cuối năm & gợi ý điều chuyển nội bộ tự động")
+  public R<Map<String, Object>> getBurnRateForecast(
+      @RequestParam(value = "budgetYear", required = false) Integer budgetYear) {
+    return success(budgetDashboardBusiness.getBurnRateForecast(budgetYear));
+  }
+
+  @SaCheckPermission("BudgetAllocationList")
+  @GetMapping("/mtef-summary")
+  @Operation(
+      summary =
+          "Tổng hợp Khung Kế hoạch Tài chính - Ngân sách Trung hạn 3 năm cuốn chiếu (3-Year Rolling MTEF)")
+  public R<Map<String, Object>> getMtefSummary(
+      @RequestParam(value = "baseYear", required = false) Integer baseYear) {
+    return success(budgetDashboardBusiness.getMtefSummary(baseYear));
+  }
 }

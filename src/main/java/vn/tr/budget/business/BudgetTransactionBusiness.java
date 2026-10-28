@@ -236,7 +236,11 @@ public class BudgetTransactionBusiness {
     if (body != null && body.get("approvedByPersonName") != null) {
       tx.setApprovedByPersonName(String.valueOf(body.get("approvedByPersonName")));
     } else if (StrUtil.isBlank(tx.getApprovedByPersonName())) {
-      tx.setApprovedByPersonName("Đinh Quang Huy");
+      tx.setApprovedByPersonName(
+          integrationOrchestrator != null
+              ? integrationOrchestrator.resolveCurrentActorName(
+                  body, "actorName", "approvedByPersonName")
+              : "Cán bộ Tài chính - Kế toán");
     }
     BudgetTransaction saved = budgetTransactionService.save(tx);
     workflowEngineHelper.executeDoubleEntryLedger(saved);
