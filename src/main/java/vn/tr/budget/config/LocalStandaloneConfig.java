@@ -1,6 +1,7 @@
 package vn.tr.budget.config;
 
 import cn.dev33.satoken.SaManager;
+import cn.dev33.satoken.exception.NotLoginException;
 import cn.dev33.satoken.same.SaSameTemplate;
 import cn.dev33.satoken.stp.StpUtil;
 import cn.dev33.satoken.stp.parameter.SaLoginParameter;
@@ -48,7 +49,7 @@ public class LocalStandaloneConfig implements WebMvcConfigurer {
         new SaSameTemplate() {
           @Override
           public boolean isValid(String token) {
-            return true;
+            return token != null && !token.isBlank();
           }
         });
   }
@@ -118,7 +119,11 @@ public class LocalStandaloneConfig implements WebMvcConfigurer {
               public boolean preHandle(
                   HttpServletRequest request, HttpServletResponse response, Object handler) {
                 if ("true".equalsIgnoreCase(request.getHeader("X-Test-Unauthenticated"))) {
-                  return true;
+                  throw NotLoginException.newInstance(
+                      StpUtil.TYPE,
+                      NotLoginException.NOT_TOKEN,
+                      "Phiên làm việc không hợp lệ hoặc chưa đăng nhập",
+                      null);
                 }
 
                 String rawToken = extractToken(request);
