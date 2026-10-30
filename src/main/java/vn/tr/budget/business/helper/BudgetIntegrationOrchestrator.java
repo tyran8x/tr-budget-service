@@ -161,6 +161,113 @@ public class BudgetIntegrationOrchestrator {
   }
 
   /**
+   * Phân giải tên nhân sự theo {@code personId} với cơ chế Fallback về {@code snapshotName} nếu bản
+   * ghi cũ chỉ có {@code name} mà chưa có {@code id} hoặc khi Directory Service tạm thời offline.
+   */
+  public String resolvePersonNameWithFallback(Long personId, String snapshotName) {
+    UnifiedIdentityResolver resolver =
+        identityResolverProvider != null ? identityResolverProvider.getIfAvailable() : null;
+    if (resolver != null) {
+      try {
+        String resolved = resolver.resolvePersonNameWithFallback(personId, snapshotName);
+        if (StrUtil.isNotBlank(resolved)) {
+          return resolved;
+        }
+      } catch (Exception e) {
+        log.debug("[BudgetIdentity] Fallback person name for id={}: {}", personId, e.getMessage());
+      }
+    }
+    return StrUtil.isNotBlank(snapshotName) ? snapshotName.trim() : null;
+  }
+
+  /**
+   * Phân giải tên Đơn vị / Phòng ban theo {@code nodeId} với cơ chế Fallback về {@code
+   * snapshotName}.
+   */
+  public String resolveNodeNameWithFallback(Long nodeId, String snapshotName) {
+    UnifiedIdentityResolver resolver =
+        identityResolverProvider != null ? identityResolverProvider.getIfAvailable() : null;
+    if (resolver != null) {
+      try {
+        String resolved = resolver.resolveNodeNameWithFallback(nodeId, snapshotName);
+        if (StrUtil.isNotBlank(resolved)) {
+          return resolved;
+        }
+      } catch (Exception e) {
+        log.debug("[BudgetIdentity] Fallback node name for id={}: {}", nodeId, e.getMessage());
+      }
+    }
+    return StrUtil.isNotBlank(snapshotName) ? snapshotName.trim() : null;
+  }
+
+  /**
+   * Phân giải mã Đơn vị / Phòng ban theo {@code nodeId} với cơ chế Fallback về {@code
+   * snapshotCode}.
+   */
+  public String resolveNodeCodeWithFallback(Long nodeId, String snapshotCode) {
+    UnifiedIdentityResolver resolver =
+        identityResolverProvider != null ? identityResolverProvider.getIfAvailable() : null;
+    if (resolver != null) {
+      try {
+        String resolved = resolver.resolveNodeCodeWithFallback(nodeId, snapshotCode);
+        if (StrUtil.isNotBlank(resolved)) {
+          return resolved;
+        }
+      } catch (Exception e) {
+        log.debug("[BudgetIdentity] Fallback node code for id={}: {}", nodeId, e.getMessage());
+      }
+    }
+    return StrUtil.isNotBlank(snapshotCode) ? snapshotCode.trim() : null;
+  }
+
+  /**
+   * Tra cứu {@code nodeId} từ {@code nodeCode} khi bản ghi cũ / request chỉ gửi {@code nodeCode}.
+   */
+  public Long resolveNodeIdByCode(String nodeCode) {
+    if (StrUtil.isBlank(nodeCode)) {
+      return null;
+    }
+    UnifiedIdentityResolver resolver =
+        identityResolverProvider != null ? identityResolverProvider.getIfAvailable() : null;
+    if (resolver != null) {
+      try {
+        var ctxOpt = resolver.resolveByNodeCode(nodeCode.trim());
+        if (ctxOpt.isPresent() && ctxOpt.get().getPrimaryNodeId() != null) {
+          return ctxOpt.get().getPrimaryNodeId();
+        }
+      } catch (Exception e) {
+        log.debug(
+            "[BudgetIdentity] Fallback nodeId resolution for code={}: {}",
+            nodeCode,
+            e.getMessage());
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Tra cứu tên Đơn vị từ {@code nodeCode} khi bản ghi chỉ có {@code nodeCode}.
+   */
+  public String resolveNodeNameByCodeWithFallback(String nodeCode, String snapshotName) {
+    if (StrUtil.isNotBlank(nodeCode)) {
+      UnifiedIdentityResolver resolver =
+          identityResolverProvider != null ? identityResolverProvider.getIfAvailable() : null;
+      if (resolver != null) {
+        try {
+          var ctxOpt = resolver.resolveByNodeCode(nodeCode.trim());
+          if (ctxOpt.isPresent() && StrUtil.isNotBlank(ctxOpt.get().getPrimaryNodeName())) {
+            return ctxOpt.get().getPrimaryNodeName();
+          }
+        } catch (Exception e) {
+          log.debug(
+              "[BudgetIdentity] Fallback nodeName by code={}: {}", nodeCode, e.getMessage());
+        }
+      }
+    }
+    return StrUtil.isNotBlank(snapshotName) ? snapshotName.trim() : null;
+  }
+
+  /**
    * Đồng bộ ngược số liệu Dự toán (Giao đầu kỳ, Bổ sung, Chuyển nguồn, Hiệu lực, Đã giải ngân) từ
    * {@link BudgetAllocation} sang Kế hoạch công tác liên kết tại {@code tr-planning-service}.
    */

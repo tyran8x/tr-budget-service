@@ -276,4 +276,13 @@ public class BudgetDisbursementController extends BaseController {
     return success(budgetDisbursementBusiness.settleFromPaymentWebhook(id, body));
   }
 
+  @SaCheckPermission("BudgetDisbursementDetail")
+  @GetMapping("/{id}/kbnn-dvc-package")
+  @Operation(
+      summary =
+          "Kết xuất gói hồ sơ giao dịch điện tử Dịch vụ công Kho bạc Nhà nước (DVC KBNN / TABMIS) theo Mẫu C2-02a/NS")
+  public R<Map<String, Object>> exportKbnnDvcPackage(@PathVariable("id") Long id) {
+    return success(budgetDisbursementBusiness.exportKbnnDvcPackage(id));
+  }
+
 }

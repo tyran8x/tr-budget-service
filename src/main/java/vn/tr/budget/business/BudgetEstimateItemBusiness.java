@@ -11,7 +11,10 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.beans.factory.annotation.Autowired;
+import vn.tr.budget.dao.model.BudgetCategory;
 import vn.tr.budget.dao.model.BudgetEstimateItem;
+import vn.tr.budget.dao.service.BudgetCategoryRepo;
 import vn.tr.budget.dao.service.BudgetEstimateItemService;
 import vn.tr.budget.data.criteria.BudgetEstimateItemSearchCriteria;
 import vn.tr.budget.data.dto.BudgetEstimateItemData;
@@ -47,6 +50,8 @@ public class BudgetEstimateItemBusiness {
   private final AuditRollbackHelper auditRollbackHelper;
   private final BusinessLogicHelper businessLogicHelper;
 
+  @Autowired(required = false)
+  private BudgetCategoryRepo budgetCategoryRepo;
 
   public JpaRepository<BudgetEstimateItem, Long> getInjectedRepo() {
     return budgetEstimateItemService.getRepository();
@@ -62,6 +67,7 @@ public class BudgetEstimateItemBusiness {
     if (StrUtil.isBlank(data.getItemType())) {
       data.setItemType("EXPENDITURE");
     }
+    syncEstimateItemSnapshots(data);
     if (data.getLevelDepth() == null) {
       data.setLevelDepth(data.getParentId() != null ? 2 : 1);
     }
@@ -93,9 +99,74 @@ public class BudgetEstimateItemBusiness {
             .orElseThrow(() -> new EntityNotFoundException(BudgetEstimateItem.class, id));
     data.setId(id);
     validateData(data);
+    syncEstimateItemSnapshots(data);
     budgetEstimateItemMapper.updateEntityFromData(data, existing);
     BudgetEstimateItem saved = budgetEstimateItemService.save(existing);
     return budgetEstimateItemMapper.toData(saved);
+  }
+
+  private void syncEstimateItemSnapshots(BudgetEstimateItemData data) {
+    if (data == null) {
+      return;
+    }
+    if (data.getParentId() != null) {
+      budgetEstimateItemService
+          .findById(data.getParentId())
+          .ifPresent(
+              parent -> {
+                data.setParentCode(parent.getCode());
+                data.setParentName(parent.getName());
+                if (data.getLevelDepth() == null) {
+                  data.setLevelDepth(
+                      (parent.getLevelDepth() != null ? parent.getLevelDepth() : 1) + 1);
+                }
+              });
+    } else if (StrUtil.isNotBlank(data.getParentCode())) {
+      budgetEstimateItemService
+          .findByCodeIgnoreCaseIncludingDeleted(data.getParentCode().trim())
+          .ifPresent(
+              parent -> {
+                data.setParentId(parent.getId());
+                if (StrUtil.isBlank(data.getParentName())) {
+                  data.setParentName(parent.getName());
+                }
+              });
+    }
+
+    if (budgetCategoryRepo != null) {
+      if (data.getCategoryId() != null) {
+        budgetCategoryRepo
+            .findById(data.getCategoryId())
+            .ifPresent(
+                cat -> {
+                  data.setCategoryCode(cat.getCode());
+                  data.setCategoryName(cat.getName());
+                  if (StrUtil.isBlank(data.getSubItemCode())) {
+                    data.setSubItemCode(cat.getSubItemCode());
+                  }
+                  if (StrUtil.isBlank(data.getAutonomyType())) {
+                    data.setAutonomyType(cat.getAutonomyType());
+                  }
+                });
+      } else if (StrUtil.isNotBlank(data.getCategoryCode())) {
+        List<BudgetCategory> cats =
+            budgetCategoryRepo.findAllByCodeIgnoreCaseIncludingDeletedSorted(
+                data.getCategoryCode().trim());
+        if (!cats.isEmpty()) {
+          BudgetCategory cat = cats.getFirst();
+          data.setCategoryId(cat.getId());
+          if (StrUtil.isBlank(data.getCategoryName())) {
+            data.setCategoryName(cat.getName());
+          }
+          if (StrUtil.isBlank(data.getSubItemCode())) {
+            data.setSubItemCode(cat.getSubItemCode());
+          }
+          if (StrUtil.isBlank(data.getAutonomyType())) {
+            data.setAutonomyType(cat.getAutonomyType());
+          }
+        }
+      }
+    }
   }
 
   /** Xoá mềm BudgetEstimateItem. */

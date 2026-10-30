@@ -70,6 +70,13 @@ public class BudgetCategoryBusiness {
     if (data.getSlaDisbursementWarningDays() == null) {
       data.setSlaDisbursementWarningDays(7);
     }
+    syncParentCategorySnapshot(data);
+    if (data.getLevelDepth() == null) {
+      data.setLevelDepth(data.getParentId() != null ? 2 : 1);
+    }
+    if (data.getIsLeaf() == null) {
+      data.setIsLeaf(Boolean.TRUE);
+    }
     BudgetCategory entity =
         genericUpsertHelper.upsert(
             data,
@@ -78,7 +85,7 @@ public class BudgetCategoryBusiness {
             budgetCategoryMapper::updateEntityFromData,
             budgetCategoryService.getRepository());
 
-    return budgetCategoryMapper.toData(entity);
+    return enrichData(budgetCategoryMapper.toData(entity));
   }
 
   /** Cập nhật BudgetCategory. */
@@ -89,9 +96,64 @@ public class BudgetCategoryBusiness {
             .orElseThrow(() -> new EntityNotFoundException(BudgetCategory.class, id));
     data.setId(id);
     validateData(data);
+    syncParentCategorySnapshot(data);
     budgetCategoryMapper.updateEntityFromData(data, existing);
     BudgetCategory saved = budgetCategoryService.save(existing);
-    return budgetCategoryMapper.toData(saved);
+    return enrichData(budgetCategoryMapper.toData(saved));
+  }
+
+  private void syncParentCategorySnapshot(BudgetCategoryData data) {
+    if (data == null) {
+      return;
+    }
+    if (data.getParentId() != null) {
+      budgetCategoryService
+          .findById(data.getParentId())
+          .ifPresent(
+              parent -> {
+                data.setParentCode(parent.getCode());
+                data.setParentName(parent.getName());
+                if (data.getLevelDepth() == null) {
+                  data.setLevelDepth(
+                      (parent.getLevelDepth() != null ? parent.getLevelDepth() : 1) + 1);
+                }
+              });
+    } else if (StrUtil.isNotBlank(data.getParentCode())) {
+      budgetCategoryService
+          .findByCodeIgnoreCaseIncludingDeleted(data.getParentCode().trim())
+          .ifPresent(
+              parent -> {
+                data.setParentId(parent.getId());
+                if (StrUtil.isBlank(data.getParentName())) {
+                  data.setParentName(parent.getName());
+                }
+                if (data.getLevelDepth() == null) {
+                  data.setLevelDepth(
+                      (parent.getLevelDepth() != null ? parent.getLevelDepth() : 1) + 1);
+                }
+              });
+    }
+  }
+
+  private BudgetCategoryData enrichData(BudgetCategoryData dto) {
+    if (dto == null) {
+      return null;
+    }
+    if (dto.getParentId() != null
+        && (StrUtil.isBlank(dto.getParentCode()) || StrUtil.isBlank(dto.getParentName()))) {
+      budgetCategoryService
+          .findById(dto.getParentId())
+          .ifPresent(
+              parent -> {
+                if (StrUtil.isBlank(dto.getParentCode())) {
+                  dto.setParentCode(parent.getCode());
+                }
+                if (StrUtil.isBlank(dto.getParentName())) {
+                  dto.setParentName(parent.getName());
+                }
+              });
+    }
+    return dto;
   }
 
   /** Xoá mềm BudgetCategory. */

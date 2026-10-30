@@ -2,22 +2,28 @@ package vn.tr.budget.dao.model;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EntityListeners;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import lombok.AllArgsConstructor;
+import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 import lombok.ToString;
 import lombok.experimental.SuperBuilder;
+import org.hibernate.annotations.Filter;
 import org.hibernate.annotations.SQLDelete;
 import org.hibernate.annotations.SQLRestriction;
 import org.javers.core.metamodel.annotation.TypeName;
+import vn.tr.common.jpa.entity.AppIsolated;
 import vn.tr.common.jpa.entity.BaseCommonEntity;
+import vn.tr.common.jpa.listener.AppIsolatedListener;
 
 /**
  * Entity đại diện cho Phương án & Quyết định Phân bổ Dự toán Kinh phí Đa kỳ (BudgetAllocation).
@@ -34,16 +40,26 @@ import vn.tr.common.jpa.entity.BaseCommonEntity;
 @SuperBuilder(toBuilder = true)
 @AllArgsConstructor
 @NoArgsConstructor
+@EntityListeners(AppIsolatedListener.class)
+@Filter(name = "appCodeFilter", condition = "app_code = :appCode")
 @SQLDelete(
-    sql = "UPDATE budget_allocation SET deleted_at = CURRENT_TIMESTAMP WHERE id = ? AND version = ?")
+    sql =
+        "UPDATE budget_allocation SET deleted_at = CURRENT_TIMESTAMP, version = (version + 1) WHERE id = ? AND version = ?")
 @SQLRestriction(value = "deleted_at IS NULL")
 @TypeName("BudgetAllocation")
-public class BudgetAllocation extends BaseCommonEntity {
+public class BudgetAllocation extends BaseCommonEntity implements AppIsolated {
 
   @Id
   @Column(name = "id", unique = true, nullable = false)
   @GeneratedValue(strategy = GenerationType.IDENTITY)
   private Long id;
+
+  @Column(name = "app_code", length = 50, nullable = false)
+  @Builder.Default
+  private String appCode = "ADMIN";
+
+  @Column(name = "parent_allocation_id")
+  private Long parentAllocationId;
 
   @Column(name = "budget_year")
   private Integer budgetYear;
@@ -87,6 +103,27 @@ public class BudgetAllocation extends BaseCommonEntity {
   @Column(name = "category_name", length = 250)
   private String categoryName;
 
+  @Column(name = "sub_item_code", length = 50)
+  private String subItemCode;
+
+  @Column(name = "domain_id")
+  private Long domainId;
+
+  @Column(name = "domain_code", length = 100)
+  private String domainCode;
+
+  @Column(name = "domain_name", length = 250)
+  private String domainName;
+
+  @Column(name = "domain_group_code", length = 100)
+  private String domainGroupCode;
+
+  @Column(name = "domain_group_name", length = 250)
+  private String domainGroupName;
+
+  @Column(name = "dynamic_breakdown_json", columnDefinition = "TEXT")
+  private String dynamicBreakdownJson;
+
   @Column(name = "funding_source_code", length = 100)
   private String fundingSourceCode;
 
@@ -102,6 +139,9 @@ public class BudgetAllocation extends BaseCommonEntity {
   @Column(name = "decision_issuer", length = 250)
   private String decisionIssuer;
 
+  @Column(name = "decision_document_id")
+  private Long decisionDocumentId;
+
   @Column(name = "linked_plan_id")
   private Long linkedPlanId;
 
@@ -111,11 +151,20 @@ public class BudgetAllocation extends BaseCommonEntity {
   @Column(name = "linked_plan_name", length = 500)
   private String linkedPlanName;
 
+  @Column(name = "linked_plan_item_id")
+  private Long linkedPlanItemId;
+
   @Column(name = "approval_scope", length = 50)
   private String approvalScope;
 
   @Column(name = "workflow_status", length = 50)
   private String workflowStatus;
+
+  @Column(name = "wf_instance_id")
+  private Long wfInstanceId;
+
+  @Column(name = "wf_process_code", length = 100)
+  private String wfProcessCode;
 
   @Column(name = "current_version")
   private Integer currentVersion;
@@ -159,7 +208,50 @@ public class BudgetAllocation extends BaseCommonEntity {
   @Column(name = "available_amount", precision = 19, scale = 2)
   private BigDecimal availableAmount;
 
+  @Column(name = "expired_cancelled_amount", precision = 19, scale = 2)
+  @Builder.Default
+  private BigDecimal expiredCancelledAmount = BigDecimal.ZERO;
+
+  @Column(name = "estimate_year_plus_1", precision = 19, scale = 2)
+  @Builder.Default
+  private BigDecimal estimateYearPlus1 = BigDecimal.ZERO;
+
+  @Column(name = "estimate_year_plus_2", precision = 19, scale = 2)
+  @Builder.Default
+  private BigDecimal estimateYearPlus2 = BigDecimal.ZERO;
+
   @Column(name = "disbursement_rate_percent", precision = 5, scale = 2)
   private BigDecimal disbursementRatePercent;
+
+  @Column(name = "submitted_by_person_id")
+  private Long submittedByPersonId;
+
+  @Column(name = "submitted_by_person_name", length = 250)
+  private String submittedByPersonName;
+
+  @Column(name = "submitted_date")
+  private LocalDateTime submittedDate;
+
+  @Column(name = "approved_by_person_id")
+  private Long approvedByPersonId;
+
+  @Column(name = "approved_by_person_name", length = 250)
+  private String approvedByPersonName;
+
+  @Column(name = "approved_date")
+  private LocalDateTime approvedDate;
+
+  @Column(name = "review_comment", length = 1000)
+  private String reviewComment;
+
+  @Column(name = "attachment_file_ids_json", columnDefinition = "TEXT")
+  private String attachmentFileIdsJson;
+
+  @Column(name = "location_id")
+  private Long locationId;
+
+  @Column(name = "currency_code", length = 10)
+  @Builder.Default
+  private String currencyCode = "VND";
 
 }

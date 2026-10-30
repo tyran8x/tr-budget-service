@@ -27,6 +27,8 @@ import vn.tr.common.web.data.dto.BulkSortOrderData;
 import vn.tr.common.web.utils.BusinessLogicHelper;
 import vn.tr.common.web.utils.CoreUtils;
 import java.math.BigDecimal;
+import org.springframework.beans.factory.annotation.Autowired;
+import vn.tr.budget.business.helper.BudgetIntegrationOrchestrator;
 import vn.tr.budget.business.helper.BudgetWorkflowEngineHelper;
 
 /**
@@ -48,6 +50,9 @@ public class BudgetUnitConfigBusiness {
   private final BusinessLogicHelper businessLogicHelper;
   private final BudgetWorkflowEngineHelper workflowEngineHelper;
 
+  @Autowired(required = false)
+  private BudgetIntegrationOrchestrator integrationOrchestrator;
+
   public JpaRepository<BudgetUnitConfig, Long> getInjectedRepo() {
     return budgetUnitConfigService.getRepository();
   }
@@ -62,6 +67,15 @@ public class BudgetUnitConfigBusiness {
     if (StrUtil.isBlank(data.getUnitType())) {
       data.setUnitType("DEPARTMENT");
     }
+    if (data.getUnitLevel() == null) {
+      data.setUnitLevel(3);
+    }
+    if (data.getRecurrentSelfGuaranteeRate() == null) {
+      data.setRecurrentSelfGuaranteeRate(BigDecimal.ZERO);
+    }
+    if (StrUtil.isBlank(data.getDefaultChapterCode())) {
+      data.setDefaultChapterCode("423");
+    }
     if (data.getCanSelfAllocate() == null) {
       data.setCanSelfAllocate(Boolean.TRUE);
     }
@@ -71,6 +85,7 @@ public class BudgetUnitConfigBusiness {
     if (data.getCanCarryOver() == null) {
       data.setCanCarryOver(Boolean.TRUE);
     }
+    syncUnitConfigSnapshots(data);
     BudgetUnitConfig entity =
         genericUpsertHelper.upsert(
             data,
@@ -79,7 +94,7 @@ public class BudgetUnitConfigBusiness {
             budgetUnitConfigMapper::updateEntityFromData,
             budgetUnitConfigService.getRepository());
 
-    return budgetUnitConfigMapper.toData(entity);
+    return enrichData(budgetUnitConfigMapper.toData(entity));
   }
 
   /** Cập nhật BudgetUnitConfig. */
@@ -90,9 +105,59 @@ public class BudgetUnitConfigBusiness {
             .orElseThrow(() -> new EntityNotFoundException(BudgetUnitConfig.class, id));
     data.setId(id);
     validateData(data);
+    syncUnitConfigSnapshots(data);
     budgetUnitConfigMapper.updateEntityFromData(data, existing);
     BudgetUnitConfig saved = budgetUnitConfigService.save(existing);
-    return budgetUnitConfigMapper.toData(saved);
+    return enrichData(budgetUnitConfigMapper.toData(saved));
+  }
+
+  private void syncUnitConfigSnapshots(BudgetUnitConfigData data) {
+    if (data == null || integrationOrchestrator == null) {
+      return;
+    }
+    if (data.getNodeId() != null) {
+      data.setNodeCode(
+          integrationOrchestrator.resolveNodeCodeWithFallback(
+              data.getNodeId(), data.getNodeCode()));
+      data.setNodeName(
+          integrationOrchestrator.resolveNodeNameWithFallback(
+              data.getNodeId(), data.getNodeName()));
+    } else if (StrUtil.isNotBlank(data.getNodeCode())) {
+      Long resolvedId = integrationOrchestrator.resolveNodeIdByCode(data.getNodeCode());
+      if (resolvedId != null) {
+        data.setNodeId(resolvedId);
+      }
+      data.setNodeName(
+          integrationOrchestrator.resolveNodeNameByCodeWithFallback(
+              data.getNodeCode(), data.getNodeName()));
+    }
+    if (data.getChiefAccountantPersonId() != null) {
+      data.setChiefAccountantName(
+          integrationOrchestrator.resolvePersonNameWithFallback(
+              data.getChiefAccountantPersonId(), data.getChiefAccountantName()));
+    }
+    if (data.getApproverPersonId() != null) {
+      data.setApproverPersonName(
+          integrationOrchestrator.resolvePersonNameWithFallback(
+              data.getApproverPersonId(), data.getApproverPersonName()));
+    }
+  }
+
+  private BudgetUnitConfigData enrichData(BudgetUnitConfigData dto) {
+    if (dto == null || integrationOrchestrator == null) {
+      return dto;
+    }
+    dto.setNodeCode(
+        integrationOrchestrator.resolveNodeCodeWithFallback(dto.getNodeId(), dto.getNodeCode()));
+    dto.setNodeName(
+        integrationOrchestrator.resolveNodeNameWithFallback(dto.getNodeId(), dto.getNodeName()));
+    dto.setChiefAccountantName(
+        integrationOrchestrator.resolvePersonNameWithFallback(
+            dto.getChiefAccountantPersonId(), dto.getChiefAccountantName()));
+    dto.setApproverPersonName(
+        integrationOrchestrator.resolvePersonNameWithFallback(
+            dto.getApproverPersonId(), dto.getApproverPersonName()));
+    return dto;
   }
 
   /** Xoá mềm BudgetUnitConfig. */
@@ -121,6 +186,7 @@ public class BudgetUnitConfigBusiness {
     return budgetUnitConfigService
         .findById(id)
         .map(budgetUnitConfigMapper::toData)
+        .map(this::enrichData)
         .orElseThrow(() -> new EntityNotFoundException(BudgetUnitConfig.class, id));
   }
 
@@ -129,7 +195,7 @@ public class BudgetUnitConfigBusiness {
   public PagedData<BudgetUnitConfigData> findAll(BudgetUnitConfigSearchCriteria criteria) {
     Pageable pageable = CoreUtils.getPageRequest(criteria);
     Page<BudgetUnitConfig> page = budgetUnitConfigService.findAll(criteria, pageable);
-    return PagedData.from(page, budgetUnitConfigMapper::toData);
+    return PagedData.from(page, e -> enrichData(budgetUnitConfigMapper.toData(e)));
   }
 
   /** Sao chép BudgetUnitConfig. */

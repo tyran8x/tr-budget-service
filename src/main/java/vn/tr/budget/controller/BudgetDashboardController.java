@@ -100,4 +100,14 @@ public class BudgetDashboardController extends BaseController {
       @RequestParam(value = "baseYear", required = false) Integer baseYear) {
     return success(budgetDashboardBusiness.getMtefSummary(baseYear));
   }
+
+  @SaCheckPermission("BudgetAllocationList")
+  @PostMapping("/what-if-simulation")
+  @Operation(
+      summary =
+          "Mô phỏng kịch bản ngân sách What-If (Tiết kiệm chi thường xuyên, biến động thu & tái phân bổ nhiệm vụ trọng điểm)")
+  public R<Map<String, Object>> simulateWhatIfScenario(
+      @RequestBody(required = false) Map<String, Object> body) {
+    return success(budgetDashboardBusiness.simulateWhatIfScenario(body));
+  }
 }

@@ -253,4 +253,15 @@ public class BudgetTransactionController extends BaseController {
     return success(budgetTransactionBusiness.rejectTransaction(id, body));
   }
 
+  @SaCheckPermission("BudgetTransactionCreate")
+  @PostMapping("/execute-reallocation")
+  @Operation(
+      summary =
+          "Thực thi Điều chuyển Dự toán Thông minh 1-Click (Smart Reallocation) từ đề xuất tối ưu Burn-rate / AI")
+  @Log(title = "[BudgetTransaction] Execute Smart Reallocation", businessType = BusinessType.INSERT)
+  public R<Map<String, Object>> executeSmartReallocation(
+      @RequestBody Map<String, Object> body) {
+    return success(budgetTransactionBusiness.executeSmartReallocation(body));
+  }
+
 }

@@ -28,11 +28,14 @@ import vn.tr.common.web.utils.BusinessLogicHelper;
 import vn.tr.common.web.utils.CoreUtils;
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import org.springframework.beans.factory.annotation.Autowired;
 import vn.tr.budget.business.helper.BudgetIntegrationOrchestrator;
 import vn.tr.budget.business.helper.BudgetWorkflowEngineHelper;
 import vn.tr.budget.dao.model.BudgetAllocation;
+import vn.tr.budget.dao.model.BudgetEstimateItem;
 import vn.tr.budget.dao.service.BudgetAllocationRepo;
+import vn.tr.budget.dao.service.BudgetEstimateItemRepo;
 import vn.tr.common.core.exception.base.BaseException;
 
 /**
@@ -54,6 +57,9 @@ public class BudgetDisbursementBusiness {
   private final BusinessLogicHelper businessLogicHelper;
   private final BudgetWorkflowEngineHelper workflowEngineHelper;
   private final BudgetAllocationRepo budgetAllocationRepo;
+
+  @Autowired(required = false)
+  private BudgetEstimateItemRepo budgetEstimateItemRepo;
 
   @Autowired(required = false)
   private BudgetIntegrationOrchestrator integrationOrchestrator;
@@ -78,10 +84,14 @@ public class BudgetDisbursementBusiness {
     if (StrUtil.isBlank(data.getApprovalStatus())) {
       data.setApprovalStatus("APPROVED_DISBURSED");
     }
+    if (data.getRequestedAmount() == null && data.getAmount() != null) {
+      data.setRequestedAmount(data.getAmount());
+    }
     if (data.getNetPaymentAmount() == null && data.getAmount() != null) {
       BigDecimal tax = data.getTaxAmount() != null ? data.getTaxAmount() : BigDecimal.ZERO;
       data.setNetPaymentAmount(data.getAmount().subtract(tax));
     }
+    syncDisbursementSnapshots(data);
     validateOverBudgetAndVoucherGates(data);
     BudgetDisbursement entity =
         genericUpsertHelper.upsert(
@@ -93,7 +103,7 @@ public class BudgetDisbursementBusiness {
     if (entity.getAllocationId() != null) {
       workflowEngineHelper.recalculateAllocationMetrics(entity.getAllocationId());
     }
-    return budgetDisbursementMapper.toData(entity);
+    return enrichData(budgetDisbursementMapper.toData(entity));
   }
 
   /** Cập nhật BudgetDisbursement. */
@@ -102,31 +112,53 @@ public class BudgetDisbursementBusiness {
         budgetDisbursementService
             .findById(id)
             .orElseThrow(() -> new EntityNotFoundException(BudgetDisbursement.class, id));
+    Long oldAllocId = existing.getAllocationId();
     data.setId(id);
     validateData(data);
+    syncDisbursementSnapshots(data);
     budgetDisbursementMapper.updateEntityFromData(data, existing);
     BudgetDisbursement saved = budgetDisbursementService.save(existing);
-    return budgetDisbursementMapper.toData(saved);
+    if (oldAllocId != null) {
+      workflowEngineHelper.recalculateAllocationMetrics(oldAllocId);
+    }
+    if (saved.getAllocationId() != null && !saved.getAllocationId().equals(oldAllocId)) {
+      workflowEngineHelper.recalculateAllocationMetrics(saved.getAllocationId());
+    }
+    return enrichData(budgetDisbursementMapper.toData(saved));
   }
 
   /** Xoá mềm BudgetDisbursement. */
   public void delete(Long id) {
-    budgetDisbursementService
-        .findById(id)
-        .orElseThrow(() -> new EntityNotFoundException(BudgetDisbursement.class, id));
+    BudgetDisbursement existing =
+        budgetDisbursementService
+            .findById(id)
+            .orElseThrow(() -> new EntityNotFoundException(BudgetDisbursement.class, id));
+    Long allocId = existing.getAllocationId();
     budgetDisbursementService.delete(id);
+    if (allocId != null) {
+      workflowEngineHelper.recalculateAllocationMetrics(allocId);
+    }
   }
 
   /** Xoá mềm hàng loạt BudgetDisbursement. */
   public BulkOperationResult<Long> bulkDelete(Collection<Long> ids) {
-    return businessLogicHelper.executeBulkDelete(
-        ids,
-        budgetDisbursementService::findAllByIds,
-        BudgetDisbursement::getId,
-        null,
-        null,
-        budgetDisbursementService::deleteByIds,
-        "budget.budgetDisbursement.not.found");
+    List<BudgetDisbursement> toDelete =
+        ids != null && !ids.isEmpty() ? budgetDisbursementService.findAllByIds(ids) : List.of();
+    BulkOperationResult<Long> result =
+        businessLogicHelper.executeBulkDelete(
+            ids,
+            budgetDisbursementService::findAllByIds,
+            BudgetDisbursement::getId,
+            null,
+            null,
+            budgetDisbursementService::deleteByIds,
+            "budget.budgetDisbursement.not.found");
+    for (BudgetDisbursement disb : toDelete) {
+      if (disb.getAllocationId() != null) {
+        workflowEngineHelper.recalculateAllocationMetrics(disb.getAllocationId());
+      }
+    }
+    return result;
   }
 
   /** Lấy chi tiết BudgetDisbursement theo ID. */
@@ -135,6 +167,7 @@ public class BudgetDisbursementBusiness {
     return budgetDisbursementService
         .findById(id)
         .map(budgetDisbursementMapper::toData)
+        .map(this::enrichData)
         .orElseThrow(() -> new EntityNotFoundException(BudgetDisbursement.class, id));
   }
 
@@ -143,7 +176,123 @@ public class BudgetDisbursementBusiness {
   public PagedData<BudgetDisbursementData> findAll(BudgetDisbursementSearchCriteria criteria) {
     Pageable pageable = CoreUtils.getPageRequest(criteria);
     Page<BudgetDisbursement> page = budgetDisbursementService.findAll(criteria, pageable);
-    return PagedData.from(page, budgetDisbursementMapper::toData);
+    return PagedData.from(
+        page, entity -> enrichData(budgetDisbursementMapper.toData(entity)));
+  }
+
+  /**
+   * Đồng bộ hai chiều (Hybrid Live-Resolve + Snapshot Fallback) cho Allocation, Node, EstimateItem
+   * và Person.
+   */
+  private void syncDisbursementSnapshots(BudgetDisbursementData data) {
+    if (data == null) {
+      return;
+    }
+    if (budgetAllocationRepo != null) {
+      if (data.getAllocationId() != null) {
+        BudgetAllocation alloc =
+            budgetAllocationRepo.findById(data.getAllocationId()).orElse(null);
+        if (alloc != null) {
+          data.setAllocationCode(alloc.getCode());
+          data.setAllocationName(alloc.getName());
+          if (data.getNodeId() == null && alloc.getNodeId() != null) {
+            data.setNodeId(alloc.getNodeId());
+            data.setNodeCode(alloc.getNodeCode());
+            data.setNodeName(alloc.getNodeName());
+          }
+          if (data.getEstimateItemId() == null && alloc.getEstimateItemId() != null) {
+            data.setEstimateItemId(alloc.getEstimateItemId());
+            data.setEstimateItemCode(alloc.getEstimateItemCode());
+            data.setEstimateItemName(alloc.getEstimateItemName());
+          }
+        }
+      } else if (StrUtil.isNotBlank(data.getAllocationCode())) {
+        List<BudgetAllocation> allocs =
+            budgetAllocationRepo.findAllByCodeIgnoreCaseIncludingDeletedSorted(
+                data.getAllocationCode().trim());
+        if (!allocs.isEmpty()) {
+          BudgetAllocation alloc = allocs.get(0);
+          data.setAllocationId(alloc.getId());
+          data.setAllocationCode(alloc.getCode());
+          if (StrUtil.isBlank(data.getAllocationName())) {
+            data.setAllocationName(alloc.getName());
+          }
+        }
+      }
+    }
+    if (budgetEstimateItemRepo != null) {
+      if (data.getEstimateItemId() != null) {
+        BudgetEstimateItem item =
+            budgetEstimateItemRepo.findById(data.getEstimateItemId()).orElse(null);
+        if (item != null) {
+          data.setEstimateItemCode(item.getCode());
+          data.setEstimateItemName(item.getName());
+        }
+      } else if (StrUtil.isNotBlank(data.getEstimateItemCode())) {
+        List<BudgetEstimateItem> items =
+            budgetEstimateItemRepo.findAllByCodeIgnoreCaseIncludingDeletedSorted(
+                data.getEstimateItemCode().trim());
+        if (!items.isEmpty()) {
+          BudgetEstimateItem item = items.get(0);
+          data.setEstimateItemId(item.getId());
+          data.setEstimateItemCode(item.getCode());
+          if (StrUtil.isBlank(data.getEstimateItemName())) {
+            data.setEstimateItemName(item.getName());
+          }
+        }
+      }
+    }
+    if (integrationOrchestrator != null) {
+      if (data.getNodeId() != null) {
+        data.setNodeCode(
+            integrationOrchestrator.resolveNodeCodeWithFallback(
+                data.getNodeId(), data.getNodeCode()));
+        data.setNodeName(
+            integrationOrchestrator.resolveNodeNameWithFallback(
+                data.getNodeId(), data.getNodeName()));
+      } else if (StrUtil.isNotBlank(data.getNodeCode())) {
+        Long resolvedNodeId = integrationOrchestrator.resolveNodeIdByCode(data.getNodeCode());
+        if (resolvedNodeId != null) {
+          data.setNodeId(resolvedNodeId);
+        }
+        data.setNodeName(
+            integrationOrchestrator.resolveNodeNameByCodeWithFallback(
+                data.getNodeCode(), data.getNodeName()));
+      }
+      if (data.getRequestedByPersonId() != null) {
+        data.setRequestedByPersonName(
+            integrationOrchestrator.resolvePersonNameWithFallback(
+                data.getRequestedByPersonId(), data.getRequestedByPersonName()));
+      }
+      if (data.getApprovedByPersonId() != null) {
+        data.setApprovedByPersonName(
+            integrationOrchestrator.resolvePersonNameWithFallback(
+                data.getApprovedByPersonId(), data.getApprovedByPersonName()));
+      }
+    }
+  }
+
+  private BudgetDisbursementData enrichData(BudgetDisbursementData dto) {
+    if (dto == null || integrationOrchestrator == null) {
+      return dto;
+    }
+    if (dto.getNodeId() != null) {
+      dto.setNodeCode(
+          integrationOrchestrator.resolveNodeCodeWithFallback(dto.getNodeId(), dto.getNodeCode()));
+      dto.setNodeName(
+          integrationOrchestrator.resolveNodeNameWithFallback(dto.getNodeId(), dto.getNodeName()));
+    }
+    if (dto.getRequestedByPersonId() != null) {
+      dto.setRequestedByPersonName(
+          integrationOrchestrator.resolvePersonNameWithFallback(
+              dto.getRequestedByPersonId(), dto.getRequestedByPersonName()));
+    }
+    if (dto.getApprovedByPersonId() != null) {
+      dto.setApprovedByPersonName(
+          integrationOrchestrator.resolvePersonNameWithFallback(
+              dto.getApprovedByPersonId(), dto.getApprovedByPersonName()));
+    }
+    return dto;
   }
 
   /** Sao chép BudgetDisbursement. */
@@ -199,7 +348,10 @@ public class BudgetDisbursementBusiness {
 
   private void validateOverBudgetAndVoucherGates(BudgetDisbursementData data) {
     String dtype = StrUtil.nullToEmpty(data.getDisbursementType()).toUpperCase();
-    if (("DISBURSEMENT".equals(dtype) || "SETTLEMENT".equals(dtype))
+    if (("DISBURSEMENT".equals(dtype)
+            || "DIRECT_PAYMENT".equals(dtype)
+            || "SETTLEMENT".equals(dtype)
+            || "ADVANCE_SETTLEMENT".equals(dtype))
         && workflowEngineHelper.isVoucherRequired(data.getEstimateItemId())
         && StrUtil.isBlank(data.getVoucherNo())) {
       throw new BaseException(
@@ -207,7 +359,8 @@ public class BudgetDisbursementBusiness {
     }
     if (data.getAllocationId() != null
         && data.getAmount() != null
-        && !"SETTLEMENT".equals(dtype)) {
+        && !"SETTLEMENT".equals(dtype)
+        && !"ADVANCE_SETTLEMENT".equals(dtype)) {
       BudgetAllocation alloc =
           budgetAllocationRepo.findById(data.getAllocationId()).orElse(null);
       if (alloc != null && alloc.getAvailableAmount() != null) {
@@ -234,7 +387,18 @@ public class BudgetDisbursementBusiness {
     if (body != null && body.get("treasuryRefCode") != null) {
       disb.setTreasuryRefCode(String.valueOf(body.get("treasuryRefCode")));
     }
+    if (disb.getApprovedAmount() == null) {
+      disb.setApprovedAmount(disb.getAmount());
+    }
+    disb.setApprovedDate(LocalDateTime.now());
     disb.setApprovalStatus("APPROVED_DISBURSED");
+    if (integrationOrchestrator != null) {
+      Long actorId =
+          integrationOrchestrator.resolveCurrentPersonId(body, "approvedByPersonId", "actorId");
+      if (actorId != null) {
+        disb.setApprovedByPersonId(actorId);
+      }
+    }
     if (StrUtil.isBlank(disb.getApprovedByPersonName())) {
       disb.setApprovedByPersonName(
           integrationOrchestrator != null
@@ -261,7 +425,7 @@ public class BudgetDisbursementBusiness {
             "Giải ngân dự toán [" + saved.getCode() + "] " + saved.getName());
       }
     }
-    return budgetDisbursementMapper.toData(saved);
+    return enrichData(budgetDisbursementMapper.toData(saved));
   }
 
   /** Nghiệm thu quyết toán / hoàn ứng chứng từ Kho bạc. */
@@ -278,7 +442,17 @@ public class BudgetDisbursementBusiness {
       throw new BaseException(
           "Bắt buộc bổ sung Số chứng từ / Hóa đơn (voucherNo) trước khi nghiệm thu quyết toán.");
     }
-    disb.setDisbursementType("SETTLEMENT");
+    BigDecimal settledAmt =
+        body != null && body.get("settledAmount") != null
+            ? new BigDecimal(String.valueOf(body.get("settledAmount")))
+            : disb.getAmount();
+    disb.setSettledAmount(settledAmt);
+    disb.setSettledDate(LocalDateTime.now());
+    if ("ADVANCE".equalsIgnoreCase(disb.getDisbursementType())) {
+      disb.setDisbursementType("ADVANCE_SETTLEMENT");
+    } else {
+      disb.setDisbursementType("SETTLEMENT");
+    }
     disb.setApprovalStatus("SETTLED");
     BudgetDisbursement saved = budgetDisbursementService.save(disb);
     BudgetAllocation updatedAlloc = null;
@@ -296,7 +470,7 @@ public class BudgetDisbursementBusiness {
             "Quyết toán chứng từ Kho bạc [" + saved.getVoucherNo() + "]");
       }
     }
-    return budgetDisbursementMapper.toData(saved);
+    return enrichData(budgetDisbursementMapper.toData(saved));
   }
 
   /** Khởi tạo nhanh hồ sơ Cam kết chi (COMMITMENT) từ Nhiệm vụ Kế hoạch hoặc Công việc. */
@@ -342,6 +516,7 @@ public class BudgetDisbursementBusiness {
             .budgetYear(alloc != null ? alloc.getBudgetYear() : LocalDate.now().getYear())
             .disbursementType("COMMITMENT")
             .amount(amount)
+            .requestedAmount(amount)
             .netPaymentAmount(amount)
             .linkedPlanCode(planCode)
             .approvalStatus("COMMITTED")
@@ -363,11 +538,122 @@ public class BudgetDisbursementBusiness {
             .findById(id)
             .orElseThrow(() -> new EntityNotFoundException(BudgetDisbursement.class, id));
     disb.setApprovalStatus("REJECTED");
+    if (body != null && body.get("reason") != null) {
+      String reason = String.valueOf(body.get("reason")).trim();
+      if (StrUtil.isNotBlank(reason)) {
+        disb.setRejectReason(reason);
+        disb.setDescription(
+            StrUtil.blankToDefault(disb.getDescription(), "") + " | Lý do từ chối: " + reason);
+      }
+    }
     BudgetDisbursement saved = budgetDisbursementService.save(disb);
     if (saved.getAllocationId() != null) {
       workflowEngineHelper.recalculateAllocationMetrics(saved.getAllocationId());
     }
-    return budgetDisbursementMapper.toData(saved);
+    return enrichData(budgetDisbursementMapper.toData(saved));
+  }
+
+  /**
+   * Kết xuất Gói Hồ sơ Giao dịch Điện tử Dịch vụ công Kho bạc Nhà nước (DVC KBNN / TABMIS - UPG-07)
+   * theo Mẫu C2-02a/NS (Giấy rút dự toán ngân sách nhà nước) & C2-03/NS (Nghị định 11/2020/NĐ-CP).
+   */
+  @Transactional(readOnly = true)
+  public Map<String, Object> exportKbnnDvcPackage(Long id) {
+    BudgetDisbursement disb =
+        budgetDisbursementService
+            .findById(id)
+            .orElseThrow(() -> new EntityNotFoundException(BudgetDisbursement.class, id));
+    BudgetAllocation alloc =
+        disb.getAllocationId() != null
+            ? budgetAllocationRepo.findById(disb.getAllocationId()).orElse(null)
+            : null;
+
+    String formCode =
+        "ADVANCE".equalsIgnoreCase(disb.getDisbursementType())
+            ? "C2-03/NS (Giấy đề nghị thanh toán tạm ứng)"
+            : "C2-02a/NS (Giấy rút dự toán ngân sách nhà nước)";
+    String chapterCode = "423";
+    String clauseCode =
+        alloc != null && StrUtil.isNotBlank(alloc.getCategoryCode())
+            ? alloc.getCategoryCode()
+            : "281";
+    String subItemCode = StrUtil.blankToDefault(disb.getSubItemCode(), "6551");
+    String voucherNo =
+        StrUtil.blankToDefault(disb.getVoucherNo(), "C2-02A-" + disb.getCode());
+    String treasuryRefCode =
+        StrUtil.blankToDefault(disb.getTreasuryRefCode(), "DVC-KBNN-" + disb.getId());
+    BigDecimal amount = workflowEngineHelper.safe(disb.getAmount());
+    BigDecimal taxAmount = workflowEngineHelper.safe(disb.getTaxAmount());
+    BigDecimal netPaymentAmount =
+        disb.getNetPaymentAmount() != null
+            ? disb.getNetPaymentAmount()
+            : amount.subtract(taxAmount);
+
+    String xmlPayloadPreview =
+        "<DVC_KBNN_PACKAGE version=\"3.5\" standard=\"ND11-2020-ND-CP\">"
+            + "<HEADER><FORM_CODE>"
+            + formCode
+            + "</FORM_CODE><TREASURY_REF>"
+            + treasuryRefCode
+            + "</TREASURY_REF><VOUCHER_NO>"
+            + voucherNo
+            + "</VOUCHER_NO></HEADER>"
+            + "<BUDGET_UNIT><CODE>"
+            + StrUtil.blankToDefault(disb.getNodeCode(), "VAN_PHONG_SO")
+            + "</CODE><NAME>"
+            + StrUtil.blankToDefault(disb.getNodeName(), "Văn phòng Sở")
+            + "</NAME><CHAPTER>"
+            + chapterCode
+            + "</CHAPTER><CLAUSE>"
+            + clauseCode
+            + "</CLAUSE><SUB_ITEM>"
+            + subItemCode
+            + "</SUB_ITEM></BUDGET_UNIT>"
+            + "<PAYMENT><GROSS_AMOUNT>"
+            + amount.toPlainString()
+            + "</GROSS_AMOUNT><TAX_WITHHOLDING>"
+            + taxAmount.toPlainString()
+            + "</TAX_WITHHOLDING><NET_AMOUNT>"
+            + netPaymentAmount.toPlainString()
+            + "</NET_AMOUNT><BENEFICIARY>"
+            + StrUtil.blankToDefault(disb.getBeneficiaryName(), "Đơn vị thụ hưởng hợp đồng")
+            + "</BENEFICIARY><BANK_ACCOUNT>"
+            + StrUtil.blankToDefault(disb.getBeneficiaryBankAccount(), "118000123456")
+            + "</BANK_ACCOUNT><BANK_NAME>"
+            + StrUtil.blankToDefault(disb.getBeneficiaryBankName(), "VietinBank Chi nhánh Đà Nẵng")
+            + "</BANK_NAME></PAYMENT></DVC_KBNN_PACKAGE>";
+
+    Map<String, Object> pkg = new java.util.LinkedHashMap<>();
+    pkg.put("packageId", "PKG-KBNN-" + disb.getId() + "-" + LocalDate.now().getYear());
+    pkg.put("formCode", formCode);
+    pkg.put("dvcPortalStandard", "DVC-KBNN-v3.5 / TABMIS (Nghị định 11/2020/NĐ-CP)");
+    pkg.put("disbursementId", disb.getId());
+    pkg.put("disbursementCode", disb.getCode());
+    pkg.put("disbursementName", disb.getName());
+    pkg.put("voucherNo", voucherNo);
+    pkg.put("treasuryRefCode", treasuryRefCode);
+    pkg.put("budgetYear", disb.getBudgetYear());
+    pkg.put("unitCode", StrUtil.blankToDefault(disb.getNodeCode(), "VAN_PHONG_SO"));
+    pkg.put("unitName", StrUtil.blankToDefault(disb.getNodeName(), "Văn phòng Sở"));
+    pkg.put("chapterCode", chapterCode);
+    pkg.put("clauseCode", clauseCode);
+    pkg.put("subItemCode", subItemCode);
+    pkg.put("amount", amount);
+    pkg.put("taxAmount", taxAmount);
+    pkg.put("netPaymentAmount", netPaymentAmount);
+    pkg.put(
+        "beneficiaryName",
+        StrUtil.blankToDefault(disb.getBeneficiaryName(), "Đơn vị thụ hưởng hợp đồng"));
+    pkg.put(
+        "beneficiaryAccount",
+        StrUtil.blankToDefault(disb.getBeneficiaryBankAccount(), "118000123456"));
+    pkg.put(
+        "beneficiaryBank",
+        StrUtil.blankToDefault(disb.getBeneficiaryBankName(), "VietinBank Chi nhánh Đà Nẵng"));
+    pkg.put("digitalSignatureStatus", "READY_FOR_VGCA_TOKEN_SIGNING");
+    pkg.put("exportedAt", LocalDate.now().toString());
+    pkg.put("xmlPayloadPreview", xmlPayloadPreview);
+    return pkg;
   }
 
   /**
@@ -400,7 +686,13 @@ public class BudgetDisbursementBusiness {
     disb.setPaymentTxCode(paymentTxCode);
     disb.setTreasuryRefCode(treasuryRefCode);
     disb.setVoucherNo(voucherNo);
-    disb.setDisbursementType("SETTLEMENT");
+    disb.setSettledAmount(disb.getAmount());
+    disb.setSettledDate(LocalDateTime.now());
+    if ("ADVANCE".equalsIgnoreCase(disb.getDisbursementType())) {
+      disb.setDisbursementType("ADVANCE_SETTLEMENT");
+    } else {
+      disb.setDisbursementType("SETTLEMENT");
+    }
     disb.setApprovalStatus("SETTLED");
     if (StrUtil.isBlank(disb.getApprovedByPersonName())) {
       disb.setApprovedByPersonName(
@@ -435,7 +727,7 @@ public class BudgetDisbursementBusiness {
         "treasuryRefCode", treasuryRefCode,
         "voucherNo", voucherNo,
         "approvalStatus", saved.getApprovalStatus(),
-        "data", budgetDisbursementMapper.toData(saved));
+        "data", enrichData(budgetDisbursementMapper.toData(saved)));
   }
 
 }

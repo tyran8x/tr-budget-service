@@ -35,7 +35,8 @@ public interface BudgetDisbursementRepo
   List<BudgetDisbursement> findAllByCodeIgnoreCaseIncludingDeletedSorted(@Param("code") String code);
 
   @Modifying(clearAutomatically = true)
-  @Query("UPDATE BudgetDisbursement a SET a.deletedAt = CURRENT_TIMESTAMP WHERE a.id IN :ids")
+  @Query(
+      "UPDATE BudgetDisbursement a SET a.deletedAt = CURRENT_TIMESTAMP, a.version = (a.version + 1) WHERE a.id IN :ids")
   void softDeleteByIds(@Param("ids") Collection<Long> ids);
 
   @Query(value = "SELECT * FROM budget_disbursement WHERE id = :id LIMIT 1", nativeQuery = true)

@@ -18,17 +18,35 @@ import vn.tr.common.web.data.dto.BaseCommonData;
 @EqualsAndHashCode(callSuper = true)
 public class BudgetUnitConfigData extends BaseCommonData {
 
+  private String appCode;
+
   private Long nodeId;
 
   private String nodeCode;
 
   private String nodeName;
 
+  private Long parentNodeId;
+
+  private Integer unitLevel;
+
   private String unitType;
+
+  private BigDecimal recurrentSelfGuaranteeRate;
+
+  private String defaultChapterCode;
+
+  private String treasuryRelationCode;
 
   private String treasuryAccountNo;
 
   private String treasuryBranchName;
+
+  private Long payBankAccountId;
+
+  private String bankAccountNo;
+
+  private String bankName;
 
   private String taxCode;
 

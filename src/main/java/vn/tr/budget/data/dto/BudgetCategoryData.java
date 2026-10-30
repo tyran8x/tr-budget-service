@@ -1,6 +1,7 @@
 package vn.tr.budget.data.dto;
 
-
+import com.fasterxml.jackson.annotation.JsonAlias;
+import java.math.BigDecimal;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 import lombok.NoArgsConstructor;
@@ -18,6 +19,8 @@ import vn.tr.common.web.data.dto.BaseCommonData;
 @EqualsAndHashCode(callSuper = true)
 public class BudgetCategoryData extends BaseCommonData {
 
+  private String appCode;
+
   private Long parentId;
 
   private String parentCode;
@@ -28,13 +31,37 @@ public class BudgetCategoryData extends BaseCommonData {
 
   private String chapterCode;
 
+  private String typeCode;
+
   private String clauseCode;
+
+  private String groupCode;
+
+  private String subGroupCode;
 
   private String itemCode;
 
+  private String subItemCode;
+
   private String autonomyType;
 
-  private Boolean allowCarryOver;
+  @JsonAlias("allowCarryOver")
+  private Boolean isAllowCarryOver;
+
+  @JsonAlias("annualLimit")
+  private BigDecimal annualLimitAmount;
+
+  private Integer levelDepth;
+
+  private Boolean isLeaf;
 
   private Integer slaDisbursementWarningDays;
+
+  public Boolean getAllowCarryOver() {
+    return this.isAllowCarryOver;
+  }
+
+  public void setAllowCarryOver(Boolean allowCarryOver) {
+    this.isAllowCarryOver = allowCarryOver;
+  }
 }

@@ -266,4 +266,20 @@ public class BudgetReportController extends BaseController {
         budgetReportBusiness.generateKbnnReconciliationStatement(budgetYear, quarter, nodeId));
   }
 
+  @SaCheckPermission("BudgetReportList")
+  @GetMapping("/dynamic-domain-matrix")
+  @Operation(
+      summary =
+          "Kết xuất Ma trận Động Đa chiều theo Lĩnh vực / Nhóm lĩnh vực / Loại-Khoản (Dynamic Domain/Group Matrix) tính đến ngày chốt (asOfDate)")
+  public R<Map<String, Object>> getDynamicDomainMatrix(
+      @RequestParam(value = "budgetYear", required = false) Integer budgetYear,
+      @RequestParam(value = "asOfDate", required = false) String asOfDate,
+      @RequestParam(value = "groupByDimension", required = false) String groupByDimension,
+      @RequestParam(value = "viewMode", required = false) String viewMode,
+      @RequestParam(value = "nodeId", required = false) Long nodeId) {
+    return success(
+        budgetReportBusiness.generateDynamicDomainMatrix(
+            budgetYear, asOfDate, groupByDimension, viewMode, nodeId));
+  }
+
 }

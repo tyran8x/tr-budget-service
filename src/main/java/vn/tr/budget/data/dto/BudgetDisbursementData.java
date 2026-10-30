@@ -2,6 +2,7 @@ package vn.tr.budget.data.dto;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 import lombok.NoArgsConstructor;
@@ -18,6 +19,10 @@ import vn.tr.common.web.data.dto.BaseCommonData;
 @NoArgsConstructor
 @EqualsAndHashCode(callSuper = true)
 public class BudgetDisbursementData extends BaseCommonData {
+
+  private String appCode;
+
+  private Long parentDisbursementId;
 
   private Long allocationId;
 
@@ -37,6 +42,14 @@ public class BudgetDisbursementData extends BaseCommonData {
 
   private String estimateItemName;
 
+  private Long categoryId;
+
+  private String categoryCode;
+
+  private String categoryName;
+
+  private String subItemCode;
+
   private Integer budgetYear;
 
   private Integer budgetQuarter;
@@ -45,11 +58,19 @@ public class BudgetDisbursementData extends BaseCommonData {
 
   private String disbursementType;
 
+  private BigDecimal requestedAmount;
+
+  private BigDecimal approvedAmount;
+
   private BigDecimal amount;
+
+  private BigDecimal settledAmount;
 
   private BigDecimal taxAmount;
 
   private BigDecimal netPaymentAmount;
+
+  private Long beneficiaryEnterpriseId;
 
   private String beneficiaryName;
 
@@ -62,6 +83,10 @@ public class BudgetDisbursementData extends BaseCommonData {
   private String contractNo;
 
   private LocalDate contractDate;
+
+  private String invoiceNo;
+
+  private LocalDate invoiceDate;
 
   private String voucherNo;
 
@@ -77,7 +102,17 @@ public class BudgetDisbursementData extends BaseCommonData {
 
   private String linkedPlanItemName;
 
+  private Long linkedTaskProjectId;
+
+  private Long linkedWorkItemId;
+
+  private Long payTransactionId;
+
+  private Long payEReceiptId;
+
   private String paymentTxCode;
+
+  private String paymentStatus;
 
   private LocalDate slaDueDate;
 
@@ -89,5 +124,23 @@ public class BudgetDisbursementData extends BaseCommonData {
 
   private String approvedByPersonName;
 
+  private LocalDateTime approvedDate;
+
+  private LocalDateTime settledDate;
+
+  private String rejectReason;
+
   private String approvalStatus;
+
+  private Long wfInstanceId;
+
+  private String wfProcessCode;
+
+  private Long decisionDocumentId;
+
+  private String attachmentFileIdsJson;
+
+  private Long locationId;
+
+  private String currencyCode;
 }

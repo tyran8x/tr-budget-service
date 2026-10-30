@@ -122,17 +122,33 @@ class BudgetDashboardAndWebhookTest {
     assertEquals("VAN_PHONG_SO", suggestions.get(0).get("sourceUnitCode"));
     assertEquals("THANH_TRA_SO", suggestions.get(0).get("targetUnitCode"));
 
-    // 3. Kiểm tra Khung MTEF 3 năm (UPG-04)
+    // 3. Kiểm tra Khung MTEF 3 năm (UPG-04) & đồng bộ Contract FE
     Map<String, Object> mtef = dashboardBusiness.getMtefSummary(2026);
     assertEquals("2026-2028", mtef.get("periodRange"));
+    assertEquals("2026 - 2028", mtef.get("frameworkPeriod"));
     @SuppressWarnings("unchecked")
     List<Map<String, Object>> rollingYears = (List<Map<String, Object>>) mtef.get("rollingYears");
     assertEquals(3, rollingYears.size());
+    assertNotNull(rollingYears.get(0).get("baselineRecurrentCeiling"));
+    assertNotNull(rollingYears.get(0).get("developmentInvestmentCeiling"));
+    assertNotNull(rollingYears.get(0).get("totalMtefCeiling"));
+
+    // 4. Kiểm tra Mô phỏng kịch bản ngân sách What-If (UPG-08)
+    Map<String, Object> whatIf =
+        dashboardBusiness.simulateWhatIfScenario(
+            Map.of(
+                "budgetYear", 2026,
+                "recurrentSavingRatePercent", 10,
+                "revenueChangeRatePercent", 5,
+                "reallocateSavedToDevelopmentPercent", 70));
+    assertEquals(new BigDecimal("150000000"), whatIf.get("savedRecurrentAmount"));
+    assertEquals(new BigDecimal("105000000"), whatIf.get("reallocatedToPriorityAmount"));
+    assertEquals(new BigDecimal("45000000"), whatIf.get("salaryReformReserveAmount"));
   }
 
   @Test
   @DisplayName(
-      "UPG-01: Tự động đối soát và quyết toán hồ sơ giải ngân từ Webhook Thanh toán (settleFromPaymentWebhook)")
+      "UPG-01 & UPG-07: Tự động đối soát Webhook Thanh toán, kết xuất gói DVC KBNN C2-02a/NS và tính lại số dư khi xóa")
   void shouldAutoSettleDisbursementFromPaymentWebhook() {
     BudgetDisbursement existing =
         BudgetDisbursement.builder()
@@ -140,7 +156,12 @@ class BudgetDashboardAndWebhookTest {
             .code("GN-2026-055")
             .name("Thanh toán hợp đồng phần mềm")
             .allocationId(1L)
+            .nodeCode("VAN_PHONG_SO")
+            .nodeName("Văn phòng Sở")
+            .budgetYear(2026)
             .amount(new BigDecimal("150000000"))
+            .taxAmount(new BigDecimal("15000000"))
+            .netPaymentAmount(new BigDecimal("135000000"))
             .disbursementType("DISBURSEMENT")
             .approvalStatus("APPROVED_DISBURSED")
             .build();
@@ -155,6 +176,9 @@ class BudgetDashboardAndWebhookTest {
                 .code("GN-2026-055")
                 .approvalStatus("SETTLED")
                 .build());
+    when(workflowEngineHelper.safe(any()))
+        .thenAnswer(
+            inv -> inv.getArgument(0) != null ? inv.getArgument(0) : BigDecimal.ZERO);
 
     BudgetDisbursementBusiness business =
         new BudgetDisbursementBusiness(
@@ -179,6 +203,98 @@ class BudgetDashboardAndWebhookTest {
     assertEquals("SEPAY-20261028-9988", res.get("paymentTxCode"));
     assertEquals("KBNN-DN-7788", res.get("treasuryRefCode"));
     assertEquals("SETTLED", res.get("approvalStatus"));
-    verify(workflowEngineHelper, times(1)).recalculateAllocationMetrics(1L);
+
+    // Kiểm tra kết xuất gói DVC KBNN / TABMIS (UPG-07)
+    Map<String, Object> dvcPkg = business.exportKbnnDvcPackage(55L);
+    assertEquals("READY_FOR_VGCA_TOKEN_SIGNING", dvcPkg.get("digitalSignatureStatus"));
+    assertTrue(String.valueOf(dvcPkg.get("xmlPayloadPreview")).contains("DVC_KBNN_PACKAGE"));
+
+    // Kiểm tra xóa giải ngân tự động tính lại số dư dự toán
+    business.delete(55L);
+    verify(workflowEngineHelper, times(2)).recalculateAllocationMetrics(1L);
+  }
+
+  @Test
+  @DisplayName(
+      "Dynamic Domain/Group Matrix: Tự động phát hiện cột động theo Lĩnh vực / Nhóm lĩnh vực và chốt số liệu theo ngày asOfDate")
+  void shouldGenerateDynamicDomainMatrixWithoutHardcodedColumns() {
+    BudgetReportBusiness reportBusiness =
+        new BudgetReportBusiness(
+            null,
+            null,
+            null,
+            genericUpsertHelper,
+            auditRollbackHelper,
+            businessLogicHelper,
+            budgetAllocationRepo);
+
+    // 1. Khi DB trống -> kiểm tra ví dụ minh họa tại 2 mốc ngày 2026-10-23 (SEPARATE_INITIAL) & 2026-10-30 (CUMULATIVE_EFFECTIVE)
+    when(budgetAllocationRepo.findByBudgetYearOrderByIdAsc(2026)).thenReturn(List.of());
+
+    Map<String, Object> matrixOct23 =
+        reportBusiness.generateDynamicDomainMatrix(
+            2026, "2026-10-23", "DOMAIN", "SEPARATE_INITIAL", null);
+    assertEquals("SEPARATE_INITIAL", matrixOct23.get("viewMode"));
+    @SuppressWarnings("unchecked")
+    List<Map<String, Object>> colsOct23 = (List<Map<String, Object>>) matrixOct23.get("columns");
+    assertEquals(4, colsOct23.size());
+    assertEquals(new BigDecimal("166445.810306"), matrixOct23.get("totalAllocated"));
+
+    Map<String, Object> matrixOct30 =
+        reportBusiness.generateDynamicDomainMatrix(
+            2026, "2026-10-30", "DOMAIN", "CUMULATIVE_EFFECTIVE", null);
+    assertEquals("CUMULATIVE_EFFECTIVE", matrixOct30.get("viewMode"));
+    assertEquals(new BigDecimal("166332.470306"), matrixOct30.get("totalAllocated"));
+    assertEquals(new BigDecimal("106239.89"), matrixOct30.get("totalDisbursed"));
+
+    // 2. Khi DB có dữ liệu của một Đơn vị khác với các Lĩnh vực tùy biến bất kỳ -> tự động sinh cột động theo DB
+    BudgetAllocation customUnit1 =
+        BudgetAllocation.builder()
+            .id(10L)
+            .code("PB-SCT-01")
+            .budgetYear(2026)
+            .itemType("EXPENDITURE")
+            .nodeCode("PHONG_QLCN")
+            .nodeName("Phòng Quản lý Công nghiệp")
+            .domainCode("XUC_TIEN_TM")
+            .domainName("Xúc tiến Thương mại")
+            .domainGroupCode("KINH_TE_NGANH")
+            .domainGroupName("Sự nghiệp Kinh tế ngành")
+            .initialAmount(new BigDecimal("5000"))
+            .effectiveAmount(new BigDecimal("5000"))
+            .disbursedAmount(new BigDecimal("3500"))
+            .build();
+    BudgetAllocation customUnit2 =
+        BudgetAllocation.builder()
+            .id(11L)
+            .code("PB-SCT-02")
+            .budgetYear(2026)
+            .itemType("EXPENDITURE")
+            .nodeCode("TT_KHUYEN_CONG")
+            .nodeName("Trung tâm Khuyến công")
+            .domainCode("KHUYEN_CONG")
+            .domainName("Khuyến công & Tiết kiệm năng lượng")
+            .domainGroupCode("KINH_TE_NGANH")
+            .domainGroupName("Sự nghiệp Kinh tế ngành")
+            .initialAmount(new BigDecimal("8000"))
+            .carryOverInAmount(new BigDecimal("1200"))
+            .effectiveAmount(new BigDecimal("9200"))
+            .disbursedAmount(new BigDecimal("6000"))
+            .build();
+
+    when(budgetAllocationRepo.findByBudgetYearOrderByIdAsc(2026))
+        .thenReturn(List.of(customUnit1, customUnit2));
+
+    Map<String, Object> customMatrix =
+        reportBusiness.generateDynamicDomainMatrix(
+            2026, "2026-10-30", "DOMAIN", "CUMULATIVE_EFFECTIVE", null);
+    @SuppressWarnings("unchecked")
+    List<Map<String, Object>> customCols =
+        (List<Map<String, Object>>) customMatrix.get("columns");
+    assertEquals(2, customCols.size());
+    assertEquals("XUC_TIEN_TM", customCols.get(0).get("code"));
+    assertEquals("KHUYEN_CONG", customCols.get(1).get("code"));
+    assertEquals(new BigDecimal("14200"), customMatrix.get("totalAllocated"));
+    assertEquals(new BigDecimal("9500"), customMatrix.get("totalDisbursed"));
   }
 }

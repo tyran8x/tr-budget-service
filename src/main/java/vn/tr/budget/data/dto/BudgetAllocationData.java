@@ -2,6 +2,7 @@ package vn.tr.budget.data.dto;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 import lombok.NoArgsConstructor;
@@ -18,6 +19,10 @@ import vn.tr.common.web.data.dto.BaseCommonData;
 @NoArgsConstructor
 @EqualsAndHashCode(callSuper = true)
 public class BudgetAllocationData extends BaseCommonData {
+
+  private String appCode;
+
+  private Long parentAllocationId;
 
   private Integer budgetYear;
 
@@ -47,6 +52,20 @@ public class BudgetAllocationData extends BaseCommonData {
 
   private String categoryName;
 
+  private String subItemCode;
+
+  private Long domainId;
+
+  private String domainCode;
+
+  private String domainName;
+
+  private String domainGroupCode;
+
+  private String domainGroupName;
+
+  private String dynamicBreakdownJson;
+
   private String fundingSourceCode;
 
   private String fundingSourceName;
@@ -57,15 +76,23 @@ public class BudgetAllocationData extends BaseCommonData {
 
   private String decisionIssuer;
 
+  private Long decisionDocumentId;
+
   private Long linkedPlanId;
 
   private String linkedPlanCode;
 
   private String linkedPlanName;
 
+  private Long linkedPlanItemId;
+
   private String approvalScope;
 
   private String workflowStatus;
+
+  private Long wfInstanceId;
+
+  private String wfProcessCode;
 
   private Integer currentVersion;
 
@@ -95,5 +122,31 @@ public class BudgetAllocationData extends BaseCommonData {
 
   private BigDecimal availableAmount;
 
+  private BigDecimal expiredCancelledAmount;
+
+  private BigDecimal estimateYearPlus1;
+
+  private BigDecimal estimateYearPlus2;
+
   private BigDecimal disbursementRatePercent;
+
+  private Long submittedByPersonId;
+
+  private String submittedByPersonName;
+
+  private LocalDateTime submittedDate;
+
+  private Long approvedByPersonId;
+
+  private String approvedByPersonName;
+
+  private LocalDateTime approvedDate;
+
+  private String reviewComment;
+
+  private String attachmentFileIdsJson;
+
+  private Long locationId;
+
+  private String currencyCode;
 }

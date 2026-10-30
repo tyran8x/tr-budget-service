@@ -67,7 +67,7 @@ public class BudgetDataInitializer implements ApplicationRunner {
                 .clauseCode("340-341")
                 .itemCode("6000-6500")
                 .autonomyType("AUTONOMOUS")
-                .allowCarryOver(true)
+                .isAllowCarryOver(true)
                 .slaDisbursementWarningDays(7)
                 .status(LifecycleStatus.ACTIVE)
                 .build());
@@ -83,7 +83,7 @@ public class BudgetDataInitializer implements ApplicationRunner {
                 .clauseCode("280-281")
                 .itemCode("7000")
                 .autonomyType("NON_AUTONOMOUS")
-                .allowCarryOver(true)
+                .isAllowCarryOver(true)
                 .slaDisbursementWarningDays(5)
                 .status(LifecycleStatus.ACTIVE)
                 .build());
@@ -99,7 +99,7 @@ public class BudgetDataInitializer implements ApplicationRunner {
                 .clauseCode("250-253")
                 .itemCode("7050")
                 .autonomyType("NON_AUTONOMOUS")
-                .allowCarryOver(true)
+                .isAllowCarryOver(true)
                 .slaDisbursementWarningDays(5)
                 .status(LifecycleStatus.ACTIVE)
                 .build());
@@ -115,7 +115,7 @@ public class BudgetDataInitializer implements ApplicationRunner {
                 .clauseCode("340-345")
                 .itemCode("2600")
                 .autonomyType("DEDICATED_FUND")
-                .allowCarryOver(true)
+                .isAllowCarryOver(true)
                 .slaDisbursementWarningDays(10)
                 .status(LifecycleStatus.ACTIVE)
                 .build());
@@ -136,7 +136,7 @@ public class BudgetDataInitializer implements ApplicationRunner {
                 .categoryCode(catPhi.getCode())
                 .categoryName(catPhi.getName())
                 .unitOfMeasure("VNĐ")
-                .requireVoucher(false)
+                .isRequireVoucher(false)
                 .status(LifecycleStatus.ACTIVE)
                 .build());
 
@@ -158,7 +158,7 @@ public class BudgetDataInitializer implements ApplicationRunner {
                 .categoryName(catPhi.getName())
                 .unitOfMeasure("VNĐ")
                 .normStandardAmount(new BigDecimal("1800000000"))
-                .requireVoucher(true)
+                .isRequireVoucher(true)
                 .status(LifecycleStatus.ACTIVE)
                 .build());
 
@@ -177,7 +177,7 @@ public class BudgetDataInitializer implements ApplicationRunner {
                 .categoryCode(cat281.getCode())
                 .categoryName(cat281.getName())
                 .unitOfMeasure("VNĐ")
-                .requireVoucher(false)
+                .isRequireVoucher(false)
                 .status(LifecycleStatus.ACTIVE)
                 .build());
 
@@ -199,7 +199,7 @@ public class BudgetDataInitializer implements ApplicationRunner {
                 .categoryName(cat281.getName())
                 .unitOfMeasure("VNĐ")
                 .normStandardAmount(new BigDecimal("950000000"))
-                .requireVoucher(true)
+                .isRequireVoucher(true)
                 .status(LifecycleStatus.ACTIVE)
                 .build());
 
@@ -218,7 +218,7 @@ public class BudgetDataInitializer implements ApplicationRunner {
                 .categoryCode(cat280.getCode())
                 .categoryName(cat280.getName())
                 .unitOfMeasure("VNĐ")
-                .requireVoucher(false)
+                .isRequireVoucher(false)
                 .status(LifecycleStatus.ACTIVE)
                 .build());
 
@@ -240,7 +240,7 @@ public class BudgetDataInitializer implements ApplicationRunner {
                 .categoryName(cat253.getName())
                 .unitOfMeasure("VNĐ")
                 .normStandardAmount(new BigDecimal("1200000000"))
-                .requireVoucher(true)
+                .isRequireVoucher(true)
                 .status(LifecycleStatus.ACTIVE)
                 .build());
 
@@ -262,7 +262,7 @@ public class BudgetDataInitializer implements ApplicationRunner {
                 .categoryName(cat280.getName())
                 .unitOfMeasure("VNĐ")
                 .normStandardAmount(new BigDecimal("1800000000"))
-                .requireVoucher(true)
+                .isRequireVoucher(true)
                 .status(LifecycleStatus.ACTIVE)
                 .build());
 
@@ -284,7 +284,7 @@ public class BudgetDataInitializer implements ApplicationRunner {
                 .categoryName(cat280.getName())
                 .unitOfMeasure("VNĐ")
                 .normStandardAmount(new BigDecimal("350000000"))
-                .requireVoucher(true)
+                .isRequireVoucher(true)
                 .status(LifecycleStatus.ACTIVE)
                 .build());
 
@@ -400,6 +400,10 @@ public class BudgetDataInitializer implements ApplicationRunner {
                 .categoryId(cat253.getId())
                 .categoryCode(cat253.getCode())
                 .categoryName(cat253.getName())
+                .domainCode("CDS")
+                .domainName("Chuyển đổi số")
+                .domainGroupCode("GRP_INNOV_DIGITAL")
+                .domainGroupName("Nhóm Đổi mới sáng tạo & Chuyển đổi số")
                 .fundingSourceCode("NSNN-SNKT")
                 .fundingSourceName("Ngân sách Nhà nước - Sự nghiệp KHCN & CĐS")
                 .decisionNo("188/QĐ-UBND")
@@ -447,6 +451,10 @@ public class BudgetDataInitializer implements ApplicationRunner {
                 .categoryId(cat280.getId())
                 .categoryCode(cat280.getCode())
                 .categoryName(cat280.getName())
+                .domainCode("HTTB")
+                .domainName("Hạ tầng thiết bị")
+                .domainGroupCode("GRP_CORE_TECH")
+                .domainGroupName("Nhóm KHCN & Hạ tầng")
                 .fundingSourceCode("NSNN-KT")
                 .fundingSourceName("Ngân sách Nhà nước - Sự nghiệp Kinh tế")
                 .decisionNo("188/QĐ-UBND")
@@ -494,6 +502,10 @@ public class BudgetDataInitializer implements ApplicationRunner {
                 .categoryId(cat281.getId())
                 .categoryCode(cat281.getCode())
                 .categoryName(cat281.getName())
+                .domainCode("KHCN")
+                .domainName("Khoa học công nghệ")
+                .domainGroupCode("GRP_CORE_TECH")
+                .domainGroupName("Nhóm KHCN & Hạ tầng")
                 .fundingSourceCode("NSNN-TC")
                 .fundingSourceName("Ngân sách Nhà nước - Kinh phí Tự chủ")
                 .decisionNo("12/QĐ-SGD")
@@ -541,6 +553,10 @@ public class BudgetDataInitializer implements ApplicationRunner {
                 .categoryId(cat280.getId())
                 .categoryCode(cat280.getCode())
                 .categoryName(cat280.getName())
+                .domainCode("HTTB")
+                .domainName("Hạ tầng thiết bị")
+                .domainGroupCode("GRP_CORE_TECH")
+                .domainGroupName("Nhóm KHCN & Hạ tầng")
                 .fundingSourceCode("NSNN-KT")
                 .fundingSourceName("Ngân sách Nhà nước - Sự nghiệp Kinh tế")
                 .decisionNo("45/QĐ-SGD")

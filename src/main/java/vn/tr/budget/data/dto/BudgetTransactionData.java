@@ -2,6 +2,7 @@ package vn.tr.budget.data.dto;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 import lombok.NoArgsConstructor;
@@ -18,6 +19,8 @@ import vn.tr.common.web.data.dto.BaseCommonData;
 @NoArgsConstructor
 @EqualsAndHashCode(callSuper = true)
 public class BudgetTransactionData extends BaseCommonData {
+
+  private String appCode;
 
   private Long allocationId;
 
@@ -37,7 +40,21 @@ public class BudgetTransactionData extends BaseCommonData {
 
   private String estimateItemName;
 
+  private Long categoryId;
+
   private String categoryCode;
+
+  private String categoryName;
+
+  private String domainCode;
+
+  private String domainName;
+
+  private String domainGroupCode;
+
+  private String domainGroupName;
+
+  private String dynamicBreakdownJson;
 
   private String fundingSourceCode;
 
@@ -51,6 +68,12 @@ public class BudgetTransactionData extends BaseCommonData {
 
   private BigDecimal amount;
 
+  private BigDecimal disbursedAmount;
+
+  private BigDecimal balanceBeforeAmount;
+
+  private BigDecimal balanceAfterAmount;
+
   private Long counterpartAllocationId;
 
   private String counterpartAllocationCode;
@@ -59,11 +82,23 @@ public class BudgetTransactionData extends BaseCommonData {
 
   private Long counterpartNodeId;
 
+  private String counterpartNodeCode;
+
   private String counterpartNodeName;
+
+  private Long counterpartEstimateItemId;
+
+  private Long planId;
+
+  private String planCode;
+
+  private String planName;
 
   private String decisionNo;
 
   private LocalDate decisionDate;
+
+  private Long decisionDocumentId;
 
   private LocalDate txDate;
 
@@ -81,5 +116,17 @@ public class BudgetTransactionData extends BaseCommonData {
 
   private String approvedByPersonName;
 
+  private LocalDateTime approvedDate;
+
+  private String rejectReason;
+
   private String approvalStatus;
+
+  private Long wfInstanceId;
+
+  private String wfProcessCode;
+
+  private String attachmentFileIdsJson;
+
+  private String currencyCode;
 }

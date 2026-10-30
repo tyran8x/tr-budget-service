@@ -345,7 +345,9 @@ public class BudgetDashboardBusiness {
       card.put("estimateAccuracyScore", accuracyScore);
       card.put("voucherComplianceScore", voucherComplianceScore);
       card.put("totalDisciplineScore", totalScore);
+      card.put("disciplineScore", totalScore);
       card.put("gradeRank", rank);
+      card.put("rankGrade", rank);
       card.put("projectedAvailableAtYearEnd", eff.subtract(disb));
       scorecards.add(card);
     }
@@ -377,6 +379,10 @@ public class BudgetDashboardBusiness {
     }
 
     List<Map<String, Object>> recommendations = new ArrayList<>();
+    String action1 =
+        "Đề nghị Phòng KHTC đôn đốc "
+            + slowestUnitName
+            + " hoàn thiện hồ sơ nghiệm thu giai đoạn 1 để chuyển từ Cam kết chi sang Thực chi Kho bạc trước ngày 25 hàng tháng.";
     recommendations.add(
         Map.of(
             "id", "AI-BUD-01",
@@ -392,11 +398,11 @@ public class BudgetDashboardBusiness {
                     + " đang ở mức "
                     + slowestRate
                     + "%. Một số khoản mục đã có Cam kết chi hợp đồng nhưng chưa lập Giấy rút dự toán Kho bạc (C2-02a/NS).",
-            "suggestedAction",
-                "Đề nghị Phòng KHTC đôn đốc "
-                    + slowestUnitName
-                    + " hoàn thiện hồ sơ nghiệm thu giai đoạn 1 để chuyển từ Cam kết chi sang Thực chi Kho bạc trước ngày 25 hàng tháng."));
+            "suggestedAction", action1,
+            "suggestion", action1));
 
+    String action2 =
+        "Tạo giao dịch Điều chuyển dự toán nội bộ (INTERNAL_TRANSFER) trong phạm vi kinh phí giao tự chủ (Khoản 281) từ đơn vị thừa vốn sang nhiệm vụ phát sinh cấp bách.";
     recommendations.add(
         Map.of(
             "id", "AI-BUD-02",
@@ -411,9 +417,13 @@ public class BudgetDashboardBusiness {
                     + " VNĐ. Dự báo cuối năm toàn ngành có thể dư "
                     + burnForecast.get("totalProjectedUnspentAtYearEnd")
                     + " VNĐ nếu giữ tốc độ tiêu dùng hiện tại.",
-            "suggestedAction",
-                "Tạo giao dịch Điều chuyển dự toán nội bộ (INTERNAL_TRANSFER) trong phạm vi kinh phí giao tự chủ (Khoản 281) từ đơn vị thừa vốn sang nhiệm vụ phát sinh cấp bách."));
+            "suggestedAction", action2,
+            "suggestion", action2));
 
+    String action3 =
+        "Sử dụng chức năng Chuyển nguồn liên năm (CARRY_OVER_OUT) kèm Quyết định phê duyệt để tự động khởi tạo dòng dự toán năm "
+            + (year + 1)
+            + ".";
     recommendations.add(
         Map.of(
             "id", "AI-BUD-03",
@@ -422,10 +432,8 @@ public class BudgetDashboardBusiness {
             "title", "Rà soát danh mục nguồn kinh phí được phép chuyển nguồn sang năm " + (year + 1),
             "analysis",
                 "Các nguồn kinh phí không tự chủ (Khoản 341 - Sự nghiệp kinh tế) chỉ được chuyển nguồn khi đã có hợp đồng ký kết trước ngày 31/12 và đối chiếu Kho bạc trước 31/01.",
-            "suggestedAction",
-                "Sử dụng chức năng Chuyển nguồn liên năm (CARRY_OVER_OUT) kèm Quyết định phê duyệt để tự động khởi tạo dòng dự toán năm "
-                    + (year + 1)
-                    + "."));
+            "suggestedAction", action3,
+            "suggestion", action3));
 
     Map<String, Object> res = new LinkedHashMap<>();
     res.put("budgetYear", year);
@@ -482,6 +490,10 @@ public class BudgetDashboardBusiness {
           projectedRate.compareTo(new BigDecimal("75")) < 0
               ? "HIGH_SURPLUS_RISK"
               : (projectedRate.compareTo(new BigDecimal("92")) < 0 ? "MODERATE" : "OPTIMAL_HIGH_BURN");
+      String riskStatus =
+          "HIGH_SURPLUS_RISK".equals(riskLevel)
+              ? "SURPLUS_RISK"
+              : ("MODERATE".equals(riskLevel) ? "MODERATE" : "ON_TRACK");
 
       totalProjectedYearEndDisbursed = totalProjectedYearEndDisbursed.add(projectedYearEndDisbursed);
       totalProjectedUnspent = totalProjectedUnspent.add(projectedUnspent);
@@ -492,11 +504,14 @@ public class BudgetDashboardBusiness {
       f.put("nodeName", unit.get("nodeName"));
       f.put("effectiveAmount", eff);
       f.put("currentDisbursedAmount", disb);
+      f.put("disbursedAmount", disb);
       f.put("monthlyBurnRate", monthlyBurnRate);
       f.put("projectedYearEndDisbursed", projectedYearEndDisbursed);
       f.put("projectedYearEndUnspent", projectedUnspent);
       f.put("projectedYearEndRatePercent", projectedRate);
+      f.put("projectedYearEndRate", projectedRate);
       f.put("riskLevel", riskLevel);
+      f.put("riskStatus", riskStatus);
       unitForecasts.add(f);
 
       if (projectedUnspent.compareTo(maxSurplus) > 0) {
@@ -520,9 +535,16 @@ public class BudgetDashboardBusiness {
       suggestion.put("txType", "INTERNAL_TRANSFER");
       suggestion.put("sourceUnitCode", topSurplusUnit.get("nodeCode"));
       suggestion.put("sourceUnitName", topSurplusUnit.get("nodeName"));
+      suggestion.put("fromUnitCode", topSurplusUnit.get("nodeCode"));
+      suggestion.put("fromUnitName", topSurplusUnit.get("nodeName"));
       suggestion.put("targetUnitCode", topDeficitUnit.get("nodeCode"));
       suggestion.put("targetUnitName", topDeficitUnit.get("nodeName"));
+      suggestion.put("toUnitCode", topDeficitUnit.get("nodeCode"));
+      suggestion.put("toUnitName", topDeficitUnit.get("nodeName"));
       suggestion.put("suggestedTransferAmount", suggestedTransfer);
+      suggestion.put(
+          "legalBasis",
+          "Điều 53 Luật NSNN 2015 & Nghị định 60/2021/NĐ-CP (Tự chủ Khoản 281)");
       suggestion.put(
           "reason",
           "Điều chuyển tối ưu nguồn dự kiến dư cuối năm từ "
@@ -540,6 +562,7 @@ public class BudgetDashboardBusiness {
     res.put("totalProjectedUnspentAtYearEnd", totalProjectedUnspent);
     res.put("unitForecasts", unitForecasts);
     res.put("reallocationSuggestions", reallocationSuggestions);
+    res.put("reallocationProposals", reallocationSuggestions);
     return res;
   }
 
@@ -568,11 +591,17 @@ public class BudgetDashboardBusiness {
       BigDecimal mult = growthMultipliers[i];
       BigDecimal expCeiling = baseEffective.multiply(mult).setScale(0, RoundingMode.HALF_UP);
       BigDecimal revProjection = baseRevenue.multiply(mult).setScale(0, RoundingMode.HALF_UP);
+      BigDecimal baselineRecurrent =
+          expCeiling.multiply(new BigDecimal("0.72")).setScale(0, RoundingMode.HALF_UP);
+      BigDecimal devInvestment = expCeiling.subtract(baselineRecurrent);
       Map<String, Object> row = new LinkedHashMap<>();
       row.put("fiscalYear", y);
       row.put("stageLabel", stageLabels[i]);
       row.put("projectedRevenue", revProjection);
       row.put("expenditureCeiling", expCeiling);
+      row.put("baselineRecurrentCeiling", baselineRecurrent);
+      row.put("developmentInvestmentCeiling", devInvestment);
+      row.put("totalMtefCeiling", expCeiling);
       row.put(
           "autonomySharePercent",
           i == 0 ? new BigDecimal("68.5") : (i == 1 ? new BigDecimal("72.0") : new BigDecimal("75.0")));
@@ -582,8 +611,112 @@ public class BudgetDashboardBusiness {
     Map<String, Object> res = new LinkedHashMap<>();
     res.put("baseYear", yearN);
     res.put("periodRange", yearN + "-" + (yearN + 2));
+    res.put("frameworkPeriod", yearN + " - " + (yearN + 2));
     res.put("legalBasis", "Luật Ngân sách Nhà nước 2015 & Nghị định 45/2017/NĐ-CP");
     res.put("rollingYears", rollingYears);
+    res.put("yearlyProjections", rollingYears);
+    return res;
+  }
+
+  /**
+   * Mô phỏng kịch bản ngân sách What-If (Tiết kiệm chi thường xuyên, biến động thu & tái phân bổ ưu tiên - UPG-08).
+   */
+  public Map<String, Object> simulateWhatIfScenario(Map<String, Object> body) {
+    int year =
+        body != null && body.get("budgetYear") != null
+            ? Integer.parseInt(String.valueOf(body.get("budgetYear")))
+            : LocalDate.now().getYear();
+    BigDecimal savingRatePercent =
+        body != null && body.get("recurrentSavingRatePercent") != null
+            ? new BigDecimal(String.valueOf(body.get("recurrentSavingRatePercent")))
+            : new BigDecimal("10.0");
+    BigDecimal revenueChangePercent =
+        body != null && body.get("revenueChangeRatePercent") != null
+            ? new BigDecimal(String.valueOf(body.get("revenueChangeRatePercent")))
+            : BigDecimal.ZERO;
+    BigDecimal reallocateToPriorityPercent =
+        body != null && body.get("reallocateSavedToDevelopmentPercent") != null
+            ? new BigDecimal(String.valueOf(body.get("reallocateSavedToDevelopmentPercent")))
+            : new BigDecimal("70.0");
+
+    Map<String, Object> overview = getOverview(year, null, null);
+    List<Map<String, Object>> unitMatrix = getUnitMatrix(year);
+
+    BigDecimal baseEffective = safe((BigDecimal) overview.get("totalEffectiveBudget"));
+    BigDecimal baseRevenue = safe((BigDecimal) overview.get("totalRevenueEstimate"));
+    BigDecimal baseDisbursed = safe((BigDecimal) overview.get("totalDisbursedAmount"));
+
+    BigDecimal savedRecurrentAmount =
+        baseEffective
+            .multiply(savingRatePercent)
+            .divide(new BigDecimal("100"), 0, RoundingMode.HALF_UP);
+    BigDecimal reallocatedToPriorityAmount =
+        savedRecurrentAmount
+            .multiply(reallocateToPriorityPercent)
+            .divide(new BigDecimal("100"), 0, RoundingMode.HALF_UP);
+    BigDecimal salaryReformReserveAmount = savedRecurrentAmount.subtract(reallocatedToPriorityAmount);
+
+    BigDecimal simulatedRevenue =
+        baseRevenue
+            .multiply(new BigDecimal("100").add(revenueChangePercent))
+            .divide(new BigDecimal("100"), 0, RoundingMode.HALF_UP);
+    BigDecimal simulatedEffectiveBudget =
+        baseEffective.subtract(savedRecurrentAmount).add(reallocatedToPriorityAmount);
+    BigDecimal simulatedDisbursementRate =
+        simulatedEffectiveBudget.compareTo(BigDecimal.ZERO) > 0
+            ? baseDisbursed
+                .add(reallocatedToPriorityAmount.multiply(new BigDecimal("0.85")))
+                .multiply(new BigDecimal("100"))
+                .divide(simulatedEffectiveBudget, 2, RoundingMode.HALF_UP)
+                .min(new BigDecimal("100.00"))
+            : BigDecimal.ZERO;
+
+    List<Map<String, Object>> unitImpacts = new ArrayList<>();
+    int unitCount = Math.max(unitMatrix.size(), 1);
+    BigDecimal priorityBonusPerUnit =
+        reallocatedToPriorityAmount.divide(BigDecimal.valueOf(unitCount), 0, RoundingMode.HALF_UP);
+
+    for (Map<String, Object> unit : unitMatrix) {
+      BigDecimal eff = safe((BigDecimal) unit.get("effectiveAmount"));
+      BigDecimal mandatorySaving =
+          eff.multiply(savingRatePercent).divide(new BigDecimal("100"), 0, RoundingMode.HALF_UP);
+      BigDecimal netSimulated = eff.subtract(mandatorySaving).add(priorityBonusPerUnit);
+      Map<String, Object> impact = new LinkedHashMap<>();
+      impact.put("nodeId", unit.get("nodeId"));
+      impact.put("nodeCode", unit.get("nodeCode"));
+      impact.put("nodeName", unit.get("nodeName"));
+      impact.put("currentEffectiveAmount", eff);
+      impact.put("mandatorySavingAmount", mandatorySaving);
+      impact.put("priorityBonusAmount", priorityBonusPerUnit);
+      impact.put("netSimulatedBudget", netSimulated);
+      unitImpacts.add(impact);
+    }
+
+    Map<String, Object> res = new LinkedHashMap<>();
+    res.put("budgetYear", year);
+    res.put("recurrentSavingRatePercent", savingRatePercent);
+    res.put("revenueChangeRatePercent", revenueChangePercent);
+    res.put("reallocateSavedToDevelopmentPercent", reallocateToPriorityPercent);
+    res.put("baselineEffectiveBudget", baseEffective);
+    res.put("baselineRevenueEstimate", baseRevenue);
+    res.put("savedRecurrentAmount", savedRecurrentAmount);
+    res.put("reallocatedToPriorityAmount", reallocatedToPriorityAmount);
+    res.put("salaryReformReserveAmount", salaryReformReserveAmount);
+    res.put("simulatedRevenueEstimate", simulatedRevenue);
+    res.put("simulatedEffectiveBudget", simulatedEffectiveBudget);
+    res.put("simulatedYearEndDisbursementRate", simulatedDisbursementRate);
+    res.put("unitImpacts", unitImpacts);
+    res.put(
+        "policyRecommendation",
+        "Khi cắt giảm "
+            + savingRatePercent
+            + "% chi thường xuyên, toàn ngành tiết kiệm được "
+            + savedRecurrentAmount.toPlainString()
+            + " VNĐ, trong đó tái phân bổ "
+            + reallocatedToPriorityAmount.toPlainString()
+            + " VNĐ cho nhiệm vụ trọng điểm / Chuyển đổi số và trích lập "
+            + salaryReformReserveAmount.toPlainString()
+            + " VNĐ vào Quỹ cải cách tiền lương & dự phòng ngân sách.");
     return res;
   }
 

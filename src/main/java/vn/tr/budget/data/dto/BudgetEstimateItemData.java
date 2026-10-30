@@ -1,5 +1,6 @@
 package vn.tr.budget.data.dto;
 
+import com.fasterxml.jackson.annotation.JsonAlias;
 import java.math.BigDecimal;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
@@ -17,6 +18,8 @@ import vn.tr.common.web.data.dto.BaseCommonData;
 @NoArgsConstructor
 @EqualsAndHashCode(callSuper = true)
 public class BudgetEstimateItemData extends BaseCommonData {
+
+  private String appCode;
 
   private Long parentId;
 
@@ -40,9 +43,24 @@ public class BudgetEstimateItemData extends BaseCommonData {
 
   private String categoryName;
 
+  private String subItemCode;
+
+  private String fundingSourceCode;
+
+  private String autonomyType;
+
   private String unitOfMeasure;
 
   private BigDecimal normStandardAmount;
 
-  private Boolean requireVoucher;
+  @JsonAlias("requireVoucher")
+  private Boolean isRequireVoucher;
+
+  public Boolean getRequireVoucher() {
+    return this.isRequireVoucher;
+  }
+
+  public void setRequireVoucher(Boolean requireVoucher) {
+    this.isRequireVoucher = requireVoucher;
+  }
 }

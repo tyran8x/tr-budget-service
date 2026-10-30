@@ -28,10 +28,15 @@ import vn.tr.common.web.utils.BusinessLogicHelper;
 import vn.tr.common.web.utils.CoreUtils;
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import org.springframework.beans.factory.annotation.Autowired;
 import vn.tr.budget.business.helper.BudgetIntegrationOrchestrator;
 import vn.tr.budget.business.helper.BudgetWorkflowEngineHelper;
+import vn.tr.budget.dao.model.BudgetCategory;
+import vn.tr.budget.dao.model.BudgetEstimateItem;
 import vn.tr.budget.dao.service.BudgetAllocationRepo;
+import vn.tr.budget.dao.service.BudgetCategoryRepo;
+import vn.tr.budget.dao.service.BudgetEstimateItemRepo;
 import vn.tr.common.core.exception.base.BaseException;
 import vn.tr.common.feign.budget.data.BudgetPlanSyncRequestData;
 import vn.tr.common.feign.budget.data.BudgetPlanSyncResultData;
@@ -55,6 +60,12 @@ public class BudgetAllocationBusiness {
   private final BusinessLogicHelper businessLogicHelper;
   private final BudgetWorkflowEngineHelper workflowEngineHelper;
   private final BudgetAllocationRepo budgetAllocationRepo;
+
+  @Autowired(required = false)
+  private BudgetCategoryRepo budgetCategoryRepo;
+
+  @Autowired(required = false)
+  private BudgetEstimateItemRepo budgetEstimateItemRepo;
 
   @Autowired(required = false)
   private BudgetIntegrationOrchestrator integrationOrchestrator;
@@ -89,6 +100,19 @@ public class BudgetAllocationBusiness {
     if (data.getCurrentVersion() == null) {
       data.setCurrentVersion(1);
     }
+    if (StrUtil.isBlank(data.getCurrencyCode())) {
+      data.setCurrencyCode("VND");
+    }
+    if (data.getExpiredCancelledAmount() == null) {
+      data.setExpiredCancelledAmount(BigDecimal.ZERO);
+    }
+    if (data.getEstimateYearPlus1() == null) {
+      data.setEstimateYearPlus1(BigDecimal.ZERO);
+    }
+    if (data.getEstimateYearPlus2() == null) {
+      data.setEstimateYearPlus2(BigDecimal.ZERO);
+    }
+    syncAllocationSnapshots(data);
     if (StrUtil.isBlank(data.getApprovalScope())) {
       Map<String, Object> auto =
           workflowEngineHelper.checkUnitAutonomy(
@@ -103,7 +127,7 @@ public class BudgetAllocationBusiness {
             budgetAllocationMapper::updateEntityFromData,
             budgetAllocationService.getRepository());
     entity = workflowEngineHelper.recalculateAllocationMetrics(entity.getId());
-    return budgetAllocationMapper.toData(entity);
+    return enrichData(budgetAllocationMapper.toData(entity));
   }
 
   /** Cập nhật BudgetAllocation. */
@@ -114,9 +138,114 @@ public class BudgetAllocationBusiness {
             .orElseThrow(() -> new EntityNotFoundException(BudgetAllocation.class, id));
     data.setId(id);
     validateData(data);
+    syncAllocationSnapshots(data);
     budgetAllocationMapper.updateEntityFromData(data, existing);
     BudgetAllocation saved = budgetAllocationService.save(existing);
-    return budgetAllocationMapper.toData(saved);
+    return enrichData(budgetAllocationMapper.toData(saved));
+  }
+
+  private void syncAllocationSnapshots(BudgetAllocationData data) {
+    if (data == null) {
+      return;
+    }
+    if (integrationOrchestrator != null) {
+      if (data.getNodeId() != null) {
+        data.setNodeCode(
+            integrationOrchestrator.resolveNodeCodeWithFallback(
+                data.getNodeId(), data.getNodeCode()));
+        data.setNodeName(
+            integrationOrchestrator.resolveNodeNameWithFallback(
+                data.getNodeId(), data.getNodeName()));
+      } else if (StrUtil.isNotBlank(data.getNodeCode())) {
+        Long resolvedId = integrationOrchestrator.resolveNodeIdByCode(data.getNodeCode());
+        if (resolvedId != null) {
+          data.setNodeId(resolvedId);
+        }
+        data.setNodeName(
+            integrationOrchestrator.resolveNodeNameByCodeWithFallback(
+                data.getNodeCode(), data.getNodeName()));
+      }
+      if (data.getSubmittedByPersonId() != null) {
+        data.setSubmittedByPersonName(
+            integrationOrchestrator.resolvePersonNameWithFallback(
+                data.getSubmittedByPersonId(), data.getSubmittedByPersonName()));
+      }
+      if (data.getApprovedByPersonId() != null) {
+        data.setApprovedByPersonName(
+            integrationOrchestrator.resolvePersonNameWithFallback(
+                data.getApprovedByPersonId(), data.getApprovedByPersonName()));
+      }
+    }
+    if (budgetCategoryRepo != null) {
+      if (data.getCategoryId() != null) {
+        budgetCategoryRepo
+            .findById(data.getCategoryId())
+            .ifPresent(
+                cat -> {
+                  data.setCategoryCode(cat.getCode());
+                  data.setCategoryName(cat.getName());
+                  if (StrUtil.isBlank(data.getSubItemCode())) {
+                    data.setSubItemCode(cat.getSubItemCode());
+                  }
+                });
+      } else if (StrUtil.isNotBlank(data.getCategoryCode())) {
+        List<BudgetCategory> cats =
+            budgetCategoryRepo.findAllByCodeIgnoreCaseIncludingDeletedSorted(
+                data.getCategoryCode().trim());
+        if (!cats.isEmpty()) {
+          BudgetCategory cat = cats.getFirst();
+          data.setCategoryId(cat.getId());
+          if (StrUtil.isBlank(data.getCategoryName())) {
+            data.setCategoryName(cat.getName());
+          }
+          if (StrUtil.isBlank(data.getSubItemCode())) {
+            data.setSubItemCode(cat.getSubItemCode());
+          }
+        }
+      }
+    }
+    if (budgetEstimateItemRepo != null) {
+      if (data.getEstimateItemId() != null) {
+        budgetEstimateItemRepo
+            .findById(data.getEstimateItemId())
+            .ifPresent(
+                item -> {
+                  data.setEstimateItemCode(item.getCode());
+                  data.setEstimateItemName(item.getName());
+                  if (StrUtil.isBlank(data.getSubItemCode())) {
+                    data.setSubItemCode(item.getSubItemCode());
+                  }
+                });
+      } else if (StrUtil.isNotBlank(data.getEstimateItemCode())) {
+        List<BudgetEstimateItem> items =
+            budgetEstimateItemRepo.findAllByCodeIgnoreCaseIncludingDeletedSorted(
+                data.getEstimateItemCode().trim());
+        if (!items.isEmpty()) {
+          BudgetEstimateItem item = items.getFirst();
+          data.setEstimateItemId(item.getId());
+          if (StrUtil.isBlank(data.getEstimateItemName())) {
+            data.setEstimateItemName(item.getName());
+          }
+        }
+      }
+    }
+  }
+
+  private BudgetAllocationData enrichData(BudgetAllocationData dto) {
+    if (dto == null || integrationOrchestrator == null) {
+      return dto;
+    }
+    dto.setNodeCode(
+        integrationOrchestrator.resolveNodeCodeWithFallback(dto.getNodeId(), dto.getNodeCode()));
+    dto.setNodeName(
+        integrationOrchestrator.resolveNodeNameWithFallback(dto.getNodeId(), dto.getNodeName()));
+    dto.setSubmittedByPersonName(
+        integrationOrchestrator.resolvePersonNameWithFallback(
+            dto.getSubmittedByPersonId(), dto.getSubmittedByPersonName()));
+    dto.setApprovedByPersonName(
+        integrationOrchestrator.resolvePersonNameWithFallback(
+            dto.getApprovedByPersonId(), dto.getApprovedByPersonName()));
+    return dto;
   }
 
   /** Xoá mềm BudgetAllocation. */
@@ -145,6 +274,7 @@ public class BudgetAllocationBusiness {
     return budgetAllocationService
         .findById(id)
         .map(budgetAllocationMapper::toData)
+        .map(this::enrichData)
         .orElseThrow(() -> new EntityNotFoundException(BudgetAllocation.class, id));
   }
 
@@ -153,7 +283,7 @@ public class BudgetAllocationBusiness {
   public PagedData<BudgetAllocationData> findAll(BudgetAllocationSearchCriteria criteria) {
     Pageable pageable = CoreUtils.getPageRequest(criteria);
     Page<BudgetAllocation> page = budgetAllocationService.findAll(criteria, pageable);
-    return PagedData.from(page, budgetAllocationMapper::toData);
+    return PagedData.from(page, e -> enrichData(budgetAllocationMapper.toData(e)));
   }
 
   /** Sao chép BudgetAllocation. */
@@ -214,12 +344,32 @@ public class BudgetAllocationBusiness {
             .findById(id)
             .orElseThrow(() -> new EntityNotFoundException(BudgetAllocation.class, id));
     alloc.setWorkflowStatus("SUBMITTED");
+    alloc.setSubmittedDate(LocalDateTime.now());
+    if (integrationOrchestrator != null) {
+      Long actorId =
+          integrationOrchestrator.resolveCurrentPersonId(body, "submittedByPersonId", "actorId");
+      if (actorId != null) {
+        alloc.setSubmittedByPersonId(actorId);
+      }
+      alloc.setSubmittedByPersonName(extractActor(body));
+    }
+    String comment = extractComment(body);
+    if (StrUtil.isNotBlank(comment)) {
+      alloc.setReviewComment(comment);
+    }
     BudgetAllocation saved = budgetAllocationService.save(alloc);
     workflowEngineHelper.recalculateAllocationMetrics(saved.getId());
     if (integrationOrchestrator != null) {
-      integrationOrchestrator.startAllocationWorkflow(saved);
+      Long wfId = integrationOrchestrator.startAllocationWorkflow(saved);
+      if (wfId != null) {
+        saved.setWfInstanceId(wfId);
+        if (StrUtil.isBlank(saved.getWfProcessCode())) {
+          saved.setWfProcessCode("BUDGET_ALLOCATION_APPROVAL");
+        }
+        saved = budgetAllocationService.save(saved);
+      }
       integrationOrchestrator.notifyAllocationLifecycleEvent(
-          saved, "SUBMITTED", extractActor(body), extractComment(body));
+          saved, "SUBMITTED", extractActor(body), comment);
     }
     return findById(saved.getId());
   }
@@ -239,11 +389,24 @@ public class BudgetAllocationBusiness {
     }
     alloc.setApprovalScope("UNIT_SELF");
     alloc.setWorkflowStatus("APPROVED");
+    alloc.setApprovedDate(LocalDateTime.now());
+    if (integrationOrchestrator != null) {
+      Long actorId =
+          integrationOrchestrator.resolveCurrentPersonId(body, "approvedByPersonId", "actorId");
+      if (actorId != null) {
+        alloc.setApprovedByPersonId(actorId);
+      }
+      alloc.setApprovedByPersonName(extractActor(body));
+    }
+    String comment = extractComment(body);
+    if (StrUtil.isNotBlank(comment)) {
+      alloc.setReviewComment(comment);
+    }
     BudgetAllocation saved = budgetAllocationService.save(alloc);
     saved = workflowEngineHelper.recalculateAllocationMetrics(saved.getId());
     if (integrationOrchestrator != null) {
       integrationOrchestrator.notifyAllocationLifecycleEvent(
-          saved, "SELF_APPROVED", extractActor(body), extractComment(body));
+          saved, "SELF_APPROVED", extractActor(body), comment);
       integrationOrchestrator.syncAllocationToLinkedPlan(
           saved,
           "ALLOCATION_APPROVED",
@@ -267,13 +430,26 @@ public class BudgetAllocationBusiness {
       alloc.setDecisionDate(LocalDate.now());
     }
     alloc.setWorkflowStatus("APPROVED");
+    alloc.setApprovedDate(LocalDateTime.now());
+    if (integrationOrchestrator != null) {
+      Long actorId =
+          integrationOrchestrator.resolveCurrentPersonId(body, "approvedByPersonId", "actorId");
+      if (actorId != null) {
+        alloc.setApprovedByPersonId(actorId);
+      }
+      alloc.setApprovedByPersonName(extractActor(body));
+    }
+    String comment = extractComment(body);
+    if (StrUtil.isNotBlank(comment)) {
+      alloc.setReviewComment(comment);
+    }
     BudgetAllocation saved = budgetAllocationService.save(alloc);
     saved = workflowEngineHelper.recalculateAllocationMetrics(saved.getId());
     if (integrationOrchestrator != null) {
       integrationOrchestrator.executeWorkflowAction(
-          "BudgetAllocation", saved.getId(), "APPROVE", extractComment(body));
+          "BudgetAllocation", saved.getId(), "APPROVE", comment);
       integrationOrchestrator.notifyAllocationLifecycleEvent(
-          saved, "APPROVED", extractActor(body), extractComment(body));
+          saved, "APPROVED", extractActor(body), comment);
       integrationOrchestrator.syncAllocationToLinkedPlan(
           saved,
           "ALLOCATION_APPROVED",
@@ -291,14 +467,18 @@ public class BudgetAllocationBusiness {
             .findById(id)
             .orElseThrow(() -> new EntityNotFoundException(BudgetAllocation.class, id));
     alloc.setWorkflowStatus("REJECTED");
+    String comment = extractComment(body);
+    if (StrUtil.isNotBlank(comment)) {
+      alloc.setReviewComment(comment);
+    }
     BudgetAllocation saved = budgetAllocationService.save(alloc);
     if (integrationOrchestrator != null) {
       integrationOrchestrator.executeWorkflowAction(
-          "BudgetAllocation", saved.getId(), "REJECT", extractComment(body));
+          "BudgetAllocation", saved.getId(), "REJECT", comment);
       integrationOrchestrator.notifyAllocationLifecycleEvent(
-          saved, "REJECTED", extractActor(body), extractComment(body));
+          saved, "REJECTED", extractActor(body), comment);
     }
-    return budgetAllocationMapper.toData(saved);
+    return enrichData(budgetAllocationMapper.toData(saved));
   }
 
   /** Rút tờ trình dự toán về Dự thảo (DRAFT). */
@@ -313,7 +493,7 @@ public class BudgetAllocationBusiness {
       integrationOrchestrator.executeWorkflowAction(
           "BudgetAllocation", saved.getId(), "WITHDRAW", extractComment(body));
     }
-    return budgetAllocationMapper.toData(saved);
+    return enrichData(budgetAllocationMapper.toData(saved));
   }
 
   /** Tính toán lại số dư Sổ cái Kinh phí và tỷ lệ giải ngân. */
@@ -322,7 +502,7 @@ public class BudgetAllocationBusiness {
     if (updated == null) {
       throw new EntityNotFoundException(BudgetAllocation.class, id);
     }
-    return budgetAllocationMapper.toData(updated);
+    return enrichData(budgetAllocationMapper.toData(updated));
   }
 
   /** Lấy tiến trình phê duyệt Workflow của Phân bổ Dự toán. */

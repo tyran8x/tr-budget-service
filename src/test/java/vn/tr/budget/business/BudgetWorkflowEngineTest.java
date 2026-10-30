@@ -53,7 +53,7 @@ class BudgetWorkflowEngineTest {
             .selfApproveLimitAmount(new BigDecimal("200000000"))
             .build();
     BudgetCategory cat =
-        BudgetCategory.builder().code("LK-340-341").allowCarryOver(true).build();
+        BudgetCategory.builder().code("LK-340-341").isAllowCarryOver(true).build();
 
     when(budgetUnitConfigRepo.findFirstByNodeIdOrderByIdDesc(101L)).thenReturn(Optional.of(cfg));
     when(budgetCategoryRepo.findAllByCodeIgnoreCaseIncludingDeletedSorted("LK-340-341"))
@@ -112,8 +112,14 @@ class BudgetWorkflowEngineTest {
                 .build(),
             BudgetDisbursement.builder()
                 .disbursementType("DISBURSEMENT")
-                .amount(new BigDecimal("700000000"))
+                .amount(new BigDecimal("400000000"))
                 .approvalStatus("APPROVED_DISBURSED")
+                .build(),
+            BudgetDisbursement.builder()
+                .disbursementType("SETTLEMENT")
+                .amount(new BigDecimal("300000000"))
+                .settledAmount(new BigDecimal("300000000"))
+                .approvalStatus("SETTLED")
                 .build());
 
     when(budgetAllocationRepo.findById(1L)).thenReturn(Optional.of(alloc));
@@ -127,7 +133,54 @@ class BudgetWorkflowEngineTest {
     assertThat(updated.getEffectiveAmount()).isEqualByComparingTo("1400000000");
     assertThat(updated.getCommittedAmount()).isEqualByComparingTo("150000000");
     assertThat(updated.getDisbursedAmount()).isEqualByComparingTo("700000000");
+    assertThat(updated.getSettledAmount()).isEqualByComparingTo("300000000");
     assertThat(updated.getAvailableAmount()).isEqualByComparingTo("550000000");
     assertThat(updated.getDisbursementRatePercent()).isEqualByComparingTo("50.00");
+  }
+
+  @Test
+  @DisplayName("Ghi sổ bút toán kép executeDoubleEntryLedger: Cập nhật balanceBeforeAmount và balanceAfterAmount")
+  void shouldRecordBalanceBeforeAndAfterOnDoubleEntryLedger() {
+    BudgetAllocation sourceAlloc =
+        BudgetAllocation.builder()
+            .id(10L)
+            .code("PB-SRC-01")
+            .initialAmount(new BigDecimal("1000000000"))
+            .effectiveAmount(new BigDecimal("1000000000"))
+            .build();
+    BudgetAllocation targetAlloc =
+        BudgetAllocation.builder()
+            .id(20L)
+            .code("PB-TGT-02")
+            .initialAmount(new BigDecimal("500000000"))
+            .effectiveAmount(new BigDecimal("500000000"))
+            .build();
+
+    BudgetTransaction tx =
+        BudgetTransaction.builder()
+            .id(100L)
+            .code("BTX-TR-01")
+            .name("Điều chuyển nội bộ")
+            .allocationId(10L)
+            .counterpartAllocationId(20L)
+            .txType("INTERNAL_TRANSFER")
+            .amount(new BigDecimal("-200000000"))
+            .approvalStatus("APPROVED")
+            .build();
+
+    when(budgetAllocationRepo.findById(10L)).thenReturn(Optional.of(sourceAlloc));
+    when(budgetAllocationRepo.findById(20L)).thenReturn(Optional.of(targetAlloc));
+    when(budgetTransactionRepo.findByAllocationIdOrderByIdAsc(10L)).thenReturn(List.of(tx));
+    when(budgetTransactionRepo.findByAllocationIdOrderByIdAsc(20L)).thenReturn(List.of());
+    when(budgetDisbursementRepo.findByAllocationIdOrderByIdAsc(any())).thenReturn(List.of());
+    when(budgetAllocationRepo.save(any(BudgetAllocation.class)))
+        .thenAnswer(inv -> inv.getArgument(0));
+    when(budgetTransactionRepo.save(any(BudgetTransaction.class)))
+        .thenAnswer(inv -> inv.getArgument(0));
+
+    engineHelper.executeDoubleEntryLedger(tx);
+
+    assertThat(tx.getBalanceBeforeAmount()).isEqualByComparingTo("1000000000");
+    assertThat(tx.getBalanceAfterAmount()).isEqualByComparingTo("800000000");
   }
 }
