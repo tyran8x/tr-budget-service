@@ -43,4 +43,10 @@ public interface BudgetCategoryRepo
   Optional<BudgetCategory> findByIdIncludingDeleted(@Param("id") Long id);
 
   List<BudgetCategory> findByParentIdOrderByIdAsc(Long parentId);
+
+  List<BudgetCategory> findByBudgetYearAndCategoryGroupInOrderBySortOrderAscIdAsc(
+      Integer budgetYear, Collection<String> categoryGroups);
+
+  List<BudgetCategory> findByCategoryGroupInOrderByBudgetYearAscSortOrderAscIdAsc(
+      Collection<String> categoryGroups);
 }

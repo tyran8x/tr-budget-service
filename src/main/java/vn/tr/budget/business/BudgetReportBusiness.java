@@ -38,9 +38,11 @@ import java.util.LinkedHashMap;
 import org.springframework.beans.factory.annotation.Autowired;
 import vn.tr.budget.business.helper.BudgetIntegrationOrchestrator;
 import vn.tr.budget.dao.model.BudgetAllocation;
+import vn.tr.budget.dao.model.BudgetCategory;
 import vn.tr.budget.dao.model.BudgetDisbursement;
 import vn.tr.budget.dao.model.BudgetTransaction;
 import vn.tr.budget.dao.service.BudgetAllocationRepo;
+import vn.tr.budget.dao.service.BudgetCategoryRepo;
 import vn.tr.budget.dao.service.BudgetDisbursementRepo;
 import vn.tr.budget.dao.service.BudgetTransactionRepo;
 
@@ -62,6 +64,9 @@ public class BudgetReportBusiness {
   private final AuditRollbackHelper auditRollbackHelper;
   private final BusinessLogicHelper businessLogicHelper;
   private final BudgetAllocationRepo budgetAllocationRepo;
+
+  @Autowired(required = false)
+  private BudgetCategoryRepo budgetCategoryRepo;
 
   @Autowired(required = false)
   private BudgetDisbursementRepo budgetDisbursementRepo;
@@ -614,8 +619,28 @@ public class BudgetReportBusiness {
       // Ignore parse error, keep null cutoffDate
     }
 
-    // Kiểm tra xem DB đã có dữ liệu phân bổ theo lĩnh vực động chưa
-    boolean hasDynamicDbData = false;
+    // Tải cấu hình Lĩnh vực / Nhóm lĩnh vực theo đúng Năm ngân sách (budgetYear)
+    List<BudgetCategory> allYearConfigs =
+        budgetCategoryRepo != null
+            ? budgetCategoryRepo.findByBudgetYearAndCategoryGroupInOrderBySortOrderAscIdAsc(
+                year, List.of("DOMAIN_GROUP", "DOMAIN"))
+            : List.of();
+    List<BudgetCategory> yearDomainConfigs = allYearConfigs;
+    if (nodeId != null && !allYearConfigs.isEmpty()) {
+      List<BudgetCategory> unitSpecific =
+          allYearConfigs.stream()
+              .filter(c -> c.getNodeId() != null && nodeId.equals(c.getNodeId()))
+              .toList();
+      if (!unitSpecific.isEmpty()) {
+        yearDomainConfigs = unitSpecific;
+      } else if (!allocs.isEmpty()) {
+        // Đơn vị có dữ liệu phân bổ riêng (ví dụ kiểm thử theo nodeId độc lập) -> chỉ lấy cấu hình khớp hoặc tự phát hiện từ phân bổ
+        yearDomainConfigs = List.of();
+      }
+    }
+
+    // Kiểm tra xem DB đã có dữ liệu phân bổ theo lĩnh vực động hoặc cấu hình lĩnh vực theo năm chưa
+    boolean hasDynamicDbData = !yearDomainConfigs.isEmpty();
     for (BudgetAllocation a : allocs) {
       if (StrUtil.isNotBlank(a.getDomainCode())
           || StrUtil.isNotBlank(a.getDomainGroupCode())
@@ -625,9 +650,16 @@ public class BudgetReportBusiness {
       }
     }
 
-    if (hasDynamicDbData && !allocs.isEmpty()) {
+    if (hasDynamicDbData && (!allocs.isEmpty() || !yearDomainConfigs.isEmpty())) {
       return buildDynamicMatrixFromDatabase(
-          year, resolvedDate, cutoffDate, dimension, resolvedViewMode, allocs, txs);
+          year,
+          resolvedDate,
+          cutoffDate,
+          dimension,
+          resolvedViewMode,
+          allocs,
+          txs,
+          yearDomainConfigs);
     }
 
     return buildDynamicExampleMatrix(year, resolvedDate, isSnapshotOct23, dimension, resolvedViewMode);
@@ -640,8 +672,59 @@ public class BudgetReportBusiness {
       String dimension,
       String viewMode,
       List<BudgetAllocation> allocs,
-      List<BudgetTransaction> txs) {
+      List<BudgetTransaction> txs,
+      List<BudgetCategory> yearDomainConfigs) {
     Map<String, Map<String, Object>> colMetaMap = new LinkedHashMap<>();
+    Map<String, String> prevDomainToCurrentMap = new LinkedHashMap<>();
+    Map<String, String> domainToGroupMap = new LinkedHashMap<>();
+
+    if (yearDomainConfigs != null && !yearDomainConfigs.isEmpty()) {
+      for (BudgetCategory cfg : yearDomainConfigs) {
+        String dCode =
+            StrUtil.isNotBlank(cfg.getDomainCode()) ? cfg.getDomainCode().trim() : cfg.getCode();
+        if (StrUtil.isNotBlank(cfg.getPreviousYearDomainCode()) && StrUtil.isNotBlank(dCode)) {
+          prevDomainToCurrentMap.put(cfg.getPreviousYearDomainCode().trim(), dCode);
+        }
+        if ("DOMAIN".equalsIgnoreCase(cfg.getCategoryGroup())
+            && StrUtil.isNotBlank(dCode)
+            && StrUtil.isNotBlank(cfg.getDomainGroupCode())) {
+          domainToGroupMap.put(dCode, cfg.getDomainGroupCode().trim());
+        }
+      }
+
+      if ("DOMAIN_GROUP".equalsIgnoreCase(dimension)) {
+        for (BudgetCategory cfg : yearDomainConfigs) {
+          if ("DOMAIN_GROUP".equalsIgnoreCase(cfg.getCategoryGroup())) {
+            String gCode =
+                StrUtil.isNotBlank(cfg.getDomainCode())
+                    ? cfg.getDomainCode().trim()
+                    : cfg.getCode();
+            Map<String, Object> meta =
+                createColMeta(gCode, cfg.getName(), gCode, cfg.getName());
+            meta.put("budgetYear", year);
+            meta.put("previousYearDomainCode", cfg.getPreviousYearDomainCode());
+            colMetaMap.putIfAbsent(gCode, meta);
+          }
+        }
+      } else if (!"CATEGORY".equalsIgnoreCase(dimension)) {
+        for (BudgetCategory cfg : yearDomainConfigs) {
+          if ("DOMAIN".equalsIgnoreCase(cfg.getCategoryGroup())) {
+            String dCode =
+                StrUtil.isNotBlank(cfg.getDomainCode())
+                    ? cfg.getDomainCode().trim()
+                    : cfg.getCode();
+            String gCode = StrUtil.blankToDefault(cfg.getDomainGroupCode(), "RECURRENT");
+            String gName = StrUtil.blankToDefault(cfg.getDomainGroupName(), "Chi thường xuyên");
+            Map<String, Object> meta = createColMeta(dCode, cfg.getName(), gCode, gName);
+            meta.put("budgetYear", year);
+            meta.put("previousYearDomainCode", cfg.getPreviousYearDomainCode());
+            meta.put("clauseCode", cfg.getClauseCode());
+            meta.put("annualLimitAmount", cfg.getAnnualLimitAmount());
+            colMetaMap.putIfAbsent(dCode, meta);
+          }
+        }
+      }
+    }
 
     for (BudgetAllocation a : allocs) {
       if ("REVENUE".equalsIgnoreCase(a.getItemType())) {
@@ -703,7 +786,9 @@ public class BudgetReportBusiness {
       Map<String, BigDecimal> uAdjDisb = initColDecimalMap(colCodes);
 
       for (BudgetAllocation a : uAllocs) {
-        String cCode = resolveColumnKeyForAllocation(a, dimension, colCodes.getFirst());
+        String cCode =
+            resolveColumnKeyForAllocation(
+                a, dimension, colCodes.getFirst(), prevDomainToCurrentMap, domainToGroupMap);
         BigDecimal coIn = safeDec(a.getCarryOverInAmount());
         BigDecimal init = safeDec(a.getInitialAmount());
         BigDecimal adj =
@@ -865,6 +950,7 @@ public class BudgetReportBusiness {
     result.put("asOfDate", asOfDate);
     result.put("groupByDimension", dimension);
     result.put("viewMode", viewMode);
+    result.put("configuredForYear", yearDomainConfigs != null && !yearDomainConfigs.isEmpty());
     result.put("columns", columns);
     result.put("rows", rows);
     result.put("unitAdjustmentSections", unitSections);
@@ -1357,6 +1443,7 @@ public class BudgetReportBusiness {
     result.put("asOfDate", asOfDate);
     result.put("groupByDimension", dimension);
     result.put("viewMode", viewMode);
+    result.put("configuredForYear", false);
     result.put("columns", columns);
     result.put("rows", rows);
     result.put("unitAdjustmentSections", unitSections);
@@ -1507,16 +1594,34 @@ public class BudgetReportBusiness {
   }
 
   private String resolveColumnKeyForAllocation(
-      BudgetAllocation a, String dimension, String fallbackKey) {
+      BudgetAllocation a,
+      String dimension,
+      String fallbackKey,
+      Map<String, String> prevDomainToCurrentMap,
+      Map<String, String> domainToGroupMap) {
+    String rawDomain = StrUtil.nullToEmpty(a.getDomainCode()).trim();
+    if (!rawDomain.isEmpty()
+        && prevDomainToCurrentMap != null
+        && prevDomainToCurrentMap.containsKey(rawDomain)) {
+      rawDomain = prevDomainToCurrentMap.get(rawDomain);
+    }
     if ("DOMAIN_GROUP".equalsIgnoreCase(dimension)) {
-      return StrUtil.blankToDefault(
-          a.getDomainGroupCode(), StrUtil.blankToDefault(a.getDomainCode(), fallbackKey));
+      String gCode = StrUtil.nullToEmpty(a.getDomainGroupCode()).trim();
+      if (!gCode.isEmpty()
+          && prevDomainToCurrentMap != null
+          && prevDomainToCurrentMap.containsKey(gCode)) {
+        gCode = prevDomainToCurrentMap.get(gCode);
+      }
+      if (gCode.isEmpty() && !rawDomain.isEmpty() && domainToGroupMap != null) {
+        gCode = domainToGroupMap.getOrDefault(rawDomain, "");
+      }
+      return StrUtil.blankToDefault(gCode, StrUtil.blankToDefault(rawDomain, fallbackKey));
     }
     if ("CATEGORY".equalsIgnoreCase(dimension)) {
       return StrUtil.blankToDefault(a.getCategoryCode(), fallbackKey);
     }
     return StrUtil.blankToDefault(
-        a.getDomainCode(), StrUtil.blankToDefault(a.getCategoryCode(), fallbackKey));
+        rawDomain, StrUtil.blankToDefault(a.getCategoryCode(), fallbackKey));
   }
 
   private Map<String, BigDecimal> extractTxBreakdownAlloc(

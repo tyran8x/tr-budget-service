@@ -235,4 +235,35 @@ public class BudgetCategoryController extends BaseController {
     return success(result);
   }
 
+  @SaCheckPermission("BudgetCategoryList")
+  @GetMapping("/year-domain-configs")
+  @Operation(
+      summary =
+          "Lấy cấu hình Lĩnh vực (DOMAIN) và Nhóm lĩnh vực (DOMAIN_GROUP) theo từng Năm ngân sách cụ thể")
+  public R<Map<String, Object>> getYearDomainConfigs(
+      @RequestParam(required = false) Integer budgetYear,
+      @RequestParam(required = false) Long nodeId) {
+    return success(budgetCategoryBusiness.getYearDomainConfig(budgetYear, nodeId));
+  }
+
+  @SaCheckPermission("BudgetCategoryCreate")
+  @PostMapping("/year-domain-configs")
+  @Operation(
+      summary =
+          "Tạo mới hoặc cập nhật cấu hình Lĩnh vực / Nhóm lĩnh vực cho một Năm ngân sách cụ thể")
+  @Log(title = "[BudgetCategory] Save Year Domain Config", businessType = BusinessType.INSERT)
+  public R<BudgetCategoryData> saveYearDomainConfig(@RequestBody BudgetCategoryData data) {
+    return success(budgetCategoryBusiness.saveYearDomainConfig(data));
+  }
+
+  @SaCheckPermission("BudgetCategoryCreate")
+  @PostMapping("/year-domain-configs/clone-year")
+  @Operation(
+      summary =
+          "Sao chép cấu hình Lĩnh vực & Nhóm lĩnh vực từ năm nguồn sang năm đích (kèm ánh xạ previousYearDomainCode)")
+  @Log(title = "[BudgetCategory] Clone Year Domain Config", businessType = BusinessType.INSERT)
+  public R<Map<String, Object>> cloneYearDomainConfig(@RequestBody Map<String, Object> body) {
+    return success(budgetCategoryBusiness.cloneYearDomainConfig(body));
+  }
+
 }

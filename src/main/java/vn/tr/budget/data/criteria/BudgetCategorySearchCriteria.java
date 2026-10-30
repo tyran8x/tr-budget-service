@@ -29,6 +29,14 @@ public class BudgetCategorySearchCriteria extends BaseSearchCriteria {
 
   private String categoryGroup;
 
+  private Integer budgetYear;
+
+  private String domainCode;
+
+  private String domainGroupCode;
+
+  private Long nodeId;
+
   private String chapterCode;
 
   private String clauseCode;

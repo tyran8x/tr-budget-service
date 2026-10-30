@@ -297,4 +297,84 @@ class BudgetDashboardAndWebhookTest {
     assertEquals(new BigDecimal("14200"), customMatrix.get("totalAllocated"));
     assertEquals(new BigDecimal("9500"), customMatrix.get("totalDisbursed"));
   }
+
+  @Test
+  @DisplayName(
+      "Year-Scoped Domain Config: Cấu hình Lĩnh vực & Nhóm lĩnh vực theo Năm ngân sách (2025 vs 2026) và Sao chép sang năm mới")
+  void shouldManageAndCloneYearScopedDomainConfigs() {
+    vn.tr.budget.dao.service.BudgetCategoryRepo categoryRepo =
+        mock(vn.tr.budget.dao.service.BudgetCategoryRepo.class);
+    vn.tr.budget.dao.service.BudgetCategoryService categoryService =
+        mock(vn.tr.budget.dao.service.BudgetCategoryService.class);
+    vn.tr.budget.data.mapper.BudgetCategoryMapper categoryMapper =
+        mock(vn.tr.budget.data.mapper.BudgetCategoryMapper.class);
+    vn.tr.budget.data.validator.BudgetCategoryValidator categoryValidator =
+        mock(vn.tr.budget.data.validator.BudgetCategoryValidator.class);
+
+    when(categoryService.getRepo()).thenReturn(categoryRepo);
+
+    vn.tr.budget.dao.model.BudgetCategory dom2025 =
+        vn.tr.budget.dao.model.BudgetCategory.builder()
+            .id(101L)
+            .code("DOM-2025-TCDLCL")
+            .name("Tiêu chuẩn Đo lường Chất lượng")
+            .categoryGroup("DOMAIN")
+            .budgetYear(2025)
+            .domainCode("TCDLCL")
+            .domainGroupCode("GRP_STD_TECH")
+            .domainGroupName("Nhóm KHCN & Tiêu chuẩn Đo lường")
+            .sortOrder(2)
+            .build();
+
+    when(categoryRepo.findByBudgetYearAndCategoryGroupInOrderBySortOrderAscIdAsc(
+            eq(2025), any()))
+        .thenReturn(List.of(dom2025));
+    when(categoryRepo.findByCategoryGroupInOrderByBudgetYearAscSortOrderAscIdAsc(any()))
+        .thenReturn(List.of(dom2025));
+    when(categoryMapper.toData(any(vn.tr.budget.dao.model.BudgetCategory.class)))
+        .thenAnswer(
+            inv -> {
+              vn.tr.budget.dao.model.BudgetCategory c = inv.getArgument(0);
+              return vn.tr.budget.data.dto.BudgetCategoryData.builder()
+                  .id(c.getId())
+                  .code(c.getCode())
+                  .name(c.getName())
+                  .categoryGroup(c.getCategoryGroup())
+                  .budgetYear(c.getBudgetYear())
+                  .domainCode(c.getDomainCode())
+                  .domainGroupCode(c.getDomainGroupCode())
+                  .domainGroupName(c.getDomainGroupName())
+                  .previousYearDomainCode(c.getPreviousYearDomainCode())
+                  .sortOrder(c.getSortOrder())
+                  .build();
+            });
+
+    BudgetCategoryBusiness categoryBusiness =
+        new BudgetCategoryBusiness(
+            categoryService,
+            categoryMapper,
+            categoryValidator,
+            genericUpsertHelper,
+            auditRollbackHelper,
+            businessLogicHelper);
+
+    Map<String, Object> cfg2025 = categoryBusiness.getYearDomainConfig(2025, null);
+    assertEquals(2025, cfg2025.get("budgetYear"));
+    @SuppressWarnings("unchecked")
+    List<vn.tr.budget.data.dto.BudgetCategoryData> domains2025 =
+        (List<vn.tr.budget.data.dto.BudgetCategoryData>) cfg2025.get("domains");
+    assertEquals(1, domains2025.size());
+    assertEquals("TCDLCL", domains2025.get(0).getDomainCode());
+
+    // Sao chép cấu hình từ 2025 sang 2026
+    when(categoryRepo.findByBudgetYearAndCategoryGroupInOrderBySortOrderAscIdAsc(
+            eq(2026), any()))
+        .thenReturn(List.of());
+    Map<String, Object> cloneRes =
+        categoryBusiness.cloneYearDomainConfig(
+            Map.of("sourceYear", 2025, "targetYear", 2026, "overwrite", false));
+    assertEquals(2025, cloneRes.get("sourceYear"));
+    assertEquals(2026, cloneRes.get("targetYear"));
+    assertEquals(1, cloneRes.get("clonedCount"));
+  }
 }

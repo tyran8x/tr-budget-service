@@ -30,6 +30,10 @@ public final class BudgetCategorySpecifications {
           CriteriaBuilderHelper.createIn(cb, root, "code", criteria.getCodes());
       Predicate parentIdCondition = CriteriaBuilderHelper.createEquals(cb, root, "parentId", criteria.getParentId());
       Predicate categoryGroupCondition = CriteriaBuilderHelper.createEquals(cb, root, "categoryGroup", criteria.getCategoryGroup());
+      Predicate budgetYearCondition = CriteriaBuilderHelper.createEquals(cb, root, "budgetYear", criteria.getBudgetYear());
+      Predicate domainCodeCondition = CriteriaBuilderHelper.createEquals(cb, root, "domainCode", criteria.getDomainCode());
+      Predicate domainGroupCodeCondition = CriteriaBuilderHelper.createEquals(cb, root, "domainGroupCode", criteria.getDomainGroupCode());
+      Predicate nodeIdCondition = CriteriaBuilderHelper.createEquals(cb, root, "nodeId", criteria.getNodeId());
       Predicate chapterCodeCondition = CriteriaBuilderHelper.createEquals(cb, root, "chapterCode", criteria.getChapterCode());
       Predicate clauseCodeCondition = CriteriaBuilderHelper.createEquals(cb, root, "clauseCode", criteria.getClauseCode());
       Predicate autonomyTypeCondition = CriteriaBuilderHelper.createEquals(cb, root, "autonomyType", criteria.getAutonomyType());
@@ -42,6 +46,10 @@ public final class BudgetCategorySpecifications {
           codesCondition,
           parentIdCondition,
           categoryGroupCondition,
+          budgetYearCondition,
+          domainCodeCondition,
+          domainGroupCodeCondition,
+          nodeIdCondition,
           chapterCodeCondition,
           clauseCodeCondition,
           autonomyTypeCondition,

@@ -29,6 +29,22 @@ public class BudgetCategoryData extends BaseCommonData {
 
   private String categoryGroup;
 
+  private Integer budgetYear;
+
+  private String domainCode;
+
+  private String domainGroupCode;
+
+  private String domainGroupName;
+
+  private String previousYearDomainCode;
+
+  private Long nodeId;
+
+  private String nodeCode;
+
+  private String nodeName;
+
   private String chapterCode;
 
   private String typeCode;

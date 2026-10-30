@@ -68,6 +68,30 @@ public class BudgetCategory extends BaseCommonEntity implements AppIsolated {
   @Column(name = "category_group", length = 50)
   private String categoryGroup;
 
+  @Column(name = "budget_year")
+  private Integer budgetYear;
+
+  @Column(name = "domain_code", length = 100)
+  private String domainCode;
+
+  @Column(name = "domain_group_code", length = 100)
+  private String domainGroupCode;
+
+  @Column(name = "domain_group_name", length = 250)
+  private String domainGroupName;
+
+  @Column(name = "previous_year_domain_code", length = 100)
+  private String previousYearDomainCode;
+
+  @Column(name = "node_id")
+  private Long nodeId;
+
+  @Column(name = "node_code", length = 100)
+  private String nodeCode;
+
+  @Column(name = "node_name", length = 250)
+  private String nodeName;
+
   @Column(name = "chapter_code", length = 50)
   private String chapterCode;
 
