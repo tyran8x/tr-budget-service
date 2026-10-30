@@ -264,4 +264,59 @@ public class BudgetTransactionController extends BaseController {
     return success(budgetTransactionBusiness.executeSmartReallocation(body));
   }
 
+  @SaCheckPermission("BudgetTransactionCreate")
+  @PostMapping("/supplement-content")
+  @Operation(
+      summary =
+          "Nghiệp vụ phụ NV-01: Bổ sung nội dung nhiệm vụ chi hoặc bổ sung dự toán đa lĩnh vực trong năm")
+  @Log(title = "[BudgetTransaction] Supplement Content", businessType = BusinessType.INSERT)
+  public R<Map<String, Object>> supplementBudgetContent(
+      @RequestBody Map<String, Object> body) {
+    return success(budgetTransactionBusiness.supplementBudgetContent(body));
+  }
+
+  @SaCheckPermission("BudgetTransactionCreate")
+  @PostMapping("/carry-over-year")
+  @Operation(
+      summary =
+          "Nghiệp vụ phụ NV-02: Chuyển nguồn kinh phí liên năm (N-1 -> N) kèm ánh xạ tự động Lĩnh vực năm cũ sang năm mới")
+  @Log(title = "[BudgetTransaction] Carry Over Year", businessType = BusinessType.INSERT)
+  public R<Map<String, Object>> executeYearCarryOver(
+      @RequestBody Map<String, Object> body) {
+    return success(budgetTransactionBusiness.executeYearCarryOver(body));
+  }
+
+  @SaCheckPermission("BudgetTransactionCreate")
+  @PostMapping("/cross-domain-transfer")
+  @Operation(
+      summary =
+          "Nghiệp vụ phụ NV-03: Điều chuyển nội bộ chéo giữa các Lĩnh vực trong cùng đơn vị (Tổng biến động đơn vị = 0)")
+  @Log(title = "[BudgetTransaction] Cross Domain Transfer", businessType = BusinessType.INSERT)
+  public R<Map<String, Object>> executeCrossDomainTransfer(
+      @RequestBody Map<String, Object> body) {
+    return success(budgetTransactionBusiness.executeCrossDomainTransfer(body));
+  }
+
+  @SaCheckPermission("BudgetTransactionCreate")
+  @PostMapping("/saving-reduction")
+  @Operation(
+      summary =
+          "Nghiệp vụ phụ NV-04: Tiết kiệm chi thường xuyên (NQ 135), Điều chỉnh giảm theo Phương án tự chủ hoặc Giảm do thừa")
+  @Log(title = "[BudgetTransaction] Saving & Reduction", businessType = BusinessType.INSERT)
+  public R<Map<String, Object>> executeSavingAndReduction(
+      @RequestBody Map<String, Object> body) {
+    return success(budgetTransactionBusiness.executeSavingAndReduction(body));
+  }
+
+  @SaCheckPermission("BudgetTransactionCreate")
+  @PostMapping("/cancel-expired")
+  @Operation(
+      summary =
+          "Nghiệp vụ phụ NV-05: Thu hồi / Hủy dự toán hết niên độ nộp trả NSNN đối với kinh phí không chuyển nguồn")
+  @Log(title = "[BudgetTransaction] Cancel Expired Allocation", businessType = BusinessType.UPDATE)
+  public R<Map<String, Object>> cancelExpiredAllocation(
+      @RequestBody Map<String, Object> body) {
+    return success(budgetTransactionBusiness.cancelExpiredAllocation(body));
+  }
+
 }

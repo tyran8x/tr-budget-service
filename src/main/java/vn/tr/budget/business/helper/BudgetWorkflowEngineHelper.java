@@ -152,7 +152,7 @@ public class BudgetWorkflowEngineHelper {
         case "CARRY_OVER_OUT" -> txCarryOut = txCarryOut.add(amt.abs());
         case "INTERNAL_TRANSFER", "TRANSFER_IN", "TRANSFER_OUT" -> txTransferNet =
             txTransferNet.add(amt);
-        case "REDUCTION" -> txReduction = txReduction.add(amt.abs());
+        case "REDUCTION", "SAVING_REDUCTION" -> txReduction = txReduction.add(amt.abs());
         default -> {}
       }
     }
@@ -311,6 +311,22 @@ public class BudgetWorkflowEngineHelper {
         if (!existingNextYear.isEmpty()) {
           targetAlloc = existingNextYear.getFirst();
         } else {
+          String targetDomainCode =
+              tx.getDomainCode() != null && !tx.getDomainCode().isBlank()
+                  ? tx.getDomainCode()
+                  : source.getDomainCode();
+          String targetDomainName =
+              tx.getDomainName() != null && !tx.getDomainName().isBlank()
+                  ? tx.getDomainName()
+                  : source.getDomainName();
+          String targetDomainGroupCode =
+              tx.getDomainGroupCode() != null && !tx.getDomainGroupCode().isBlank()
+                  ? tx.getDomainGroupCode()
+                  : source.getDomainGroupCode();
+          String targetDomainGroupName =
+              tx.getDomainGroupName() != null && !tx.getDomainGroupName().isBlank()
+                  ? tx.getDomainGroupName()
+                  : source.getDomainGroupName();
           targetAlloc =
               budgetAllocationRepo.save(
                   BudgetAllocation.builder()
@@ -329,6 +345,14 @@ public class BudgetWorkflowEngineHelper {
                       .categoryId(source.getCategoryId())
                       .categoryCode(source.getCategoryCode())
                       .categoryName(source.getCategoryName())
+                      .domainCode(targetDomainCode)
+                      .domainName(targetDomainName)
+                      .domainGroupCode(targetDomainGroupCode)
+                      .domainGroupName(targetDomainGroupName)
+                      .dynamicBreakdownJson(
+                          tx.getDynamicBreakdownJson() != null
+                              ? tx.getDynamicBreakdownJson()
+                              : source.getDynamicBreakdownJson())
                       .subItemCode(source.getSubItemCode())
                       .fundingSourceCode(source.getFundingSourceCode())
                       .fundingSourceName(source.getFundingSourceName())
@@ -345,9 +369,9 @@ public class BudgetWorkflowEngineHelper {
                       .effectiveAmount(tx.getAmount())
                       .committedAmount(BigDecimal.ZERO)
                       .advancedAmount(BigDecimal.ZERO)
-                      .disbursedAmount(BigDecimal.ZERO)
+                      .disbursedAmount(safe(tx.getDisbursedAmount()))
                       .settledAmount(BigDecimal.ZERO)
-                      .availableAmount(tx.getAmount())
+                      .availableAmount(tx.getAmount().subtract(safe(tx.getDisbursedAmount())))
                       .disbursementRatePercent(BigDecimal.ZERO)
                       .status(LifecycleStatus.ACTIVE)
                       .build());
@@ -380,11 +404,17 @@ public class BudgetWorkflowEngineHelper {
                     .categoryId(targetAlloc.getCategoryId())
                     .categoryCode(targetAlloc.getCategoryCode())
                     .categoryName(targetAlloc.getCategoryName())
+                    .domainCode(targetAlloc.getDomainCode())
+                    .domainName(targetAlloc.getDomainName())
+                    .domainGroupCode(targetAlloc.getDomainGroupCode())
+                    .domainGroupName(targetAlloc.getDomainGroupName())
+                    .dynamicBreakdownJson(targetAlloc.getDynamicBreakdownJson())
                     .fundingSourceCode(targetAlloc.getFundingSourceCode())
                     .fundingSourceName(targetAlloc.getFundingSourceName())
                     .txType("CARRY_OVER_IN")
                     .budgetYear(targetYear)
                     .amount(tx.getAmount().abs())
+                    .disbursedAmount(safe(tx.getDisbursedAmount()))
                     .balanceBeforeAmount(targetBefore)
                     .counterpartAllocationId(source.getId())
                     .counterpartAllocationCode(source.getCode())

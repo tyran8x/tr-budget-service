@@ -377,4 +377,135 @@ class BudgetDashboardAndWebhookTest {
     assertEquals(2026, cloneRes.get("targetYear"));
     assertEquals(1, cloneRes.get("clonedCount"));
   }
+
+  @Test
+  @DisplayName(
+      "Auxiliary Budget Operations (NV-01..NV-05): Bổ sung nội dung, Chuyển nguồn liên năm, Điều chuyển chéo lĩnh vực (Tổng = 0), Tiết kiệm NQ 135 & Thu hồi hết niên độ")
+  void shouldExecuteAuxiliaryBudgetOperationsEndToEnd() {
+    vn.tr.budget.dao.service.BudgetTransactionService txService =
+        mock(vn.tr.budget.dao.service.BudgetTransactionService.class);
+    vn.tr.budget.data.mapper.BudgetTransactionMapper txMapper =
+        mock(vn.tr.budget.data.mapper.BudgetTransactionMapper.class);
+    vn.tr.budget.data.validator.BudgetTransactionValidator txValidator =
+        mock(vn.tr.budget.data.validator.BudgetTransactionValidator.class);
+
+    BudgetAllocation baseAlloc =
+        BudgetAllocation.builder()
+            .id(1L)
+            .code("PB-2026-VP")
+            .name("Dự toán Văn phòng Sở năm 2026")
+            .budgetYear(2026)
+            .nodeId(101L)
+            .nodeCode("VAN_PHONG_SO")
+            .nodeName("Văn phòng Sở")
+            .itemType("EXPENDITURE")
+            .domainCode("KHCN")
+            .domainName("Khoa học công nghệ")
+            .initialAmount(new BigDecimal("10000000000"))
+            .effectiveAmount(new BigDecimal("10000000000"))
+            .availableAmount(new BigDecimal("10000000000"))
+            .build();
+
+    when(budgetAllocationRepo.findByBudgetYearOrderByIdAsc(anyInt()))
+        .thenReturn(List.of(baseAlloc));
+    when(budgetAllocationRepo.findById(1L)).thenReturn(Optional.of(baseAlloc));
+    when(budgetAllocationRepo.save(any(BudgetAllocation.class)))
+        .thenAnswer(inv -> inv.getArgument(0));
+    when(workflowEngineHelper.safe(any()))
+        .thenAnswer(inv -> inv.getArgument(0) != null ? inv.getArgument(0) : BigDecimal.ZERO);
+
+    when(genericUpsertHelper.upsert(any(), any(), any(), any(), any()))
+        .thenAnswer(
+            inv -> {
+              vn.tr.budget.data.dto.BudgetTransactionData d = inv.getArgument(0);
+              return vn.tr.budget.dao.model.BudgetTransaction.builder()
+                  .id(99L)
+                  .code(d.getCode())
+                  .name(d.getName())
+                  .allocationId(d.getAllocationId())
+                  .allocationCode(d.getAllocationCode())
+                  .txType(d.getTxType())
+                  .amount(d.getAmount())
+                  .dynamicBreakdownJson(d.getDynamicBreakdownJson())
+                  .approvalStatus("APPROVED")
+                  .build();
+            });
+    when(txMapper.toData(any(vn.tr.budget.dao.model.BudgetTransaction.class)))
+        .thenAnswer(
+            inv -> {
+              vn.tr.budget.dao.model.BudgetTransaction e = inv.getArgument(0);
+              return vn.tr.budget.data.dto.BudgetTransactionData.builder()
+                  .id(e.getId())
+                  .code(e.getCode())
+                  .name(e.getName())
+                  .txType(e.getTxType())
+                  .amount(e.getAmount())
+                  .dynamicBreakdownJson(e.getDynamicBreakdownJson())
+                  .approvalStatus(e.getApprovalStatus())
+                  .build();
+            });
+
+    BudgetTransactionBusiness txBusiness =
+        new BudgetTransactionBusiness(
+            txService,
+            txMapper,
+            txValidator,
+            genericUpsertHelper,
+            auditRollbackHelper,
+            businessLogicHelper,
+            workflowEngineHelper,
+            budgetAllocationRepo);
+
+    // 1. NV-01: Bổ sung nội dung nhiệm vụ chi
+    Map<String, Object> suppRes =
+        txBusiness.supplementBudgetContent(
+            Map.of(
+                "budgetYear", 2026,
+                "contentTitle", "Bổ sung kinh phí vận hành hạ tầng IOC",
+                "amount", "1502000000",
+                "domainCode", "CDS",
+                "decisionNo", "QĐ-2150/QĐ-UBND"));
+    assertEquals(true, suppRes.get("supplemented"));
+    assertEquals(new BigDecimal("1502000000"), suppRes.get("supplementedAmount"));
+
+    // 2. NV-02: Chuyển nguồn liên năm (2025 -> 2026)
+    Map<String, Object> carryRes =
+        txBusiness.executeYearCarryOver(
+            Map.of(
+                "fromYear", 2025,
+                "toYear", 2026,
+                "amount", "1512000000",
+                "sourceDomainCode", "TCDLCL"));
+    assertEquals(true, carryRes.get("carriedOver"));
+    assertEquals(new BigDecimal("1512000000"), carryRes.get("carryOverAmount"));
+
+    // 3. NV-03: Điều chuyển nội bộ chéo lĩnh vực (Tổng biến động = 0)
+    Map<String, Object> crossRes =
+        txBusiness.executeCrossDomainTransfer(
+            Map.of(
+                "budgetYear", 2026,
+                "fromDomainCode", "KHCN",
+                "toDomainCode", "DMST",
+                "amount", "2655000000"));
+    assertEquals(true, crossRes.get("transferred"));
+    assertEquals(BigDecimal.ZERO, crossRes.get("netUnitChange"));
+    assertTrue(String.valueOf(crossRes.get("dynamicBreakdownJson")).contains("-2655000000"));
+
+    // 4. NV-04: Tiết kiệm chi thường xuyên theo NQ 135
+    Map<String, Object> saveRes =
+        txBusiness.executeSavingAndReduction(
+            Map.of(
+                "budgetYear", 2026,
+                "reductionSubtype", "SAVING_NQ135",
+                "amount", "1481000000"));
+    assertEquals(true, saveRes.get("reduced"));
+    assertEquals(new BigDecimal("-1481000000"), saveRes.get("signedAdjustmentAmount"));
+
+    // 5. NV-05: Thu hồi / Hủy dự toán hết niên độ
+    Map<String, Object> cancelRes =
+        txBusiness.cancelExpiredAllocation(
+            Map.of("budgetYear", 2026, "amount", "500000000"));
+    assertEquals(true, cancelRes.get("cancelled"));
+    assertEquals(new BigDecimal("500000000"), cancelRes.get("cancelledAmount"));
+  }
 }
