@@ -504,8 +504,74 @@ class BudgetDashboardAndWebhookTest {
     // 5. NV-05: Thu hồi / Hủy dự toán hết niên độ
     Map<String, Object> cancelRes =
         txBusiness.cancelExpiredAllocation(
-            Map.of("budgetYear", 2026, "amount", "500000000"));
+            Map.of("budgetYear", 2026, "amount", "500000000", "actorRole", "TREASURY_RECONCILER"));
     assertEquals(true, cancelRes.get("cancelled"));
     assertEquals(new BigDecimal("500000000"), cancelRes.get("cancelledAmount"));
+
+    // 6. Ma trận Phân tách Vai trò & Quyền hạn (5 vai trò x 9 nghiệp vụ)
+    Map<String, Object> roleMatrix = txBusiness.getOperationRoleMatrix();
+    assertEquals(5, roleMatrix.get("totalRoles"));
+    assertEquals(9, roleMatrix.get("totalOperations"));
+
+    // Kiểm tra phân tách nhiệm vụ: Kế toán đơn vị (UNIT_ACCOUNTANT) lập NV-01 -> trạng thái PENDING
+    Map<String, Object> suppByAccountant =
+        txBusiness.supplementBudgetContent(
+            Map.of(
+                "budgetYear", 2026,
+                "contentTitle", "Tờ trình bổ sung của Kế toán đơn vị",
+                "amount", "200000000",
+                "actorRole", "UNIT_ACCOUNTANT"));
+    @SuppressWarnings("unchecked")
+    Map<String, Object> accMeta = (Map<String, Object>) suppByAccountant.get("roleExecutionMeta");
+    assertEquals("PENDING", accMeta.get("effectiveApprovalStatus"));
+    assertEquals("STC_DIRECTOR", accMeta.get("requiredApproverRole"));
+
+    // 7. DX-01: Tạm giữ / Phong tỏa & Giải tỏa dự toán chờ duyệt chủ trương
+    Map<String, Object> holdRes =
+        txBusiness.executeEarmarkHold(
+            Map.of(
+                "budgetYear", 2026,
+                "holdAction", "HOLD",
+                "amount", "300000000",
+                "actorRole", "PARENT_APPRAISER"));
+    assertEquals(true, holdRes.get("executed"));
+    assertEquals("HOLD", holdRes.get("holdAction"));
+
+    // 8. DX-02: Giải tỏa dự toán theo đợt (TRANCHE_Q3)
+    Map<String, Object> trancheRes =
+        txBusiness.executeTrancheRelease(
+            Map.of(
+                "budgetYear", 2026,
+                "trancheCode", "TRANCHE_Q3",
+                "releaseRatePercent", "25",
+                "actorRole", "STC_DIRECTOR"));
+    assertEquals(true, trancheRes.get("released"));
+    assertEquals("TRANCHE_Q3", trancheRes.get("trancheCode"));
+
+    // 9. DX-03: Điều chỉnh dự toán hàng loạt theo lương cơ sở & biên chế
+    Map<String, Object> payrollRes =
+        txBusiness.executeBatchPayrollIndexation(
+            Map.of(
+                "budgetYear", 2026,
+                "oldBaseSalary", "1800000",
+                "newBaseSalary", "2340000",
+                "staffChangeCount", 2,
+                "actorRole", "STC_DIRECTOR"));
+    assertEquals(true, payrollRes.get("indexed"));
+    assertEquals(new BigDecimal("30.00"), payrollRes.get("salaryIncreaseRatePercent"));
+
+    // 10. DX-04: Trích lập 4 Quỹ tự chủ tài chính cuối năm theo NĐ 60/2021/NĐ-CP
+    Map<String, Object> fundRes =
+        txBusiness.executeAutonomyFundDistribution(
+            Map.of(
+                "budgetYear", 2026,
+                "autonomyGroup", "GROUP_2",
+                "surplusAmount", "1000000000",
+                "actorRole", "UNIT_DIRECTOR"));
+    assertEquals(true, fundRes.get("distributed"));
+    assertEquals(new BigDecimal("250000000"), fundRes.get("pthdsnAmount"));
+    assertEquals(new BigDecimal("450000000"), fundRes.get("bstnAmount"));
+    assertEquals(new BigDecimal("200000000"), fundRes.get("ktplAmount"));
+    assertEquals(new BigDecimal("100000000"), fundRes.get("dpodtnAmount"));
   }
 }

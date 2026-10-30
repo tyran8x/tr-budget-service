@@ -319,4 +319,57 @@ public class BudgetTransactionController extends BaseController {
     return success(budgetTransactionBusiness.cancelExpiredAllocation(body));
   }
 
+  @SaCheckPermission("BudgetTransactionView")
+  @GetMapping("/operation-role-matrix")
+  @Operation(
+      summary =
+          "Lấy Ma trận Phân tách Vai trò & Thẩm quyền Thực hiện các Nghiệp vụ Phụ Ngân sách (NV-01..NV-05 & DX-01..DX-04)")
+  public R<Map<String, Object>> getOperationRoleMatrix() {
+    return success(budgetTransactionBusiness.getOperationRoleMatrix());
+  }
+
+  @SaCheckPermission("BudgetTransactionCreate")
+  @PostMapping("/earmark-hold")
+  @Operation(
+      summary =
+          "Nghiệp vụ phụ nâng cao DX-01: Tạm giữ / Phong tỏa hoặc Giải tỏa dự toán chờ duyệt chủ trương")
+  @Log(title = "[BudgetTransaction] Earmark Hold / Release", businessType = BusinessType.INSERT)
+  public R<Map<String, Object>> executeEarmarkHold(
+      @RequestBody Map<String, Object> body) {
+    return success(budgetTransactionBusiness.executeEarmarkHold(body));
+  }
+
+  @SaCheckPermission("BudgetTransactionCreate")
+  @PostMapping("/tranche-release")
+  @Operation(
+      summary =
+          "Nghiệp vụ phụ nâng cao DX-02: Giải tỏa / Cấp phát dự toán đầu năm theo đợt hoặc theo tiến độ thu")
+  @Log(title = "[BudgetTransaction] Tranche Release", businessType = BusinessType.INSERT)
+  public R<Map<String, Object>> executeTrancheRelease(
+      @RequestBody Map<String, Object> body) {
+    return success(budgetTransactionBusiness.executeTrancheRelease(body));
+  }
+
+  @SaCheckPermission("BudgetTransactionCreate")
+  @PostMapping("/batch-payroll-indexation")
+  @Operation(
+      summary =
+          "Nghiệp vụ phụ nâng cao DX-03: Điều chỉnh dự toán hàng loạt theo biến động lương cơ sở & biên chế")
+  @Log(title = "[BudgetTransaction] Batch Payroll Indexation", businessType = BusinessType.INSERT)
+  public R<Map<String, Object>> executeBatchPayrollIndexation(
+      @RequestBody Map<String, Object> body) {
+    return success(budgetTransactionBusiness.executeBatchPayrollIndexation(body));
+  }
+
+  @SaCheckPermission("BudgetTransactionCreate")
+  @PostMapping("/autonomy-fund-distribution")
+  @Operation(
+      summary =
+          "Nghiệp vụ phụ nâng cao DX-04: Trích lập 4 Quỹ tự chủ tài chính cuối năm theo Nghị định 60/2021/NĐ-CP")
+  @Log(title = "[BudgetTransaction] Autonomy Fund Distribution", businessType = BusinessType.INSERT)
+  public R<Map<String, Object>> executeAutonomyFundDistribution(
+      @RequestBody Map<String, Object> body) {
+    return success(budgetTransactionBusiness.executeAutonomyFundDistribution(body));
+  }
+
 }

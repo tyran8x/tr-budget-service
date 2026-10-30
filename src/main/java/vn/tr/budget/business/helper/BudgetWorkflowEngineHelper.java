@@ -125,7 +125,9 @@ public class BudgetWorkflowEngineHelper {
     BigDecimal txTransferNet = BigDecimal.ZERO;
     BigDecimal txReduction = BigDecimal.ZERO;
     BigDecimal txDisbursed = BigDecimal.ZERO;
+    BigDecimal txHeld = BigDecimal.ZERO;
     boolean hasInitialTx = false;
+    boolean hasHoldTx = false;
 
     for (BudgetTransaction tx : txs) {
       if ("REJECTED".equalsIgnoreCase(tx.getApprovalStatus())
@@ -140,7 +142,8 @@ public class BudgetWorkflowEngineHelper {
           txInitial = txInitial.add(amt);
           hasInitialTx = true;
         }
-        case "SUPPLEMENT" -> txSupplement = txSupplement.add(amt);
+        case "SUPPLEMENT", "TRANCHE_RELEASE", "BATCH_PAYROLL_INDEXATION" -> txSupplement =
+            txSupplement.add(amt.abs());
         case "ADJUSTMENT" -> {
           if (amt.compareTo(BigDecimal.ZERO) >= 0) {
             txSupplement = txSupplement.add(amt);
@@ -153,6 +156,14 @@ public class BudgetWorkflowEngineHelper {
         case "INTERNAL_TRANSFER", "TRANSFER_IN", "TRANSFER_OUT" -> txTransferNet =
             txTransferNet.add(amt);
         case "REDUCTION", "SAVING_REDUCTION" -> txReduction = txReduction.add(amt.abs());
+        case "EARMARK_HOLD" -> {
+          txHeld = txHeld.add(amt.abs());
+          hasHoldTx = true;
+        }
+        case "RELEASE_HOLD" -> {
+          txHeld = txHeld.subtract(amt.abs());
+          hasHoldTx = true;
+        }
         default -> {}
       }
     }
@@ -233,10 +244,12 @@ public class BudgetWorkflowEngineHelper {
     }
 
     if (disbs.isEmpty()) {
-      committed = safe(alloc.getCommittedAmount());
+      committed = hasHoldTx ? txHeld.max(BigDecimal.ZERO) : safe(alloc.getCommittedAmount());
       advanced = safe(alloc.getAdvancedAmount());
       disbursed = safe(alloc.getDisbursedAmount()).max(txDisbursed);
       settled = safe(alloc.getSettledAmount());
+    } else if (hasHoldTx) {
+      committed = committed.add(txHeld.max(BigDecimal.ZERO));
     }
 
     BigDecimal expiredCancelled = safe(alloc.getExpiredCancelledAmount());

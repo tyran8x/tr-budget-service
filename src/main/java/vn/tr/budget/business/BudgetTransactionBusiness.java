@@ -770,7 +770,10 @@ public class BudgetTransactionBusiness {
             .decisionDate(txDate)
             .reason(reason)
             .description(contentTitle + " (" + decisionNo + ")")
-            .approvalStatus("APPROVED")
+            .approvalStatus(
+                String.valueOf(
+                    evaluateOperationRoleGate("NV-01", body, rawAmount)
+                        .get("effectiveApprovalStatus")))
             .status(LifecycleStatus.ACTIVE)
             .build();
 
@@ -780,6 +783,7 @@ public class BudgetTransactionBusiness {
             ? budgetAllocationRepo.findById(targetAlloc.getId()).orElse(targetAlloc)
             : targetAlloc;
 
+    Map<String, Object> roleMeta = evaluateOperationRoleGate("NV-01", body, rawAmount);
     Map<String, Object> res = new LinkedHashMap<>();
     res.put("supplemented", true);
     res.put("operationType", "SUPPLEMENT_CONTENT");
@@ -793,6 +797,7 @@ public class BudgetTransactionBusiness {
     res.put(
         "availableAmountAfter",
         refreshed != null ? workflowEngineHelper.safe(refreshed.getAvailableAmount()) : rawAmount);
+    res.put("roleExecutionMeta", roleMeta);
     res.put("transaction", createdTx);
     return res;
   }
@@ -955,11 +960,15 @@ public class BudgetTransactionBusiness {
             .decisionDate(txDate)
             .reason(reason)
             .description(reason)
-            .approvalStatus("APPROVED")
+            .approvalStatus(
+                String.valueOf(
+                    evaluateOperationRoleGate("NV-02", body, carryAmount)
+                        .get("effectiveApprovalStatus")))
             .status(LifecycleStatus.ACTIVE)
             .build();
 
     BudgetTransactionData createdTx = create(txData);
+    Map<String, Object> roleMeta = evaluateOperationRoleGate("NV-02", body, carryAmount);
 
     Map<String, Object> res = new LinkedHashMap<>();
     res.put("carriedOver", true);
@@ -972,6 +981,7 @@ public class BudgetTransactionBusiness {
     res.put("mappedTargetDomainCode", mappedDomainCode);
     res.put("mappedTargetDomainName", mappedDomainName);
     res.put("carryOverAmount", carryAmount);
+    res.put("roleExecutionMeta", roleMeta);
     res.put("transaction", createdTx);
     return res;
   }
@@ -1043,6 +1053,7 @@ public class BudgetTransactionBusiness {
             null,
             "TX-XDOM-" + year + "-" + (System.currentTimeMillis() % 100000));
 
+    Map<String, Object> roleMeta = evaluateOperationRoleGate("NV-03", body, transferAmount);
     BudgetTransactionData txData =
         BudgetTransactionData.builder()
             .code(txCode)
@@ -1064,7 +1075,7 @@ public class BudgetTransactionBusiness {
             .decisionDate(txDate)
             .reason(reason)
             .description(reason)
-            .approvalStatus("APPROVED")
+            .approvalStatus(String.valueOf(roleMeta.get("effectiveApprovalStatus")))
             .status(LifecycleStatus.ACTIVE)
             .build();
 
@@ -1078,6 +1089,7 @@ public class BudgetTransactionBusiness {
     res.put("transferAmount", transferAmount);
     res.put("netUnitChange", BigDecimal.ZERO);
     res.put("dynamicBreakdownJson", breakdownArr.toString());
+    res.put("roleExecutionMeta", roleMeta);
     res.put("transaction", createdTx);
     return res;
   }
@@ -1162,6 +1174,7 @@ public class BudgetTransactionBusiness {
             null,
             "TX-RED-" + year + "-" + (System.currentTimeMillis() % 100000));
 
+    Map<String, Object> roleMeta = evaluateOperationRoleGate("NV-04", body, rawAmount);
     BudgetTransactionData txData =
         BudgetTransactionData.builder()
             .code(txCode)
@@ -1183,7 +1196,7 @@ public class BudgetTransactionBusiness {
             .decisionDate(txDate)
             .reason(reason)
             .description(title + " (" + decisionNo + ")")
-            .approvalStatus("APPROVED")
+            .approvalStatus(String.valueOf(roleMeta.get("effectiveApprovalStatus")))
             .status(LifecycleStatus.ACTIVE)
             .build();
 
@@ -1206,6 +1219,7 @@ public class BudgetTransactionBusiness {
     res.put(
         "availableAmountAfter",
         refreshed != null ? workflowEngineHelper.safe(refreshed.getAvailableAmount()) : BigDecimal.ZERO);
+    res.put("roleExecutionMeta", roleMeta);
     res.put("transaction", createdTx);
     return res;
   }
@@ -1237,7 +1251,11 @@ public class BudgetTransactionBusiness {
       throw new BaseException("Số tiền hủy / thu hồi dự toán hết niên độ phải lớn hơn 0.");
     }
 
-    if (targetAlloc != null) {
+    Map<String, Object> roleMeta = evaluateOperationRoleGate("NV-05", body, cancelAmount);
+    boolean isApprovedNow =
+        "APPROVED".equalsIgnoreCase(String.valueOf(roleMeta.get("effectiveApprovalStatus")));
+
+    if (targetAlloc != null && isApprovedNow) {
       BigDecimal currentExpired = workflowEngineHelper.safe(targetAlloc.getExpiredCancelledAmount());
       targetAlloc.setExpiredCancelledAmount(currentExpired.add(cancelAmount));
       budgetAllocationRepo.save(targetAlloc);
@@ -1276,7 +1294,7 @@ public class BudgetTransactionBusiness {
             .decisionDate(txDate)
             .reason(reason)
             .description(reason)
-            .approvalStatus("APPROVED")
+            .approvalStatus(String.valueOf(roleMeta.get("effectiveApprovalStatus")))
             .status(LifecycleStatus.ACTIVE)
             .build();
 
@@ -1301,8 +1319,758 @@ public class BudgetTransactionBusiness {
         refreshed != null
             ? workflowEngineHelper.safe(refreshed.getAvailableAmount())
             : BigDecimal.ZERO);
+    res.put("roleExecutionMeta", roleMeta);
     res.put("transaction", createdTx);
     return res;
+  }
+
+  /**
+   * Nghiệp vụ phụ nâng cao DX-01: Tạm giữ / Phong tỏa hoặc Giải tỏa dự toán chờ duyệt chủ trương
+   * ({@code POST /v1/budget/transactions/earmark-hold}).
+   */
+  public Map<String, Object> executeEarmarkHold(Map<String, Object> body) {
+    int year = parseIntOrDefault(body, "budgetYear", LocalDate.now().getYear());
+    String holdAction =
+        extractString(body, "holdAction", "actionMode", "HOLD").toUpperCase();
+    boolean isRelease = "RELEASE".equals(holdAction) || "RELEASE_HOLD".equals(holdAction);
+    String txType = isRelease ? "RELEASE_HOLD" : "EARMARK_HOLD";
+
+    BudgetAllocation targetAlloc =
+        resolveOrCreateTargetAllocation(
+            body,
+            year,
+            "Dự toán kiểm soát phong tỏa năm " + year,
+            extractString(body, "domainCode", null, "CDS"),
+            extractString(body, "domainName", null, "Chuyển đổi số"),
+            "GRP_INNOV_DIGITAL",
+            "Nhóm Đổi mới sáng tạo & Chuyển đổi số");
+
+    BigDecimal holdAmount = parseBigDecimalOrDefault(body, "amount", BigDecimal.ZERO).abs();
+    if (holdAmount.compareTo(BigDecimal.ZERO) <= 0) {
+      throw new BaseException("Số tiền tạm giữ / giải tỏa dự toán phải lớn hơn 0.");
+    }
+
+    String decisionNo =
+        extractString(
+            body,
+            "decisionNo",
+            "referenceDocumentNo",
+            (isRelease ? "CV-GTPT-" : "CV-PTDT-") + year + "/STC");
+    LocalDate txDate = parseLocalDateOrDefault(body, "txDate", LocalDate.now());
+    String defaultReason =
+        isRelease
+            ? "Giải tỏa dự toán tạm giữ sau khi có quyết định phê duyệt đề án (" + decisionNo + ")"
+            : "Tạm giữ / Phong tỏa dự toán chờ thẩm định chủ trương đề án (" + decisionNo + ")";
+    String reason = extractString(body, "reason", "description", defaultReason);
+    String txCode =
+        extractString(
+            body,
+            "code",
+            null,
+            (isRelease ? "TX-REL-" : "TX-HOLD-") + year + "-" + (System.currentTimeMillis() % 100000));
+
+    Map<String, Object> roleMeta = evaluateOperationRoleGate("DX-01", body, holdAmount);
+    BudgetTransactionData txData =
+        BudgetTransactionData.builder()
+            .code(txCode)
+            .name((isRelease ? "Giải tỏa phong tỏa: " : "Tạm giữ / Phong tỏa: ") + reason)
+            .allocationId(targetAlloc != null ? targetAlloc.getId() : null)
+            .allocationCode(targetAlloc != null ? targetAlloc.getCode() : null)
+            .nodeId(targetAlloc != null ? targetAlloc.getNodeId() : 101L)
+            .nodeCode(targetAlloc != null ? targetAlloc.getNodeCode() : "VAN_PHONG_SO")
+            .nodeName(targetAlloc != null ? targetAlloc.getNodeName() : "Văn phòng Sở")
+            .domainCode(targetAlloc != null ? targetAlloc.getDomainCode() : "CDS")
+            .domainName(targetAlloc != null ? targetAlloc.getDomainName() : "Chuyển đổi số")
+            .budgetYear(year)
+            .txType(txType)
+            .txDate(txDate)
+            .amount(isRelease ? holdAmount.negate() : holdAmount)
+            .decisionNo(decisionNo)
+            .decisionDate(txDate)
+            .reason(reason)
+            .description(reason)
+            .approvalStatus(String.valueOf(roleMeta.get("effectiveApprovalStatus")))
+            .status(LifecycleStatus.ACTIVE)
+            .build();
+
+    BudgetTransactionData createdTx = create(txData);
+    BudgetAllocation refreshed =
+        targetAlloc != null && targetAlloc.getId() != null
+            ? budgetAllocationRepo.findById(targetAlloc.getId()).orElse(targetAlloc)
+            : targetAlloc;
+
+    Map<String, Object> res = new LinkedHashMap<>();
+    res.put("executed", true);
+    res.put("operationType", "EARMARK_HOLD");
+    res.put("holdAction", isRelease ? "RELEASE" : "HOLD");
+    res.put("txType", txType);
+    res.put("holdAmount", holdAmount);
+    res.put("allocationCode", refreshed != null ? refreshed.getCode() : "N/A");
+    res.put(
+        "committedAmountAfter",
+        refreshed != null
+            ? workflowEngineHelper.safe(refreshed.getCommittedAmount())
+            : (isRelease ? BigDecimal.ZERO : holdAmount));
+    res.put(
+        "availableAmountAfter",
+        refreshed != null
+            ? workflowEngineHelper.safe(refreshed.getAvailableAmount())
+            : BigDecimal.ZERO);
+    res.put("roleExecutionMeta", roleMeta);
+    res.put("transaction", createdTx);
+    return res;
+  }
+
+  /**
+   * Nghiệp vụ phụ nâng cao DX-02: Giải tỏa / Cấp phát dự toán giao đầu năm theo đợt hoặc theo tiến
+   * độ thu sự nghiệp ({@code POST /v1/budget/transactions/tranche-release}).
+   */
+  public Map<String, Object> executeTrancheRelease(Map<String, Object> body) {
+    int year = parseIntOrDefault(body, "budgetYear", LocalDate.now().getYear());
+    String trancheCode =
+        extractString(body, "trancheCode", "tranche", "TRANCHE_Q3").toUpperCase();
+    String trancheName =
+        switch (trancheCode) {
+          case "TRANCHE_Q1" -> "Đợt 1 (Quý I)";
+          case "TRANCHE_Q2" -> "Đợt 2 (Quý II)";
+          case "TRANCHE_Q3" -> "Đợt 3 (Quý III)";
+          case "TRANCHE_Q4" -> "Đợt 4 (6 tháng cuối năm / Quý IV)";
+          case "REVENUE_PROGRESS" -> "Giải tỏa theo tiến độ thực thu phí/lệ phí sự nghiệp";
+          default -> "Giải tỏa dự toán theo đợt (" + trancheCode + ")";
+        };
+
+    BudgetAllocation targetAlloc =
+        resolveOrCreateTargetAllocation(
+            body,
+            year,
+            "Dự toán phân bổ theo đợt năm " + year,
+            extractString(body, "domainCode", null, "KHCN"),
+            extractString(body, "domainName", null, "Khoa học công nghệ"),
+            "GRP_CORE_TECH",
+            "Nhóm KHCN & Hạ tầng");
+
+    BigDecimal releaseRatePercent =
+        parseBigDecimalOrDefault(body, "releaseRatePercent", new BigDecimal("25"));
+    BigDecimal releaseAmount = parseBigDecimalOrDefault(body, "amount", BigDecimal.ZERO).abs();
+    if (releaseAmount.compareTo(BigDecimal.ZERO) == 0 && targetAlloc != null) {
+      BigDecimal base =
+          workflowEngineHelper.safe(targetAlloc.getInitialAmount()).compareTo(BigDecimal.ZERO) > 0
+              ? targetAlloc.getInitialAmount()
+              : new BigDecimal("2000000000");
+      releaseAmount =
+          base.multiply(releaseRatePercent).divide(new BigDecimal("100"), 2, RoundingMode.HALF_UP);
+    }
+    if (releaseAmount.compareTo(BigDecimal.ZERO) <= 0) {
+      throw new BaseException("Số tiền giải tỏa dự toán theo đợt phải lớn hơn 0.");
+    }
+
+    String decisionNo =
+        extractString(body, "decisionNo", "referenceDocumentNo", "TB-GT-" + trancheCode + "-" + year);
+    LocalDate txDate = parseLocalDateOrDefault(body, "txDate", LocalDate.now());
+    String reason =
+        extractString(
+            body,
+            "reason",
+            "description",
+            "Giải tỏa hạn mức dự toán "
+                + trancheName
+                + " ("
+                + releaseRatePercent
+                + "%) theo "
+                + decisionNo);
+    String txCode =
+        extractString(
+            body,
+            "code",
+            null,
+            "TX-TRN-" + year + "-" + (System.currentTimeMillis() % 100000));
+
+    Map<String, Object> roleMeta = evaluateOperationRoleGate("DX-02", body, releaseAmount);
+    BudgetTransactionData txData =
+        BudgetTransactionData.builder()
+            .code(txCode)
+            .name("Giải tỏa dự toán " + trancheName)
+            .allocationId(targetAlloc != null ? targetAlloc.getId() : null)
+            .allocationCode(targetAlloc != null ? targetAlloc.getCode() : null)
+            .nodeId(targetAlloc != null ? targetAlloc.getNodeId() : 101L)
+            .nodeCode(targetAlloc != null ? targetAlloc.getNodeCode() : "VAN_PHONG_SO")
+            .nodeName(targetAlloc != null ? targetAlloc.getNodeName() : "Văn phòng Sở")
+            .domainCode(targetAlloc != null ? targetAlloc.getDomainCode() : "KHCN")
+            .domainName(targetAlloc != null ? targetAlloc.getDomainName() : "Khoa học công nghệ")
+            .budgetYear(year)
+            .txType("TRANCHE_RELEASE")
+            .txDate(txDate)
+            .amount(releaseAmount)
+            .decisionNo(decisionNo)
+            .decisionDate(txDate)
+            .reason(reason)
+            .description(reason)
+            .approvalStatus(String.valueOf(roleMeta.get("effectiveApprovalStatus")))
+            .status(LifecycleStatus.ACTIVE)
+            .build();
+
+    BudgetTransactionData createdTx = create(txData);
+    BudgetAllocation refreshed =
+        targetAlloc != null && targetAlloc.getId() != null
+            ? budgetAllocationRepo.findById(targetAlloc.getId()).orElse(targetAlloc)
+            : targetAlloc;
+
+    Map<String, Object> res = new LinkedHashMap<>();
+    res.put("released", true);
+    res.put("operationType", "TRANCHE_RELEASE");
+    res.put("trancheCode", trancheCode);
+    res.put("trancheName", trancheName);
+    res.put("releaseRatePercent", releaseRatePercent);
+    res.put("releasedAmount", releaseAmount);
+    res.put("allocationCode", refreshed != null ? refreshed.getCode() : "N/A");
+    res.put(
+        "effectiveAmountAfter",
+        refreshed != null
+            ? workflowEngineHelper.safe(refreshed.getEffectiveAmount())
+            : releaseAmount);
+    res.put(
+        "availableAmountAfter",
+        refreshed != null
+            ? workflowEngineHelper.safe(refreshed.getAvailableAmount())
+            : releaseAmount);
+    res.put("roleExecutionMeta", roleMeta);
+    res.put("transaction", createdTx);
+    return res;
+  }
+
+  /**
+   * Nghiệp vụ phụ nâng cao DX-03: Điều chỉnh dự toán hàng loạt theo biến động mức lương cơ sở &
+   * biên chế giao ({@code POST /v1/budget/transactions/batch-payroll-indexation}).
+   */
+  public Map<String, Object> executeBatchPayrollIndexation(Map<String, Object> body) {
+    int year = parseIntOrDefault(body, "budgetYear", LocalDate.now().getYear());
+    BigDecimal oldBaseSalary =
+        parseBigDecimalOrDefault(body, "oldBaseSalary", new BigDecimal("1800000"));
+    BigDecimal newBaseSalary =
+        parseBigDecimalOrDefault(body, "newBaseSalary", new BigDecimal("2340000"));
+    int staffChangeCount = parseIntOrDefault(body, "staffChangeCount", 2);
+    int baseStaffCount = parseIntOrDefault(body, "baseStaffCount", 35);
+    int monthsRemaining = parseIntOrDefault(body, "monthsRemaining", 6);
+    BigDecimal avgCoefficient =
+        parseBigDecimalOrDefault(body, "averageSalaryCoefficient", new BigDecimal("3.65"));
+    BigDecimal insuranceContributionFactor = new BigDecimal("1.235"); // 23.5% các khoản đóng góp theo lương
+
+    BigDecimal salaryDeltaPerPersonMonth =
+        newBaseSalary
+            .subtract(oldBaseSalary)
+            .multiply(avgCoefficient)
+            .multiply(insuranceContributionFactor);
+    BigDecimal indexationFromBaseSalary =
+        salaryDeltaPerPersonMonth
+            .multiply(BigDecimal.valueOf(baseStaffCount))
+            .multiply(BigDecimal.valueOf(monthsRemaining))
+            .setScale(0, RoundingMode.HALF_UP);
+    BigDecimal indexationFromStaffChange =
+        newBaseSalary
+            .multiply(avgCoefficient)
+            .multiply(insuranceContributionFactor)
+            .multiply(BigDecimal.valueOf(staffChangeCount))
+            .multiply(BigDecimal.valueOf(monthsRemaining))
+            .setScale(0, RoundingMode.HALF_UP);
+
+    BigDecimal explicitAmount = parseBigDecimalOrDefault(body, "amount", BigDecimal.ZERO);
+    BigDecimal unitAdjustmentAmount =
+        explicitAmount.compareTo(BigDecimal.ZERO) != 0
+            ? explicitAmount
+            : indexationFromBaseSalary.add(indexationFromStaffChange);
+    if (unitAdjustmentAmount.compareTo(BigDecimal.ZERO) == 0) {
+      unitAdjustmentAmount = new BigDecimal("185000000");
+    }
+
+    List<BudgetAllocation> targetAllocs = new ArrayList<>();
+    BudgetAllocation explicitAlloc = resolveExistingAllocation(body, year);
+    if (explicitAlloc != null) {
+      targetAllocs.add(explicitAlloc);
+    } else if (budgetAllocationRepo != null) {
+      List<BudgetAllocation> yearAllocs = budgetAllocationRepo.findByBudgetYearOrderByIdAsc(year);
+      for (BudgetAllocation a : yearAllocs) {
+        if (!"REVENUE".equalsIgnoreCase(a.getItemType())) {
+          targetAllocs.add(a);
+          if (targetAllocs.size() >= 3) {
+            break;
+          }
+        }
+      }
+    }
+    if (targetAllocs.isEmpty()) {
+      BudgetAllocation fallback =
+          resolveOrCreateTargetAllocation(
+              body,
+              year,
+              "Quỹ lương và phụ cấp theo biên chế năm " + year,
+              "KHCN",
+              "Khoa học công nghệ",
+              "GRP_CORE_TECH",
+              "Nhóm KHCN & Hạ tầng");
+      if (fallback != null) {
+        targetAllocs.add(fallback);
+      }
+    }
+
+    String decisionNo =
+        extractString(body, "decisionNo", "referenceDocumentNo", "QĐ-ĐCTL-" + year + "/UBND");
+    LocalDate txDate = parseLocalDateOrDefault(body, "txDate", LocalDate.now());
+    Map<String, Object> roleMeta =
+        evaluateOperationRoleGate("DX-03", body, unitAdjustmentAmount.abs());
+
+    List<BudgetTransactionData> createdTxs = new ArrayList<>();
+    BigDecimal totalIndexedAmount = BigDecimal.ZERO;
+
+    int idx = 1;
+    for (BudgetAllocation alloc : targetAllocs) {
+      String txCode =
+          "TX-PAY-" + year + "-" + idx + "-" + (System.currentTimeMillis() % 100000);
+      String reason =
+          "Điều chỉnh dự toán quỹ lương cơ sở ("
+              + oldBaseSalary.toPlainString()
+              + " -> "
+              + newBaseSalary.toPlainString()
+              + " VNĐ, biến động biên chế: "
+              + (staffChangeCount >= 0 ? "+" + staffChangeCount : staffChangeCount)
+              + " người) cho "
+              + alloc.getNodeName();
+      BudgetTransactionData txData =
+          BudgetTransactionData.builder()
+              .code(txCode)
+              .name("Điều chỉnh dự toán lương cơ sở & biên chế (" + alloc.getNodeName() + ")")
+              .allocationId(alloc.getId())
+              .allocationCode(alloc.getCode())
+              .nodeId(alloc.getNodeId())
+              .nodeCode(alloc.getNodeCode())
+              .nodeName(alloc.getNodeName())
+              .domainCode(alloc.getDomainCode() != null ? alloc.getDomainCode() : "KHCN")
+              .domainName(alloc.getDomainName() != null ? alloc.getDomainName() : "Khoa học công nghệ")
+              .budgetYear(year)
+              .txType("BATCH_PAYROLL_INDEXATION")
+              .txDate(txDate)
+              .amount(unitAdjustmentAmount)
+              .decisionNo(decisionNo)
+              .decisionDate(txDate)
+              .reason(reason)
+              .description(reason)
+              .approvalStatus(String.valueOf(roleMeta.get("effectiveApprovalStatus")))
+              .status(LifecycleStatus.ACTIVE)
+              .build();
+      createdTxs.add(create(txData));
+      totalIndexedAmount = totalIndexedAmount.add(unitAdjustmentAmount);
+      idx++;
+    }
+
+    BigDecimal increaseRate =
+        oldBaseSalary.compareTo(BigDecimal.ZERO) > 0
+            ? newBaseSalary
+                .subtract(oldBaseSalary)
+                .multiply(new BigDecimal("100"))
+                .divide(oldBaseSalary, 2, RoundingMode.HALF_UP)
+            : BigDecimal.ZERO;
+
+    Map<String, Object> res = new LinkedHashMap<>();
+    res.put("indexed", true);
+    res.put("operationType", "BATCH_PAYROLL_INDEXATION");
+    res.put("oldBaseSalary", oldBaseSalary);
+    res.put("newBaseSalary", newBaseSalary);
+    res.put("salaryIncreaseRatePercent", increaseRate);
+    res.put("staffChangeCount", staffChangeCount);
+    res.put("monthsRemaining", monthsRemaining);
+    res.put("affectedUnitCount", createdTxs.size());
+    res.put("unitAdjustmentAmount", unitAdjustmentAmount);
+    res.put("totalIndexedAmount", totalIndexedAmount);
+    res.put("roleExecutionMeta", roleMeta);
+    res.put("transactions", createdTxs);
+    res.put("transaction", createdTxs.isEmpty() ? null : createdTxs.getFirst());
+    return res;
+  }
+
+  /**
+   * Nghiệp vụ phụ nâng cao DX-04: Trích lập 4 Quỹ tự chủ tài chính cuối năm theo Nghị định
+   * 60/2021/NĐ-CP ({@code POST /v1/budget/transactions/autonomy-fund-distribution}).
+   */
+  public Map<String, Object> executeAutonomyFundDistribution(Map<String, Object> body) {
+    int year = parseIntOrDefault(body, "budgetYear", LocalDate.now().getYear());
+    String autonomyGroup =
+        extractString(body, "autonomyGroup", "financialAutonomyGroup", "GROUP_2").toUpperCase();
+    BudgetAllocation targetAlloc =
+        resolveOrCreateTargetAllocation(
+            body,
+            year,
+            "Kinh phí tự chủ trích lập các quỹ cuối năm " + year,
+            "KHCN",
+            "Khoa học công nghệ",
+            "GRP_CORE_TECH",
+            "Nhóm KHCN & Hạ tầng");
+
+    BigDecimal surplusAmount = parseBigDecimalOrDefault(body, "surplusAmount", BigDecimal.ZERO).abs();
+    if (surplusAmount.compareTo(BigDecimal.ZERO) == 0) {
+      surplusAmount = parseBigDecimalOrDefault(body, "amount", BigDecimal.ZERO).abs();
+    }
+    if (surplusAmount.compareTo(BigDecimal.ZERO) == 0 && targetAlloc != null) {
+      surplusAmount = workflowEngineHelper.safe(targetAlloc.getAvailableAmount());
+    }
+    if (surplusAmount.compareTo(BigDecimal.ZERO) <= 0) {
+      surplusAmount = new BigDecimal("500000000");
+    }
+
+    // Tỷ lệ trích lập 4 Quỹ theo Điều 14, Điều 18 Nghị định 60/2021/NĐ-CP
+    BigDecimal pthdsnRate =
+        parseBigDecimalOrDefault(body, "pthdsnRatePercent", new BigDecimal("25"));
+    BigDecimal bstnRate = parseBigDecimalOrDefault(body, "bstnRatePercent", new BigDecimal("45"));
+    BigDecimal ktplRate = parseBigDecimalOrDefault(body, "ktplRatePercent", new BigDecimal("20"));
+    BigDecimal dpodtnRate =
+        new BigDecimal("100")
+            .subtract(pthdsnRate)
+            .subtract(bstnRate)
+            .subtract(ktplRate)
+            .max(BigDecimal.ZERO);
+
+    BigDecimal pthdsnAmount =
+        surplusAmount.multiply(pthdsnRate).divide(new BigDecimal("100"), 0, RoundingMode.HALF_UP);
+    BigDecimal bstnAmount =
+        surplusAmount.multiply(bstnRate).divide(new BigDecimal("100"), 0, RoundingMode.HALF_UP);
+    BigDecimal ktplAmount =
+        surplusAmount.multiply(ktplRate).divide(new BigDecimal("100"), 0, RoundingMode.HALF_UP);
+    BigDecimal dpodtnAmount =
+        surplusAmount.subtract(pthdsnAmount).subtract(bstnAmount).subtract(ktplAmount);
+
+    JSONArray fundArr = new JSONArray();
+    fundArr.add(
+        new JSONObject()
+            .set("code", "FUND_PTHDSN")
+            .set("name", "Quỹ Phát triển hoạt động sự nghiệp")
+            .set("ratePercent", pthdsnRate)
+            .set("allocatedAmount", pthdsnAmount));
+    fundArr.add(
+        new JSONObject()
+            .set("code", "FUND_BSTN")
+            .set("name", "Quỹ Bổ sung thu nhập")
+            .set("ratePercent", bstnRate)
+            .set("allocatedAmount", bstnAmount));
+    fundArr.add(
+        new JSONObject()
+            .set("code", "FUND_KTPL")
+            .set("name", "Quỹ Khen thưởng và Phúc lợi")
+            .set("ratePercent", ktplRate)
+            .set("allocatedAmount", ktplAmount));
+    fundArr.add(
+        new JSONObject()
+            .set("code", "FUND_DPODTN")
+            .set("name", "Quỹ Dự phòng ổn định thu nhập")
+            .set("ratePercent", dpodtnRate)
+            .set("allocatedAmount", dpodtnAmount));
+
+    String decisionNo =
+        extractString(body, "decisionNo", "referenceDocumentNo", "QĐ-TLQ-" + year + "/ĐVSN");
+    LocalDate txDate = parseLocalDateOrDefault(body, "txDate", LocalDate.now());
+    String reason =
+        extractString(
+            body,
+            "reason",
+            "description",
+            "Kết chuyển chênh lệch thu - chi và kinh phí tiết kiệm trích lập 4 Quỹ tự chủ theo NĐ 60/2021/NĐ-CP ("
+                + autonomyGroup
+                + ")");
+    String txCode =
+        extractString(
+            body,
+            "code",
+            null,
+            "TX-FUND-" + year + "-" + (System.currentTimeMillis() % 100000));
+
+    Map<String, Object> roleMeta = evaluateOperationRoleGate("DX-04", body, surplusAmount);
+    BudgetTransactionData txData =
+        BudgetTransactionData.builder()
+            .code(txCode)
+            .name("Trích lập 4 Quỹ tự chủ tài chính cuối năm " + year + " (" + autonomyGroup + ")")
+            .allocationId(targetAlloc != null ? targetAlloc.getId() : null)
+            .allocationCode(targetAlloc != null ? targetAlloc.getCode() : null)
+            .nodeId(targetAlloc != null ? targetAlloc.getNodeId() : 103L)
+            .nodeCode(targetAlloc != null ? targetAlloc.getNodeCode() : "TT_UDKHCN")
+            .nodeName(
+                targetAlloc != null
+                    ? targetAlloc.getNodeName()
+                    : "Trung tâm Ứng dụng KHCN và Tiêu chuẩn Đo lường Chất lượng Đà Nẵng")
+            .domainCode(targetAlloc != null ? targetAlloc.getDomainCode() : "KHCN")
+            .domainName(targetAlloc != null ? targetAlloc.getDomainName() : "Khoa học công nghệ")
+            .dynamicBreakdownJson(fundArr.toString())
+            .budgetYear(year)
+            .txType("AUTONOMY_FUND_DISTRIBUTION")
+            .txDate(txDate)
+            .amount(surplusAmount)
+            .decisionNo(decisionNo)
+            .decisionDate(txDate)
+            .reason(reason)
+            .description(reason)
+            .approvalStatus(String.valueOf(roleMeta.get("effectiveApprovalStatus")))
+            .status(LifecycleStatus.ACTIVE)
+            .build();
+
+    BudgetTransactionData createdTx = create(txData);
+
+    Map<String, Object> res = new LinkedHashMap<>();
+    res.put("distributed", true);
+    res.put("operationType", "AUTONOMY_FUND_DISTRIBUTION");
+    res.put("autonomyGroup", autonomyGroup);
+    res.put("surplusAmount", surplusAmount);
+    res.put("pthdsnAmount", pthdsnAmount);
+    res.put("bstnAmount", bstnAmount);
+    res.put("ktplAmount", ktplAmount);
+    res.put("dpodtnAmount", dpodtnAmount);
+    res.put("fundBreakdowns", fundArr);
+    res.put("roleExecutionMeta", roleMeta);
+    res.put("transaction", createdTx);
+    return res;
+  }
+
+  /**
+   * Trả về Ma trận Phân tách Vai trò & Thẩm quyền Thực hiện cho toàn bộ 9 Nghiệp vụ Phụ Ngân sách
+   * ({@code NV-01 .. NV-05} và {@code DX-01 .. DX-04}) theo chuẩn Kiểm soát Nội bộ Tài chính công
+   * ({@code GET /v1/budget/transactions/operation-role-matrix}).
+   */
+  public Map<String, Object> getOperationRoleMatrix() {
+    List<Map<String, Object>> roles =
+        List.of(
+            Map.of(
+                "roleCode", "UNIT_ACCOUNTANT",
+                "roleName", "Kế toán Đơn vị Dự toán Cấp dưới (Cấp III)",
+                "level", "UNIT_LEVEL",
+                "saPermissions",
+                    List.of(
+                        "BudgetTransactionCreate",
+                        "BudgetDisbursementCreate",
+                        "BudgetAllocationView"),
+                "responsibilities",
+                    "Lập tờ trình bổ sung nội dung chi (NV-01), lập hồ sơ đề nghị chuyển nguồn (NV-02), lập phiếu điều chuyển nội bộ chéo (NV-03), lập bảng tính trích lập 4 quỹ tự chủ (DX-04). Không được tự phê duyệt."),
+            Map.of(
+                "roleCode", "UNIT_DIRECTOR",
+                "roleName", "Thủ trưởng Đơn vị Sử dụng Ngân sách (Chủ tài khoản)",
+                "level", "UNIT_LEVEL",
+                "saPermissions",
+                    List.of(
+                        "BudgetTransactionCreate",
+                        "BudgetTransactionEdit",
+                        "BudgetDisbursementEdit"),
+                "responsibilities",
+                    "Tự phê duyệt điều chuyển nội bộ chéo giữa các lĩnh vực trong phạm vi tự chủ NĐ 60/2021 (NV-03) và phê duyệt trích lập 4 quỹ tự chủ của đơn vị (DX-04); ký trình Sở chủ quản các nghiệp vụ NV-01, NV-02."),
+            Map.of(
+                "roleCode", "PARENT_APPRAISER",
+                "roleName", "Chuyên viên Thẩm định Tài chính - Kế hoạch (Đơn vị Dự toán Cấp I / Sở)",
+                "level", "DEPARTMENT_LEVEL",
+                "saPermissions",
+                    List.of(
+                        "BudgetTransactionCreate", "BudgetTransactionEdit", "BudgetAllocationEdit"),
+                "responsibilities",
+                    "Thực hiện tạm giữ / phong tỏa dự toán chờ duyệt chủ trương (DX-01), lập phương án tiết kiệm NQ 135 / giảm theo PA tự chủ (NV-04), tính toán điều chỉnh quỹ lương hàng loạt (DX-03), thẩm định hồ sơ trình từ đơn vị trực thuộc."),
+            Map.of(
+                "roleCode", "STC_DIRECTOR",
+                "roleName", "Lãnh đạo Sở Chủ quản / Sở Tài chính (Cấp Phê duyệt Cao nhất)",
+                "level", "EXECUTIVE_LEVEL",
+                "saPermissions",
+                    List.of(
+                        "BudgetTransactionCreate",
+                        "BudgetTransactionEdit",
+                        "BudgetAllocationCreate",
+                        "BudgetAllocationEdit"),
+                "responsibilities",
+                    "Phê duyệt cuối cùng và thực thi tức thì các quyết định giao bổ sung (NV-01), chuyển nguồn liên năm (NV-02), điều chuyển vượt trần (NV-03), cắt giảm tiết kiệm NQ 135 (NV-04), giải tỏa phong tỏa (DX-01), giải tỏa theo đợt (DX-02) và điều chỉnh lương hàng loạt (DX-03)."),
+            Map.of(
+                "roleCode", "TREASURY_RECONCILER",
+                "roleName", "Kế toán trưởng / Kiểm soát viên Đối soát Kho bạc (KBNN)",
+                "level", "TREASURY_LEVEL",
+                "saPermissions",
+                    List.of(
+                        "BudgetTransactionCreate",
+                        "BudgetTransactionEdit",
+                        "BudgetDisbursementEdit",
+                        "BudgetReportView"),
+                "responsibilities",
+                    "Thực thi thu hồi / hủy dự toán hết niên độ nộp trả NSNN ngày 31/01 (NV-05), xác nhận số dư chuyển nguồn tại KBNN (NV-02) và khóa sổ đối soát mẫu 01a/02-SDKP-ĐVDT."));
+
+    List<Map<String, Object>> operations =
+        List.of(
+            buildOpRoleRule(
+                "NV-01",
+                "Bổ sung Nội dung Nhiệm vụ Chi & Dự toán Đa lĩnh vực",
+                "/v1/budget/transactions/supplement-content",
+                List.of("UNIT_ACCOUNTANT", "UNIT_DIRECTOR", "PARENT_APPRAISER"),
+                List.of("PARENT_APPRAISER"),
+                List.of("STC_DIRECTOR"),
+                "Điều 49, 52 Luật NSNN 2015",
+                "Đơn vị lập tờ trình (PENDING) -> Phòng KH-TC thẩm định -> Lãnh đạo Sở / UBND phê duyệt (APPROVED)."),
+            buildOpRoleRule(
+                "NV-02",
+                "Chuyển nguồn Kinh phí Liên năm (N-1 -> N) & Ánh xạ Lĩnh vực",
+                "/v1/budget/transactions/carry-over-year",
+                List.of("UNIT_ACCOUNTANT", "UNIT_DIRECTOR", "PARENT_APPRAISER"),
+                List.of("PARENT_APPRAISER", "TREASURY_RECONCILER"),
+                List.of("STC_DIRECTOR", "TREASURY_RECONCILER"),
+                "Điều 64 Luật NSNN 2015 & Điều 43 NĐ 163/2016/NĐ-CP",
+                "Đơn vị đối chiếu số dư KBNN lập hồ sơ -> Kiểm soát viên KBNN xác nhận -> Lãnh đạo Sở/STC phê duyệt chuyển nguồn sang năm mới."),
+            buildOpRoleRule(
+                "NV-03",
+                "Điều chuyển Nội bộ Chéo giữa các Lĩnh vực (Tổng = 0)",
+                "/v1/budget/transactions/cross-domain-transfer",
+                List.of("UNIT_ACCOUNTANT", "UNIT_DIRECTOR", "PARENT_APPRAISER"),
+                List.of("UNIT_DIRECTOR", "PARENT_APPRAISER"),
+                List.of("UNIT_DIRECTOR", "STC_DIRECTOR"),
+                "Nghị định 60/2021/NĐ-CP & Thông tư 56/2022/TT-BTC",
+                "Thủ trưởng đơn vị (UNIT_DIRECTOR) được tự phê duyệt trong phạm vi kinh phí giao tự chủ; kinh phí không tự chủ trình Lãnh đạo Sở (STC_DIRECTOR)."),
+            buildOpRoleRule(
+                "NV-04",
+                "Tiết kiệm Chi thường xuyên (NQ 135), Giảm PA Tự chủ / Giảm Thừa",
+                "/v1/budget/transactions/saving-reduction",
+                List.of("PARENT_APPRAISER", "UNIT_DIRECTOR"),
+                List.of("PARENT_APPRAISER"),
+                List.of("STC_DIRECTOR"),
+                "Nghị quyết Chính phủ (NQ 135) & Quyết định phê duyệt PA tự chủ",
+                "Chuyên viên KH-TC lập phương án cắt giảm tiết kiệm -> Lãnh đạo Sở / STC phê duyệt điều chỉnh giảm dự toán."),
+            buildOpRoleRule(
+                "NV-05",
+                "Thu hồi / Hủy Dự toán Hết Niên độ Nộp trả NSNN (31/01)",
+                "/v1/budget/transactions/cancel-expired",
+                List.of("TREASURY_RECONCILER", "PARENT_APPRAISER"),
+                List.of("TREASURY_RECONCILER"),
+                List.of("TREASURY_RECONCILER", "STC_DIRECTOR"),
+                "Khoản 4 Điều 64 Luật NSNN 2015",
+                "Kiểm soát viên Đối soát Kho bạc / Kế toán trưởng khóa sổ sau 31/01 và hạch toán hủy dự toán hết niên độ."),
+            buildOpRoleRule(
+                "DX-01",
+                "Tạm giữ / Phong tỏa & Giải tỏa Dự toán Chờ Duyệt Chủ trương",
+                "/v1/budget/transactions/earmark-hold",
+                List.of("PARENT_APPRAISER", "STC_DIRECTOR"),
+                List.of("PARENT_APPRAISER"),
+                List.of("PARENT_APPRAISER", "STC_DIRECTOR"),
+                "Quy chế Quản lý Tài chính nội bộ & Kiểm soát cam kết chi",
+                "Chuyên viên thẩm định (PARENT_APPRAISER) được phép Tạm giữ (HOLD); chỉ Lãnh đạo Sở (STC_DIRECTOR) được phép Giải tỏa (RELEASE)."),
+            buildOpRoleRule(
+                "DX-02",
+                "Giải tỏa / Cấp phát Dự toán Đầu năm theo Đợt hoặc Tiến độ Thu",
+                "/v1/budget/transactions/tranche-release",
+                List.of("PARENT_APPRAISER", "STC_DIRECTOR"),
+                List.of("PARENT_APPRAISER", "TREASURY_RECONCILER"),
+                List.of("STC_DIRECTOR"),
+                "Thông tư 342/2016/TT-BTC",
+                "Chuyên viên KH-TC đối chiếu tiến độ thu phí/lệ phí trình Lãnh đạo Sở giải tỏa hạn mức từng đợt (Q1..Q4)."),
+            buildOpRoleRule(
+                "DX-03",
+                "Điều chỉnh Dự toán Hàng loạt theo Lương cơ sở & Biên chế",
+                "/v1/budget/transactions/batch-payroll-indexation",
+                List.of("PARENT_APPRAISER", "STC_DIRECTOR"),
+                List.of("PARENT_APPRAISER"),
+                List.of("STC_DIRECTOR"),
+                "Nghị định Chính phủ quy định mức lương cơ sở & Quyết định giao biên chế",
+                "Chuyên viên KH-TC chạy công cụ tính toán hàng loạt -> Lãnh đạo Sở phê duyệt phân bổ bổ sung quỹ lương cho các đơn vị."),
+            buildOpRoleRule(
+                "DX-04",
+                "Trích lập 4 Quỹ Tự chủ Tài chính Cuối năm (NĐ 60/2021/NĐ-CP)",
+                "/v1/budget/transactions/autonomy-fund-distribution",
+                List.of("UNIT_ACCOUNTANT", "UNIT_DIRECTOR"),
+                List.of("UNIT_DIRECTOR", "PARENT_APPRAISER"),
+                List.of("UNIT_DIRECTOR", "STC_DIRECTOR"),
+                "Điều 14, Điều 18 Nghị định 60/2021/NĐ-CP",
+                "Kế toán đơn vị lập bảng phân phối chênh lệch thu - chi -> Thủ trưởng đơn vị (UNIT_DIRECTOR) phê duyệt trích lập 4 Quỹ theo Quy chế chi tiêu nội bộ."));
+
+    Map<String, Object> res = new LinkedHashMap<>();
+    res.put("roles", roles);
+    res.put("operations", operations);
+    res.put("totalRoles", roles.size());
+    res.put("totalOperations", operations.size());
+    return res;
+  }
+
+  private Map<String, Object> buildOpRoleRule(
+      String operationCode,
+      String operationName,
+      String endpoint,
+      List<String> initiatorRoles,
+      List<String> appraiserRoles,
+      List<String> approverRoles,
+      String legalBasis,
+      String segregationNote) {
+    Map<String, Object> m = new LinkedHashMap<>();
+    m.put("operationCode", operationCode);
+    m.put("operationName", operationName);
+    m.put("endpoint", endpoint);
+    m.put("initiatorRoles", initiatorRoles);
+    m.put("appraiserRoles", appraiserRoles);
+    m.put("approverRoles", approverRoles);
+    m.put("legalBasis", legalBasis);
+    m.put("segregationOfDutiesNote", segregationNote);
+    return m;
+  }
+
+  private Map<String, Object> evaluateOperationRoleGate(
+      String operationCode, Map<String, Object> body, BigDecimal amount) {
+    String actorRole =
+        extractString(body, "actorRole", "roleCode", "STC_DIRECTOR").toUpperCase();
+    boolean strictRoleCheck =
+        body != null && Boolean.parseBoolean(String.valueOf(body.get("strictRoleCheck")));
+
+    String actorRoleName =
+        switch (actorRole) {
+          case "UNIT_ACCOUNTANT" -> "Kế toán Đơn vị Dự toán Cấp dưới (Cấp III)";
+          case "UNIT_DIRECTOR" -> "Thủ trưởng Đơn vị Sử dụng Ngân sách";
+          case "PARENT_APPRAISER" -> "Chuyên viên Thẩm định Tài chính - Kế hoạch (Cấp I)";
+          case "TREASURY_RECONCILER" -> "Kiểm soát viên Đối soát Kho bạc (KBNN)";
+          default -> "Lãnh đạo Sở Chủ quản / Sở Tài chính (STC_DIRECTOR)";
+        };
+
+    List<String> allowedInitiators =
+        switch (operationCode) {
+          case "NV-01", "NV-02", "NV-03" -> List.of(
+              "UNIT_ACCOUNTANT", "UNIT_DIRECTOR", "PARENT_APPRAISER", "STC_DIRECTOR", "TREASURY_RECONCILER");
+          case "NV-04" -> List.of("PARENT_APPRAISER", "UNIT_DIRECTOR", "STC_DIRECTOR");
+          case "NV-05" -> List.of("TREASURY_RECONCILER", "PARENT_APPRAISER", "STC_DIRECTOR");
+          case "DX-01", "DX-02", "DX-03" -> List.of("PARENT_APPRAISER", "STC_DIRECTOR");
+          case "DX-04" -> List.of("UNIT_ACCOUNTANT", "UNIT_DIRECTOR", "PARENT_APPRAISER", "STC_DIRECTOR");
+          default -> List.of("STC_DIRECTOR");
+        };
+
+    List<String> allowedApprovers =
+        switch (operationCode) {
+          case "NV-01", "NV-04", "DX-02", "DX-03" -> List.of("STC_DIRECTOR");
+          case "NV-02", "NV-05" -> List.of("STC_DIRECTOR", "TREASURY_RECONCILER");
+          case "NV-03", "DX-04" -> List.of("UNIT_DIRECTOR", "STC_DIRECTOR");
+          case "DX-01" -> {
+            String holdAction = extractString(body, "holdAction", "actionMode", "HOLD").toUpperCase();
+            yield "RELEASE".equals(holdAction) || "RELEASE_HOLD".equals(holdAction)
+                ? List.of("STC_DIRECTOR")
+                : List.of("PARENT_APPRAISER", "STC_DIRECTOR");
+          }
+          default -> List.of("STC_DIRECTOR");
+        };
+
+    boolean canInitiate = allowedInitiators.contains(actorRole);
+    if (!canInitiate && strictRoleCheck) {
+      throw new BaseException(
+          "Vai trò ["
+              + actorRoleName
+              + "] không có thẩm quyền khởi tạo nghiệp vụ ["
+              + operationCode
+              + "]. Yêu cầu một trong các vai trò: "
+              + String.join(", ", allowedInitiators));
+    }
+
+    boolean canAutoApprove = allowedApprovers.contains(actorRole);
+    String effectiveApprovalStatus = canAutoApprove ? "APPROVED" : "PENDING";
+    String requiredNextApprover =
+        canAutoApprove ? "NONE" : (allowedApprovers.isEmpty() ? "STC_DIRECTOR" : allowedApprovers.getFirst());
+
+    Map<String, Object> meta = new LinkedHashMap<>();
+    meta.put("operationCode", operationCode);
+    meta.put("actorRole", actorRole);
+    meta.put("actorRoleName", actorRoleName);
+    meta.put("canInitiate", canInitiate);
+    meta.put("canAutoApprove", canAutoApprove);
+    meta.put("effectiveApprovalStatus", effectiveApprovalStatus);
+    meta.put("requiredApproverRole", requiredNextApprover);
+    meta.put("allowedInitiatorRoles", allowedInitiators);
+    meta.put("allowedApproverRoles", allowedApprovers);
+    meta.put("evaluatedAmount", amount);
+    return meta;
   }
 
   private BudgetAllocation resolveExistingAllocation(Map<String, Object> body, int year) {
