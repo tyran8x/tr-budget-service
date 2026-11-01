@@ -52,7 +52,7 @@ public class BudgetEstimateItem extends BaseCommonEntity implements AppIsolated 
   @GeneratedValue(strategy = GenerationType.IDENTITY)
   private Long id;
 
-  @Column(name = "app_code", length = 50, nullable = false)
+  @Column(name = "app_code", length = 50, nullable = false, columnDefinition = "varchar(50) default 'ADMIN'")
   @Builder.Default
   private String appCode = "ADMIN";
 
