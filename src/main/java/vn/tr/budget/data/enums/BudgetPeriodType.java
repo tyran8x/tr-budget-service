@@ -19,4 +19,16 @@ public enum BudgetPeriodType {
 
   private final String code;
   private final String label;
+
+  public static BudgetPeriodType fromCode(String code) {
+    if (code == null || code.isBlank()) {
+      return null;
+    }
+    for (BudgetPeriodType value : values()) {
+      if (value.code.equalsIgnoreCase(code.trim())) {
+        return value;
+      }
+    }
+    return null;
+  }
 }

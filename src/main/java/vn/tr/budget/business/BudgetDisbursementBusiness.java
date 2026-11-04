@@ -33,9 +33,13 @@ import org.springframework.beans.factory.annotation.Autowired;
 import vn.tr.budget.business.helper.BudgetIntegrationOrchestrator;
 import vn.tr.budget.business.helper.BudgetWorkflowEngineHelper;
 import vn.tr.budget.dao.model.BudgetAllocation;
+import vn.tr.budget.dao.model.BudgetCategory;
 import vn.tr.budget.dao.model.BudgetEstimateItem;
+import vn.tr.budget.dao.model.BudgetUnitConfig;
 import vn.tr.budget.dao.service.BudgetAllocationRepo;
+import vn.tr.budget.dao.service.BudgetCategoryRepo;
 import vn.tr.budget.dao.service.BudgetEstimateItemRepo;
+import vn.tr.budget.dao.service.BudgetUnitConfigRepo;
 import vn.tr.common.core.exception.base.BaseException;
 
 /**
@@ -60,6 +64,12 @@ public class BudgetDisbursementBusiness {
 
   @Autowired(required = false)
   private BudgetEstimateItemRepo budgetEstimateItemRepo;
+
+  @Autowired(required = false)
+  private BudgetUnitConfigRepo budgetUnitConfigRepo;
+
+  @Autowired(required = false)
+  private BudgetCategoryRepo budgetCategoryRepo;
 
   @Autowired(required = false)
   private BudgetIntegrationOrchestrator integrationOrchestrator;
@@ -448,9 +458,7 @@ public class BudgetDisbursementBusiness {
             : disb.getAmount();
     disb.setSettledAmount(settledAmt);
     disb.setSettledDate(LocalDateTime.now());
-    if ("ADVANCE".equalsIgnoreCase(disb.getDisbursementType())) {
-      disb.setDisbursementType("ADVANCE_SETTLEMENT");
-    } else {
+    if (!"ADVANCE".equalsIgnoreCase(disb.getDisbursementType())) {
       disb.setDisbursementType("SETTLEMENT");
     }
     disb.setApprovalStatus("SETTLED");
@@ -568,20 +576,89 @@ public class BudgetDisbursementBusiness {
             ? budgetAllocationRepo.findById(disb.getAllocationId()).orElse(null)
             : null;
 
+    Long targetNodeId =
+        disb.getNodeId() != null ? disb.getNodeId() : (alloc != null ? alloc.getNodeId() : null);
+    String targetNodeCode =
+        StrUtil.isNotBlank(disb.getNodeCode())
+            ? disb.getNodeCode()
+            : (alloc != null ? alloc.getNodeCode() : null);
+
+    BudgetUnitConfig unitCfg = null;
+    if (budgetUnitConfigRepo != null) {
+      if (targetNodeId != null) {
+        unitCfg = budgetUnitConfigRepo.findFirstByNodeIdOrderByIdDesc(targetNodeId).orElse(null);
+      }
+      if (unitCfg == null && StrUtil.isNotBlank(targetNodeCode)) {
+        unitCfg =
+            budgetUnitConfigRepo
+                .findFirstByNodeCodeIgnoreCaseOrderByIdDesc(targetNodeCode.trim())
+                .orElse(null);
+      }
+    }
+
+    Long targetCatId =
+        disb.getCategoryId() != null
+            ? disb.getCategoryId()
+            : (alloc != null ? alloc.getCategoryId() : null);
+    String targetCatCode =
+        StrUtil.isNotBlank(disb.getCategoryCode())
+            ? disb.getCategoryCode()
+            : (alloc != null ? alloc.getCategoryCode() : null);
+
+    BudgetCategory catCfg = null;
+    if (budgetCategoryRepo != null) {
+      if (targetCatId != null) {
+        catCfg = budgetCategoryRepo.findById(targetCatId).orElse(null);
+      }
+      if (catCfg == null && StrUtil.isNotBlank(targetCatCode)) {
+        List<BudgetCategory> cats =
+            budgetCategoryRepo.findAllByCodeIgnoreCaseIncludingDeletedSorted(targetCatCode.trim());
+        if (!cats.isEmpty()) {
+          catCfg = cats.getFirst();
+        }
+      }
+    }
+
     String formCode =
         "ADVANCE".equalsIgnoreCase(disb.getDisbursementType())
             ? "C2-03/NS (Giấy đề nghị thanh toán tạm ứng)"
             : "C2-02a/NS (Giấy rút dự toán ngân sách nhà nước)";
-    String chapterCode = "423";
+    String chapterCode =
+        unitCfg != null && StrUtil.isNotBlank(unitCfg.getDefaultChapterCode())
+            ? unitCfg.getDefaultChapterCode()
+            : (catCfg != null && StrUtil.isNotBlank(catCfg.getChapterCode())
+                ? catCfg.getChapterCode()
+                : "423");
     String clauseCode =
-        alloc != null && StrUtil.isNotBlank(alloc.getCategoryCode())
-            ? alloc.getCategoryCode()
-            : "281";
-    String subItemCode = StrUtil.blankToDefault(disb.getSubItemCode(), "6551");
+        catCfg != null && StrUtil.isNotBlank(catCfg.getClauseCode())
+            ? catCfg.getClauseCode()
+            : (StrUtil.isNotBlank(targetCatCode) ? targetCatCode : "281");
+    String subItemCode =
+        StrUtil.isNotBlank(disb.getSubItemCode())
+            ? disb.getSubItemCode()
+            : (catCfg != null && StrUtil.isNotBlank(catCfg.getSubItemCode())
+                ? catCfg.getSubItemCode()
+                : "6551");
     String voucherNo =
         StrUtil.blankToDefault(disb.getVoucherNo(), "C2-02A-" + disb.getCode());
     String treasuryRefCode =
         StrUtil.blankToDefault(disb.getTreasuryRefCode(), "DVC-KBNN-" + disb.getId());
+    String treasuryAccountNo =
+        unitCfg != null && StrUtil.isNotBlank(unitCfg.getTreasuryAccountNo())
+            ? unitCfg.getTreasuryAccountNo()
+            : "3712.1.1054321";
+    String beneficiaryBankAccount =
+        StrUtil.isNotBlank(disb.getBeneficiaryBankAccount())
+            ? disb.getBeneficiaryBankAccount()
+            : (unitCfg != null && StrUtil.isNotBlank(unitCfg.getBankAccountNo())
+                ? unitCfg.getBankAccountNo()
+                : "118000123456");
+    String beneficiaryBankName =
+        StrUtil.isNotBlank(disb.getBeneficiaryBankName())
+            ? disb.getBeneficiaryBankName()
+            : (unitCfg != null && StrUtil.isNotBlank(unitCfg.getBankName())
+                ? unitCfg.getBankName()
+                : "VietinBank Chi nhánh Đà Nẵng");
     BigDecimal amount = workflowEngineHelper.safe(disb.getAmount());
     BigDecimal taxAmount = workflowEngineHelper.safe(disb.getTaxAmount());
     BigDecimal netPaymentAmount =
@@ -602,7 +679,9 @@ public class BudgetDisbursementBusiness {
             + StrUtil.blankToDefault(disb.getNodeCode(), "VAN_PHONG_SO")
             + "</CODE><NAME>"
             + StrUtil.blankToDefault(disb.getNodeName(), "Văn phòng Sở")
-            + "</NAME><CHAPTER>"
+            + "</NAME><TREASURY_ACCOUNT>"
+            + treasuryAccountNo
+            + "</TREASURY_ACCOUNT><CHAPTER>"
             + chapterCode
             + "</CHAPTER><CLAUSE>"
             + clauseCode
@@ -618,9 +697,9 @@ public class BudgetDisbursementBusiness {
             + "</NET_AMOUNT><BENEFICIARY>"
             + StrUtil.blankToDefault(disb.getBeneficiaryName(), "Đơn vị thụ hưởng hợp đồng")
             + "</BENEFICIARY><BANK_ACCOUNT>"
-            + StrUtil.blankToDefault(disb.getBeneficiaryBankAccount(), "118000123456")
+            + beneficiaryBankAccount
             + "</BANK_ACCOUNT><BANK_NAME>"
-            + StrUtil.blankToDefault(disb.getBeneficiaryBankName(), "VietinBank Chi nhánh Đà Nẵng")
+            + beneficiaryBankName
             + "</BANK_NAME></PAYMENT></DVC_KBNN_PACKAGE>";
 
     Map<String, Object> pkg = new java.util.LinkedHashMap<>();
@@ -632,6 +711,7 @@ public class BudgetDisbursementBusiness {
     pkg.put("disbursementName", disb.getName());
     pkg.put("voucherNo", voucherNo);
     pkg.put("treasuryRefCode", treasuryRefCode);
+    pkg.put("treasuryAccountNo", treasuryAccountNo);
     pkg.put("budgetYear", disb.getBudgetYear());
     pkg.put("unitCode", StrUtil.blankToDefault(disb.getNodeCode(), "VAN_PHONG_SO"));
     pkg.put("unitName", StrUtil.blankToDefault(disb.getNodeName(), "Văn phòng Sở"));
@@ -644,12 +724,8 @@ public class BudgetDisbursementBusiness {
     pkg.put(
         "beneficiaryName",
         StrUtil.blankToDefault(disb.getBeneficiaryName(), "Đơn vị thụ hưởng hợp đồng"));
-    pkg.put(
-        "beneficiaryAccount",
-        StrUtil.blankToDefault(disb.getBeneficiaryBankAccount(), "118000123456"));
-    pkg.put(
-        "beneficiaryBank",
-        StrUtil.blankToDefault(disb.getBeneficiaryBankName(), "VietinBank Chi nhánh Đà Nẵng"));
+    pkg.put("beneficiaryAccount", beneficiaryBankAccount);
+    pkg.put("beneficiaryBank", beneficiaryBankName);
     pkg.put("digitalSignatureStatus", "READY_FOR_VGCA_TOKEN_SIGNING");
     pkg.put("exportedAt", LocalDate.now().toString());
     pkg.put("xmlPayloadPreview", xmlPayloadPreview);
@@ -688,9 +764,7 @@ public class BudgetDisbursementBusiness {
     disb.setVoucherNo(voucherNo);
     disb.setSettledAmount(disb.getAmount());
     disb.setSettledDate(LocalDateTime.now());
-    if ("ADVANCE".equalsIgnoreCase(disb.getDisbursementType())) {
-      disb.setDisbursementType("ADVANCE_SETTLEMENT");
-    } else {
+    if (!"ADVANCE".equalsIgnoreCase(disb.getDisbursementType())) {
       disb.setDisbursementType("SETTLEMENT");
     }
     disb.setApprovalStatus("SETTLED");

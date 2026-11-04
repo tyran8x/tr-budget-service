@@ -1,5 +1,6 @@
 package vn.tr.budget.business;
 
+import cn.dev33.satoken.stp.StpUtil;
 import cn.hutool.core.util.StrUtil;
 import cn.hutool.json.JSONArray;
 import cn.hutool.json.JSONObject;
@@ -430,6 +431,9 @@ public class BudgetTransactionBusiness {
         budgetTransactionService
             .findById(id)
             .orElseThrow(() -> new EntityNotFoundException(BudgetTransaction.class, id));
+    if ("APPROVED".equalsIgnoreCase(tx.getApprovalStatus())) {
+      return enrichData(budgetTransactionMapper.toData(tx));
+    }
     tx.setApprovalStatus("APPROVED");
     tx.setApprovedDate(LocalDateTime.now());
     if (integrationOrchestrator != null) {
@@ -2002,10 +2006,72 @@ public class BudgetTransactionBusiness {
     return m;
   }
 
+  private static final Map<String, List<String>> OPERATION_ALLOWED_ROLES =
+      Map.of(
+          "NV-01",
+              List.of(
+                  "UNIT_ACCOUNTANT",
+                  "UNIT_DIRECTOR",
+                  "PARENT_APPRAISER",
+                  "STC_DIRECTOR",
+                  "TREASURY_RECONCILER"),
+          "NV-02",
+              List.of(
+                  "UNIT_ACCOUNTANT",
+                  "UNIT_DIRECTOR",
+                  "PARENT_APPRAISER",
+                  "STC_DIRECTOR",
+                  "TREASURY_RECONCILER"),
+          "NV-03",
+              List.of(
+                  "UNIT_ACCOUNTANT",
+                  "UNIT_DIRECTOR",
+                  "PARENT_APPRAISER",
+                  "STC_DIRECTOR",
+                  "TREASURY_RECONCILER"),
+          "NV-04", List.of("PARENT_APPRAISER", "UNIT_DIRECTOR", "STC_DIRECTOR"),
+          "NV-05", List.of("TREASURY_RECONCILER", "PARENT_APPRAISER", "STC_DIRECTOR"),
+          "DX-01", List.of("PARENT_APPRAISER", "STC_DIRECTOR"),
+          "DX-02", List.of("PARENT_APPRAISER", "STC_DIRECTOR"),
+          "DX-03", List.of("PARENT_APPRAISER", "STC_DIRECTOR"),
+          "DX-04",
+              List.of("UNIT_ACCOUNTANT", "UNIT_DIRECTOR", "PARENT_APPRAISER", "STC_DIRECTOR"));
+
   private Map<String, Object> evaluateOperationRoleGate(
       String operationCode, Map<String, Object> body, BigDecimal amount) {
+    String explicitRole = extractString(body, "actorRole", "roleCode", "");
+    boolean authenticatedSession = false;
+    String sessionResolvedRole = "";
+    try {
+      if (StpUtil.isLogin()) {
+        authenticatedSession = true;
+        List<String> sessionRoles = StpUtil.getRoleList();
+        if (sessionRoles != null) {
+          for (String r : sessionRoles) {
+            if (r != null) {
+              String upper = r.trim().toUpperCase();
+              if (List.of(
+                      "STC_DIRECTOR",
+                      "TREASURY_RECONCILER",
+                      "PARENT_APPRAISER",
+                      "UNIT_DIRECTOR",
+                      "UNIT_ACCOUNTANT")
+                  .contains(upper)) {
+                sessionResolvedRole = upper;
+                break;
+              }
+            }
+          }
+        }
+      }
+    } catch (Exception ignored) {
+      // Bỏ qua trong môi trường Unit Test không khởi tạo Sa-Token Context
+    }
+
     String actorRole =
-        extractString(body, "actorRole", "roleCode", "STC_DIRECTOR").toUpperCase();
+        StrUtil.isNotBlank(explicitRole)
+            ? explicitRole.toUpperCase()
+            : (StrUtil.isNotBlank(sessionResolvedRole) ? sessionResolvedRole : "STC_DIRECTOR");
     boolean strictRoleCheck =
         body != null && Boolean.parseBoolean(String.valueOf(body.get("strictRoleCheck")));
 
@@ -2015,19 +2081,12 @@ public class BudgetTransactionBusiness {
           case "UNIT_DIRECTOR" -> "Thủ trưởng Đơn vị Sử dụng Ngân sách";
           case "PARENT_APPRAISER" -> "Chuyên viên Thẩm định Tài chính - Kế hoạch (Cấp I)";
           case "TREASURY_RECONCILER" -> "Kiểm soát viên Đối soát Kho bạc (KBNN)";
-          default -> "Lãnh đạo Sở Chủ quản / Sở Tài chính (STC_DIRECTOR)";
+          case "STC_DIRECTOR" -> "Lãnh đạo Sở Chủ quản / Sở Tài chính (STC_DIRECTOR)";
+          default -> "Vai trò chưa được cấp phép (" + actorRole + ")";
         };
 
     List<String> allowedInitiators =
-        switch (operationCode) {
-          case "NV-01", "NV-02", "NV-03" -> List.of(
-              "UNIT_ACCOUNTANT", "UNIT_DIRECTOR", "PARENT_APPRAISER", "STC_DIRECTOR", "TREASURY_RECONCILER");
-          case "NV-04" -> List.of("PARENT_APPRAISER", "UNIT_DIRECTOR", "STC_DIRECTOR");
-          case "NV-05" -> List.of("TREASURY_RECONCILER", "PARENT_APPRAISER", "STC_DIRECTOR");
-          case "DX-01", "DX-02", "DX-03" -> List.of("PARENT_APPRAISER", "STC_DIRECTOR");
-          case "DX-04" -> List.of("UNIT_ACCOUNTANT", "UNIT_DIRECTOR", "PARENT_APPRAISER", "STC_DIRECTOR");
-          default -> List.of("STC_DIRECTOR");
-        };
+        OPERATION_ALLOWED_ROLES.getOrDefault(operationCode, List.of("STC_DIRECTOR"));
 
     List<String> allowedApprovers =
         switch (operationCode) {
@@ -2063,6 +2122,7 @@ public class BudgetTransactionBusiness {
     meta.put("operationCode", operationCode);
     meta.put("actorRole", actorRole);
     meta.put("actorRoleName", actorRoleName);
+    meta.put("authenticatedSession", authenticatedSession);
     meta.put("canInitiate", canInitiate);
     meta.put("canAutoApprove", canAutoApprove);
     meta.put("effectiveApprovalStatus", effectiveApprovalStatus);
@@ -2079,18 +2139,13 @@ public class BudgetTransactionBusiness {
     }
     Long allocId = parseLongOrNull(body, "allocationId");
     if (allocId != null) {
-      BudgetAllocation found = budgetAllocationRepo.findById(allocId).orElse(null);
-      if (found != null) {
-        return found;
-      }
+      return budgetAllocationRepo.findById(allocId).orElse(null);
     }
     String allocCode = extractString(body, "allocationCode", null, "");
     if (StrUtil.isNotBlank(allocCode)) {
       List<BudgetAllocation> byCode =
           budgetAllocationRepo.findAllByCodeIgnoreCaseIncludingDeletedSorted(allocCode.trim());
-      if (!byCode.isEmpty()) {
-        return byCode.getFirst();
-      }
+      return byCode.isEmpty() ? null : byCode.getFirst();
     }
     Long nodeId = parseLongOrNull(body, "nodeId");
     if (nodeId != null) {
@@ -2101,6 +2156,7 @@ public class BudgetTransactionBusiness {
           return a;
         }
       }
+      return null;
     }
     String nodeCode = extractString(body, "nodeCode", "unitNodeCode", "");
     List<BudgetAllocation> yearAllocs = budgetAllocationRepo.findByBudgetYearOrderByIdAsc(year);
@@ -2111,6 +2167,7 @@ public class BudgetTransactionBusiness {
           return a;
         }
       }
+      return null;
     }
     for (BudgetAllocation a : yearAllocs) {
       if (!"REVENUE".equalsIgnoreCase(a.getItemType())) {

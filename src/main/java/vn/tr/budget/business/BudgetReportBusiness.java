@@ -41,10 +41,12 @@ import vn.tr.budget.dao.model.BudgetAllocation;
 import vn.tr.budget.dao.model.BudgetCategory;
 import vn.tr.budget.dao.model.BudgetDisbursement;
 import vn.tr.budget.dao.model.BudgetTransaction;
+import vn.tr.budget.dao.model.BudgetUnitConfig;
 import vn.tr.budget.dao.service.BudgetAllocationRepo;
 import vn.tr.budget.dao.service.BudgetCategoryRepo;
 import vn.tr.budget.dao.service.BudgetDisbursementRepo;
 import vn.tr.budget.dao.service.BudgetTransactionRepo;
+import vn.tr.budget.dao.service.BudgetUnitConfigRepo;
 
 /**
  * Lớp điều phối nghiệp vụ cho BudgetReport.
@@ -75,7 +77,14 @@ public class BudgetReportBusiness {
   private BudgetTransactionRepo budgetTransactionRepo;
 
   @Autowired(required = false)
+  private BudgetUnitConfigRepo budgetUnitConfigRepo;
+
+  @Autowired(required = false)
   private BudgetIntegrationOrchestrator integrationOrchestrator;
+
+  public void setBudgetTransactionRepo(BudgetTransactionRepo budgetTransactionRepo) {
+    this.budgetTransactionRepo = budgetTransactionRepo;
+  }
 
   public JpaRepository<BudgetReport, Long> getInjectedRepo() {
     return budgetReportService.getRepository();
@@ -480,40 +489,65 @@ public class BudgetReportBusiness {
             ? budgetDisbursementRepo.findByBudgetYearOrderByIdDesc(year)
             : List.of();
 
-    List<Map<String, Object>> form01aRows = new ArrayList<>();
+    List< Map<String, Object>> form01aRows = new ArrayList<>();
     BigDecimal totalInit = BigDecimal.ZERO;
     BigDecimal totalSupplement = BigDecimal.ZERO;
     BigDecimal totalCarryOver = BigDecimal.ZERO;
     BigDecimal totalEffective = BigDecimal.ZERO;
     BigDecimal totalCommitted = BigDecimal.ZERO;
+    BigDecimal totalAdvanced = BigDecimal.ZERO;
     BigDecimal totalDisbursed = BigDecimal.ZERO;
+    BigDecimal totalSettled = BigDecimal.ZERO;
     BigDecimal totalAvailable = BigDecimal.ZERO;
 
+    Long resolvedUnitNodeId = nodeId;
     for (BudgetAllocation a : allocs) {
       if ("REVENUE".equalsIgnoreCase(a.getItemType())) {
         continue;
       }
-      BigDecimal init = a.getInitialAmount() != null ? a.getInitialAmount() : BigDecimal.ZERO;
+      if (quarter != null
+          && a.getBudgetQuarter() != null
+          && !quarter.equals(a.getBudgetQuarter())) {
+        continue;
+      }
+      if (resolvedUnitNodeId == null && a.getNodeId() != null) {
+        resolvedUnitNodeId = a.getNodeId();
+      }
+      BigDecimal init = safeDec(a.getInitialAmount());
       BigDecimal supp =
-          (a.getSupplementAmount() != null ? a.getSupplementAmount() : BigDecimal.ZERO)
-              .add(a.getTransferNetAmount() != null ? a.getTransferNetAmount() : BigDecimal.ZERO)
-              .subtract(a.getReductionAmount() != null ? a.getReductionAmount() : BigDecimal.ZERO);
+          safeDec(a.getSupplementAmount())
+              .add(safeDec(a.getTransferNetAmount()))
+              .subtract(safeDec(a.getReductionAmount()));
       BigDecimal co =
-          (a.getCarryOverInAmount() != null ? a.getCarryOverInAmount() : BigDecimal.ZERO)
-              .subtract(
-                  a.getCarryOverOutAmount() != null ? a.getCarryOverOutAmount() : BigDecimal.ZERO);
-      BigDecimal eff = a.getEffectiveAmount() != null ? a.getEffectiveAmount() : BigDecimal.ZERO;
-      BigDecimal comm = a.getCommittedAmount() != null ? a.getCommittedAmount() : BigDecimal.ZERO;
-      BigDecimal disb = a.getDisbursedAmount() != null ? a.getDisbursedAmount() : BigDecimal.ZERO;
-      BigDecimal avail = a.getAvailableAmount() != null ? a.getAvailableAmount() : BigDecimal.ZERO;
+          safeDec(a.getCarryOverInAmount()).subtract(safeDec(a.getCarryOverOutAmount()));
+      BigDecimal eff = safeDec(a.getEffectiveAmount());
+      BigDecimal comm = safeDec(a.getCommittedAmount());
+      BigDecimal adv = safeDec(a.getAdvancedAmount());
+      BigDecimal disb = safeDec(a.getDisbursedAmount());
+      BigDecimal settled =
+          safeDec(a.getSettledAmount()).compareTo(BigDecimal.ZERO) > 0
+              ? safeDec(a.getSettledAmount())
+              : disb;
+      BigDecimal avail = safeDec(a.getAvailableAmount());
 
       totalInit = totalInit.add(init);
       totalSupplement = totalSupplement.add(supp);
       totalCarryOver = totalCarryOver.add(co);
       totalEffective = totalEffective.add(eff);
       totalCommitted = totalCommitted.add(comm);
+      totalAdvanced = totalAdvanced.add(adv);
       totalDisbursed = totalDisbursed.add(disb);
+      totalSettled = totalSettled.add(settled);
       totalAvailable = totalAvailable.add(avail);
+
+      String unitChapterCode = "423";
+      if (budgetUnitConfigRepo != null && a.getNodeId() != null) {
+        BudgetUnitConfig uCfg =
+            budgetUnitConfigRepo.findFirstByNodeIdOrderByIdDesc(a.getNodeId()).orElse(null);
+        if (uCfg != null && StrUtil.isNotBlank(uCfg.getDefaultChapterCode())) {
+          unitChapterCode = uCfg.getDefaultChapterCode();
+        }
+      }
 
       Map<String, Object> row = new LinkedHashMap<>();
       row.put("allocationCode", a.getCode());
@@ -521,7 +555,7 @@ public class BudgetReportBusiness {
       row.put("unitName", a.getNodeName());
       row.put("nodeCode", a.getNodeCode());
       row.put("nodeName", a.getNodeName());
-      row.put("chapterCode", "423");
+      row.put("chapterCode", unitChapterCode);
       row.put("clauseCode", StrUtil.blankToDefault(a.getCategoryCode(), "281"));
       row.put("categoryCode", StrUtil.blankToDefault(a.getCategoryCode(), "6000"));
       row.put("categoryName", StrUtil.blankToDefault(a.getCategoryName(), "Chi thường xuyên"));
@@ -533,9 +567,9 @@ public class BudgetReportBusiness {
       row.put("carryOverNet", co);
       row.put("effectiveEstimate", eff);
       row.put("committedAmount", comm);
-      row.put("disbursedAdvanceBalance", comm);
+      row.put("disbursedAdvanceBalance", adv);
       row.put("disbursedAtTreasury", disb);
-      row.put("settledActualExpenditure", disb);
+      row.put("settledActualExpenditure", settled);
       row.put("remainingBalance", avail);
       row.put("remainingEstimateBalance", avail);
       row.put("reconciledStatus", "MATCHED_KBNN");
@@ -548,10 +582,30 @@ public class BudgetReportBusiness {
       if (nodeId != null && !nodeId.equals(d.getNodeId())) {
         continue;
       }
+      if (quarter != null) {
+        if (d.getBudgetQuarter() != null && !quarter.equals(d.getBudgetQuarter())) {
+          continue;
+        }
+        if (d.getBudgetQuarter() == null && d.getVoucherDate() != null) {
+          int voucherQuarter = (d.getVoucherDate().getMonthValue() - 1) / 3 + 1;
+          if (voucherQuarter != quarter) {
+            continue;
+          }
+        }
+      }
       if (StrUtil.isNotBlank(d.getTreasuryRefCode())) {
         matchedVouchers++;
       } else {
         pendingVouchers++;
+      }
+    }
+
+    String treasuryAgencyName = "Kho bạc Nhà nước Thành phố Đà Nẵng";
+    if (budgetUnitConfigRepo != null && resolvedUnitNodeId != null) {
+      BudgetUnitConfig uCfg =
+          budgetUnitConfigRepo.findFirstByNodeIdOrderByIdDesc(resolvedUnitNodeId).orElse(null);
+      if (uCfg != null && StrUtil.isNotBlank(uCfg.getTreasuryBranchName())) {
+        treasuryAgencyName = uCfg.getTreasuryBranchName();
       }
     }
 
@@ -561,14 +615,16 @@ public class BudgetReportBusiness {
     statement.put("budgetYear", year);
     statement.put("quarter", q);
     statement.put("generatedDate", LocalDate.now().toString());
-    statement.put("treasuryAgency", "Kho bạc Nhà nước Thành phố Đà Nẵng");
-    statement.put("treasuryAgencyName", "Kho bạc Nhà nước Thành phố Đà Nẵng");
+    statement.put("treasuryAgency", treasuryAgencyName);
+    statement.put("treasuryAgencyName", treasuryAgencyName);
     statement.put("totalInitialEstimate", totalInit);
     statement.put("totalSupplementAndAdjustment", totalSupplement);
     statement.put("totalCarryOverNet", totalCarryOver);
     statement.put("totalEffectiveEstimate", totalEffective);
     statement.put("totalCommittedAmount", totalCommitted);
+    statement.put("totalDisbursedAdvanceBalance", totalAdvanced);
     statement.put("totalDisbursedAtTreasury", totalDisbursed);
+    statement.put("totalSettledActualExpenditure", totalSettled);
     statement.put("totalRemainingBalance", totalAvailable);
     statement.put("matchedVoucherCount", matchedVouchers);
     statement.put("pendingVoucherCount", pendingVouchers);
@@ -639,30 +695,15 @@ public class BudgetReportBusiness {
       }
     }
 
-    // Kiểm tra xem DB đã có dữ liệu phân bổ theo lĩnh vực động hoặc cấu hình lĩnh vực theo năm chưa
-    boolean hasDynamicDbData = !yearDomainConfigs.isEmpty();
-    for (BudgetAllocation a : allocs) {
-      if (StrUtil.isNotBlank(a.getDomainCode())
-          || StrUtil.isNotBlank(a.getDomainGroupCode())
-          || StrUtil.isNotBlank(a.getDynamicBreakdownJson())) {
-        hasDynamicDbData = true;
-        break;
-      }
-    }
-
-    if (hasDynamicDbData && (!allocs.isEmpty() || !yearDomainConfigs.isEmpty())) {
-      return buildDynamicMatrixFromDatabase(
-          year,
-          resolvedDate,
-          cutoffDate,
-          dimension,
-          resolvedViewMode,
-          allocs,
-          txs,
-          yearDomainConfigs);
-    }
-
-    return buildDynamicExampleMatrix(year, resolvedDate, isSnapshotOct23, dimension, resolvedViewMode);
+    return buildDynamicMatrixFromDatabase(
+        year,
+        resolvedDate,
+        cutoffDate,
+        dimension,
+        resolvedViewMode,
+        allocs,
+        txs,
+        yearDomainConfigs);
   }
 
   private Map<String, Object> buildDynamicMatrixFromDatabase(
@@ -773,7 +814,22 @@ public class BudgetReportBusiness {
       allocsByUnit.computeIfAbsent(uKey, k -> new ArrayList<>()).add(a);
     }
 
+    Map<String, List<BudgetTransaction>> txByUnit = new LinkedHashMap<>();
+    for (BudgetTransaction tx : txs) {
+      if ("INITIAL_ALLOCATION".equalsIgnoreCase(tx.getTxType())
+          || "CARRY_OVER_IN".equalsIgnoreCase(tx.getTxType())
+          || "REJECTED".equalsIgnoreCase(tx.getApprovalStatus())) {
+        continue;
+      }
+      if (cutoffDate != null && tx.getTxDate() != null && tx.getTxDate().isAfter(cutoffDate)) {
+        continue;
+      }
+      String uKey = StrUtil.blankToDefault(tx.getNodeCode(), "UNIT_" + tx.getNodeId());
+      txByUnit.computeIfAbsent(uKey, k -> new ArrayList<>()).add(tx);
+    }
+
     for (Map.Entry<String, List<BudgetAllocation>> entry : allocsByUnit.entrySet()) {
+      String uKey = entry.getKey();
       List<BudgetAllocation> uAllocs = entry.getValue();
       String uCode = uAllocs.getFirst().getNodeCode();
       String uName = StrUtil.blankToDefault(uAllocs.getFirst().getNodeName(), uCode);
@@ -811,6 +867,23 @@ public class BudgetReportBusiness {
         addColValue(adjTotalAllocByCol, cCode, adj);
         addColValue(agencyTotalAllocByCol, cCode, coIn.add(init).add(adj));
         addColValue(agencyTotalDisbByCol, cCode, disb);
+      }
+
+      if (sumColMap(uAdjAlloc).compareTo(BigDecimal.ZERO) == 0 && txByUnit.containsKey(uKey)) {
+        for (BudgetTransaction tx : txByUnit.get(uKey)) {
+          Map<String, BigDecimal> txAllocMap = extractTxBreakdownAlloc(tx, dimension, colCodes);
+          Map<String, BigDecimal> txDisbMap = extractTxBreakdownDisb(tx, dimension, colCodes);
+          for (String c : colCodes) {
+            BigDecimal aDelta = txAllocMap.getOrDefault(c, BigDecimal.ZERO);
+            BigDecimal dDelta = txDisbMap.getOrDefault(c, BigDecimal.ZERO);
+            addColValue(uAdjAlloc, c, aDelta);
+            addColValue(uAdjDisb, c, dDelta);
+            addColValue(adjTotalAllocByCol, c, aDelta);
+            addColValue(adjTotalDisbByCol, c, dDelta);
+            addColValue(agencyTotalAllocByCol, c, aDelta);
+            addColValue(agencyTotalDisbByCol, c, dDelta);
+          }
+        }
       }
 
       BigDecimal sumCarry = sumColMap(uCarryAlloc);
@@ -893,20 +966,6 @@ public class BudgetReportBusiness {
             ""));
 
     // Phần II: Chi tiết từng đợt biến động/điều chỉnh theo đơn vị từ BudgetTransaction
-    Map<String, List<BudgetTransaction>> txByUnit = new LinkedHashMap<>();
-    for (BudgetTransaction tx : txs) {
-      if ("INITIAL_ALLOCATION".equalsIgnoreCase(tx.getTxType())
-          || "CARRY_OVER_IN".equalsIgnoreCase(tx.getTxType())
-          || "REJECTED".equalsIgnoreCase(tx.getApprovalStatus())) {
-        continue;
-      }
-      if (cutoffDate != null && tx.getTxDate() != null && tx.getTxDate().isAfter(cutoffDate)) {
-        continue;
-      }
-      String uKey = StrUtil.blankToDefault(tx.getNodeCode(), "UNIT_" + tx.getNodeId());
-      txByUnit.computeIfAbsent(uKey, k -> new ArrayList<>()).add(tx);
-    }
-
     int sectionIndex = 2;
     List<Map<String, Object>> unitSections = new ArrayList<>();
     for (Map.Entry<String, List<BudgetTransaction>> entry : txByUnit.entrySet()) {
@@ -954,504 +1013,14 @@ public class BudgetReportBusiness {
     result.put("columns", columns);
     result.put("rows", rows);
     result.put("unitAdjustmentSections", unitSections);
+    result.put("totalInitial", sumColMap(initTotalAllocByCol));
+    result.put("totalCarryOver", sumColMap(carryTotalAllocByCol));
+    result.put("totalAdjustment", sumColMap(adjTotalAllocByCol));
     result.put("totalAllocated", sumColMap(agencyTotalAllocByCol));
     result.put("totalDisbursed", sumColMap(agencyTotalDisbByCol));
     result.put(
         "overallDisbursementRatePercent",
         calcPercent(sumColMap(agencyTotalDisbByCol), sumColMap(agencyTotalAllocByCol)));
-    return result;
-  }
-
-  /**
-   * Dựng Ma trận Động từ tập dữ liệu ví dụ minh họa khi DB chưa có bản ghi phân bổ đa lĩnh vực,
-   * đảm bảo cấu trúc trả về (columns động, allocatedByColumn, disbursedByColumn, 2 mốc ngày
-   * 2026-10-23 vs 2026-10-30 và 2 chế độ SEPARATE_INITIAL vs CUMULATIVE_EFFECTIVE) hoàn toàn
-   * tổng quát, không gắn cứng cột ở tầng giao diện.
-   */
-  private Map<String, Object> buildDynamicExampleMatrix(
-      int year,
-      String asOfDate,
-      boolean isSnapshotOct23,
-      String dimension,
-      String viewMode) {
-    Map<String, Map<String, Object>> colMetaMap = new LinkedHashMap<>();
-    if ("DOMAIN_GROUP".equalsIgnoreCase(dimension)) {
-      colMetaMap.put("GRP_CORE_TECH", createColMeta("GRP_CORE_TECH", "Nhóm KHCN & Hạ tầng", "RECURRENT", "Chi thường xuyên"));
-      colMetaMap.put("GRP_INNOV_DIGITAL", createColMeta("GRP_INNOV_DIGITAL", "Nhóm Đổi mới sáng tạo & Chuyển đổi số", "RECURRENT", "Chi thường xuyên"));
-    } else {
-      colMetaMap.put("KHCN", createColMeta("KHCN", "Khoa học công nghệ", "RECURRENT", "Chi thường xuyên"));
-      colMetaMap.put("HTTB", createColMeta("HTTB", "Hạ tầng thiết bị", "RECURRENT", "Chi thường xuyên"));
-      colMetaMap.put("DMST", createColMeta("DMST", "Đổi mới sáng tạo", "RECURRENT", "Chi thường xuyên"));
-      colMetaMap.put("CDS", createColMeta("CDS", "Chuyển đổi số", "RECURRENT", "Chi thường xuyên"));
-    }
-
-    List<String> colCodes = new ArrayList<>(colMetaMap.keySet());
-    List<Map<String, Object>> rows = new ArrayList<>();
-
-    // Tổng hợp cấp I (Dòng 1)
-    BigDecimal rootKhcnAlloc =
-        isSnapshotOct23 ? new BigDecimal("82357.139906") : new BigDecimal("82357.439906");
-    BigDecimal rootCdsAlloc =
-        isSnapshotOct23 ? new BigDecimal("63053.4704") : new BigDecimal("62939.8304");
-    Map<String, BigDecimal> rootAlloc =
-        mapDomainCols(dimension, rootKhcnAlloc, BigDecimal.ZERO, new BigDecimal("21035.2"), rootCdsAlloc);
-    Map<String, BigDecimal> rootDisb =
-        mapDomainCols(
-            dimension,
-            new BigDecimal("61455.3"),
-            BigDecimal.ZERO,
-            new BigDecimal("13759.6"),
-            new BigDecimal("31024.99"));
-
-    rows.add(
-        buildMatrixRow(
-            "1",
-            "AGENCY_HEADER",
-            "DON_VI_CAP_I",
-            "Sở Khoa học và Công nghệ (Ví dụ minh họa)",
-            "Sở Khoa học và Công nghệ",
-            rootAlloc,
-            rootDisb,
-            "Khoa học Công Nghệ: 74.62%"));
-
-    // Khối 1.1: Chuyển nguồn
-    rows.add(
-        buildMatrixRow(
-            "-",
-            "BLOCK_HEADER",
-            "BLOCK_CARRY_OVER",
-            "Chuyển nguồn " + year,
-            "Chuyển nguồn " + year,
-            mapDomainCols(dimension, new BigDecimal("35460.870306"), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO),
-            mapDomainCols(dimension, new BigDecimal("29753"), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO),
-            "Đổi mới sáng tạo: 65.41%"));
-    rows.add(
-        buildMatrixRow(
-            "-",
-            "UNIT_SUMMARY",
-            "VAN_PHONG_SO",
-            "Văn phòng Sở",
-            "Văn phòng Sở",
-            mapDomainCols(dimension, new BigDecimal("32607.870306"), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO),
-            mapDomainCols(dimension, new BigDecimal("28412"), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO),
-            isSnapshotOct23 ? "Chuyển đổi số: 49.20%" : "Chuyển đổi số: 49.29%"));
-    rows.add(
-        buildMatrixRow(
-            "-",
-            "UNIT_SUMMARY",
-            "TT_CNSH",
-            "Trung tâm Công nghệ sinh học Đà Nẵng",
-            "Trung tâm Công nghệ sinh học Đà Nẵng",
-            mapDomainCols(dimension, new BigDecimal("1341"), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO),
-            mapDomainCols(dimension, new BigDecimal("1341"), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO),
-            ""));
-    rows.add(
-        buildMatrixRow(
-            "-",
-            "UNIT_SUMMARY",
-            "TT_UDKHCN",
-            "Trung tâm Ứng dụng khoa học công nghệ và Tiêu chuẩn Đo lường Chất lượng Đà Nẵng",
-            "Trung tâm Ứng dụng khoa học công nghệ và Tiêu chuẩn Đo lường Chất lượng Đà Nẵng",
-            mapDomainCols(dimension, new BigDecimal("1512"), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO),
-            mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO),
-            ""));
-
-    // Khối 1.2: Dự toán giao đầu năm (hỗ trợ cả SEPARATE_INITIAL như bản 23/10 và CUMULATIVE_EFFECTIVE như bản 30/10)
-    if ("SEPARATE_INITIAL".equalsIgnoreCase(viewMode)) {
-      rows.add(
-          buildMatrixRow(
-              "-",
-              "BLOCK_HEADER",
-              "BLOCK_INITIAL",
-              "Dự toán giao đầu năm",
-              "Dự toán giao đầu năm",
-              mapDomainCols(dimension, new BigDecimal("52280"), BigDecimal.ZERO, new BigDecimal("18538"), new BigDecimal("124814")),
-              mapDomainCols(dimension, new BigDecimal("30884"), BigDecimal.ZERO, new BigDecimal("12012"), new BigDecimal("26458")),
-              ""));
-      rows.add(
-          buildMatrixRow(
-              "-",
-              "UNIT_SUMMARY",
-              "VAN_PHONG_SO",
-              "Văn phòng Sở",
-              "Văn phòng Sở",
-              mapDomainCols(dimension, new BigDecimal("32753"), BigDecimal.ZERO, new BigDecimal("9333"), new BigDecimal("84483")),
-              mapDomainCols(dimension, new BigDecimal("17505"), BigDecimal.ZERO, new BigDecimal("5533"), new BigDecimal("3126")),
-              ""));
-      rows.add(
-          buildMatrixRow(
-              "-",
-              "UNIT_SUMMARY",
-              "TT_KN_DMST",
-              "Trung tâm Hỗ trợ khởi nghiệp đổi mới sáng tạo Đà Nẵng",
-              "Trung tâm Hỗ trợ khởi nghiệp đổi mới sáng tạo Đà Nẵng",
-              mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("9205"), BigDecimal.ZERO),
-              mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("6479"), BigDecimal.ZERO),
-              ""));
-      rows.add(
-          buildMatrixRow(
-              "-",
-              "UNIT_SUMMARY",
-              "TT_CNSH",
-              "Trung tâm Công nghệ sinh học Đà Nẵng",
-              "Trung tâm Công nghệ sinh học Đà Nẵng",
-              mapDomainCols(dimension, new BigDecimal("7532"), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO),
-              mapDomainCols(dimension, new BigDecimal("5366"), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO),
-              ""));
-      rows.add(
-          buildMatrixRow(
-              "-",
-              "UNIT_SUMMARY",
-              "TT_UDKHCN",
-              "Trung tâm Ứng dụng khoa học công nghệ và Tiêu chuẩn Đo lường Chất lượng Đà Nẵng",
-              "Trung tâm Ứng dụng khoa học công nghệ và Tiêu chuẩn Đo lường Chất lượng Đà Nẵng",
-              mapDomainCols(dimension, new BigDecimal("11995"), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO),
-              mapDomainCols(dimension, new BigDecimal("8013"), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO),
-              ""));
-      rows.add(
-          buildMatrixRow(
-              "-",
-              "UNIT_SUMMARY",
-              "TT_IOC",
-              "Trung tâm Thông tin và giám sát, điều hành thông minh Đà Nẵng",
-              "Trung tâm Thông tin và giám sát, điều hành thông minh Đà Nẵng",
-              mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("12315")),
-              mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("7965")),
-              ""));
-      rows.add(
-          buildMatrixRow(
-              "-",
-              "UNIT_SUMMARY",
-              "TT_DDS",
-              "Trung tâm Chuyển đổi số và Công nghệ chiến lược Đà Nẵng",
-              "Trung tâm Chuyển đổi số và Công nghệ chiến lược Đà Nẵng",
-              mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("24566")),
-              mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("12980")),
-              "Đã trừ: 3,779 theo Công văn DDS"));
-      rows.add(
-          buildMatrixRow(
-              "-",
-              "UNIT_SUMMARY",
-              "TT_DSAC",
-              "Trung tâm Nghiên cứu, đào tạo thiết kế vi mạch và trí tuệ nhân tạo",
-              "Trung tâm Nghiên cứu, đào tạo thiết kế vi mạch và trí tuệ nhân tạo",
-              mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("3450")),
-              mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("2387")),
-              ""));
-    } else {
-      rows.add(
-          buildMatrixRow(
-              "-",
-              "BLOCK_HEADER",
-              "BLOCK_INITIAL",
-              "Dự toán giao đầu năm ( kể cả chuyển nguồn, điều chỉnh bổ sung trong năm)",
-              "Dự toán giao đầu năm ( kể cả chuyển nguồn, điều chỉnh bổ sung trong năm)",
-              rootAlloc,
-              rootDisb,
-              ""));
-      rows.add(
-          buildMatrixRow(
-              "-",
-              "UNIT_SUMMARY",
-              "VAN_PHONG_SO",
-              "Văn phòng Sở",
-              "Văn phòng Sở",
-              mapDomainCols(dimension, new BigDecimal("60180.870306"), BigDecimal.ZERO, new BigDecimal("10512"), new BigDecimal("10173.05")),
-              mapDomainCols(dimension, new BigDecimal("45917"), BigDecimal.ZERO, new BigDecimal("5533"), new BigDecimal("3200")),
-              ""));
-      rows.add(
-          buildMatrixRow(
-              "-",
-              "UNIT_SUMMARY",
-              "TT_KN_DMST",
-              "Trung tâm Hỗ trợ khởi nghiệp đổi mới sáng tạo Đà Nẵng",
-              "Trung tâm Hỗ trợ khởi nghiệp đổi mới sáng tạo Đà Nẵng",
-              mapDomainCols(dimension, new BigDecimal("310"), BigDecimal.ZERO, new BigDecimal("10523.2"), BigDecimal.ZERO),
-              mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("8226.6"), BigDecimal.ZERO),
-              ""));
-      rows.add(
-          buildMatrixRow(
-              "-",
-              "UNIT_SUMMARY",
-              "TT_CNSH",
-              "Trung tâm Công nghệ sinh học Đà Nẵng",
-              "Trung tâm Công nghệ sinh học Đà Nẵng",
-              mapDomainCols(dimension, new BigDecimal("10040.9"), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO),
-              mapDomainCols(dimension, new BigDecimal("7362"), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO),
-              ""));
-      rows.add(
-          buildMatrixRow(
-              "-",
-              "UNIT_SUMMARY",
-              "TT_UDKHCN",
-              "Trung tâm Ứng dụng khoa học công nghệ và Tiêu chuẩn Đo lường Chất lượng Đà Nẵng",
-              "Trung tâm Ứng dụng khoa học công nghệ và Tiêu chuẩn Đo lường Chất lượng Đà Nẵng",
-              mapDomainCols(dimension, new BigDecimal("11825.6696"), BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("712.3804")),
-              mapDomainCols(dimension, new BigDecimal("8176.3"), BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("50")),
-              ""));
-      rows.add(
-          buildMatrixRow(
-              "-",
-              "UNIT_SUMMARY",
-              "TT_IOC",
-              "Trung tâm Thông tin và giám sát, điều hành thông minh Đà Nẵng",
-              "Trung tâm Thông tin và giám sát, điều hành thông minh Đà Nẵng",
-              mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("14548.2")),
-              mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("9540")),
-              ""));
-      rows.add(
-          buildMatrixRow(
-              "-",
-              "UNIT_SUMMARY",
-              "TT_DDS",
-              "Trung tâm Chuyển đổi số và Công nghệ chiến lược Đà Nẵng",
-              "Trung tâm Chuyển đổi số và Công nghệ chiến lược Đà Nẵng",
-              mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("34060.4")),
-              mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("15847.99")),
-              "Đã trừ: 3,779 theo Công văn DDS"));
-      rows.add(
-          buildMatrixRow(
-              "-",
-              "UNIT_SUMMARY",
-              "TT_DSAC",
-              "Trung tâm Nghiên cứu, đào tạo thiết kế vi mạch và trí tuệ nhân tạo",
-              "Trung tâm Nghiên cứu, đào tạo thiết kế vi mạch và trí tuệ nhân tạo",
-              mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("3445.8")),
-              mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("2387")),
-              ""));
-    }
-
-    // Khối 1.3: Dự toán bổ sung điều chỉnh trong năm
-    BigDecimal adjKhcn =
-        isSnapshotOct23 ? new BigDecimal("-5383.7304") : new BigDecimal("-5383.4304");
-    BigDecimal adjCds =
-        isSnapshotOct23 ? new BigDecimal("-61760.5296") : new BigDecimal("-61874.1696");
-    rows.add(
-        buildMatrixRow(
-            "-",
-            "BLOCK_HEADER",
-            "BLOCK_ADJUSTMENT",
-            "Dự toán bổ sung điều chỉnh trong năm",
-            "Dự toán bổ sung điều chỉnh trong năm",
-            mapDomainCols(dimension, adjKhcn, BigDecimal.ZERO, new BigDecimal("2497.2"), adjCds),
-            mapDomainCols(dimension, new BigDecimal("818.3"), BigDecimal.ZERO, new BigDecimal("1747.6"), new BigDecimal("4566.99")),
-            ""));
-
-    // Phần II: Mục 2 -> 8 (Chi tiết các đợt bổ sung/điều chỉnh theo đơn vị)
-    List<Map<String, Object>> unitSections = new ArrayList<>();
-
-    // 2. Văn phòng Sở
-    List<Map<String, Object>> vpsItems = new ArrayList<>();
-    vpsItems.add(buildMatrixRow("2", "UNIT_ADJUSTMENT_HEADER", "VAN_PHONG_SO", "Văn phòng Sở", "Văn phòng Sở",
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("-73366")),
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO), ""));
-    vpsItems.add(buildMatrixRow("", "ADJUSTMENT_ITEM", "VAN_PHONG_SO", "Văn phòng Sở", "Điều chuyển nội bộ giữa các lĩnh vực (Tổng = 0)",
-        mapDomainCols(dimension, new BigDecimal("-2655"), BigDecimal.ZERO, new BigDecimal("2655"), BigDecimal.ZERO),
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO), "Điều chuyển chéo KHCN -> ĐMST"));
-    vpsItems.add(buildMatrixRow("", "ADJUSTMENT_ITEM", "VAN_PHONG_SO", "Văn phòng Sở", "Tiết kiệm chi thường xuyên theo Nghị quyết 135",
-        mapDomainCols(dimension, new BigDecimal("-1481"), BigDecimal.ZERO, new BigDecimal("-1299"), new BigDecimal("-1529")),
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO), "Tiết kiệm theo NQ 135"));
-    vpsItems.add(buildMatrixRow("", "ADJUSTMENT_ITEM", "VAN_PHONG_SO", "Văn phòng Sở", "Điều chỉnh giảm dự toán",
-        mapDomainCols(dimension, new BigDecimal("-1044"), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO),
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO), ""));
-    vpsItems.add(buildMatrixRow("", "ADJUSTMENT_ITEM", "VAN_PHONG_SO", "Văn phòng Sở", "Điều chỉnh giảm do thừa dự toán",
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("-177"), BigDecimal.ZERO),
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO), "Điều chỉnh giảm do thừa"));
-    vpsItems.add(buildMatrixRow("", "ADJUSTMENT_ITEM", "VAN_PHONG_SO", "Văn phòng Sở", "Bổ sung kinh phí nhiệm vụ CĐS đợt 1",
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("82.05")),
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("74")), ""));
-    if (isSnapshotOct23) {
-      vpsItems.add(buildMatrixRow("", "ADJUSTMENT_ITEM", "VAN_PHONG_SO", "Văn phòng Sở", "Bổ sung kinh phí nhiệm vụ CĐS (đợt ngày 23/10)",
-          mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("113.64")),
-          mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO), ""));
-    }
-    vpsItems.add(buildMatrixRow("", "ADJUSTMENT_ITEM", "VAN_PHONG_SO", "Văn phòng Sở", "Bổ sung kinh phí nhiệm vụ CĐS đợt 2",
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("503")),
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO), ""));
-    rows.addAll(vpsItems);
-    unitSections.add(Map.of("sectionNo", 2, "nodeCode", "VAN_PHONG_SO", "nodeName", "Văn phòng Sở", "items", vpsItems));
-
-    // 3. TT Ứng dụng KHCN & TCĐLCL
-    List<Map<String, Object>> udkhItems = new ArrayList<>();
-    udkhItems.add(buildMatrixRow("3", "UNIT_ADJUSTMENT_HEADER", "TT_UDKHCN", "Trung tâm Ứng dụng khoa học công nghệ và Tiêu chuẩn Đo lường Chất lượng Đà Nẵng", "Trung tâm Ứng dụng khoa học công nghệ và Tiêu chuẩn Đo lường Chất lượng Đà Nẵng",
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("855")),
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("50")), ""));
-    udkhItems.add(buildMatrixRow("", "ADJUSTMENT_ITEM", "TT_UDKHCN", "Trung tâm Ứng dụng KHCN & TCĐLCL", "Bổ sung nhiệm vụ KHCN đợt 1",
-        mapDomainCols(dimension, new BigDecimal("84.1"), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO),
-        mapDomainCols(dimension, new BigDecimal("84.1"), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO), ""));
-    udkhItems.add(buildMatrixRow("", "ADJUSTMENT_ITEM", "TT_UDKHCN", "Trung tâm Ứng dụng KHCN & TCĐLCL", "Bổ sung nhiệm vụ KHCN đợt 2",
-        mapDomainCols(dimension, new BigDecimal("105.6"), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO),
-        mapDomainCols(dimension, new BigDecimal("79.2"), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO), ""));
-    udkhItems.add(buildMatrixRow("", "ADJUSTMENT_ITEM", "TT_UDKHCN", "Trung tâm Ứng dụng KHCN & TCĐLCL", "Tiết kiệm theo NQ 135",
-        mapDomainCols(dimension, new BigDecimal("-898.3804"), BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("-122.6196")),
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO), "Tiết kiệm theo NQ 135"));
-    udkhItems.add(buildMatrixRow("", "ADJUSTMENT_ITEM", "TT_UDKHCN", "Trung tâm Ứng dụng KHCN & TCĐLCL", "Điều chỉnh giảm dự toán KHCN",
-        mapDomainCols(dimension, new BigDecimal("-1718.15"), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO),
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO), ""));
-    udkhItems.add(buildMatrixRow("", "ADJUSTMENT_ITEM", "TT_UDKHCN", "Trung tâm Ứng dụng KHCN & TCĐLCL", "Điều chỉnh giảm do thừa",
-        mapDomainCols(dimension, new BigDecimal("-217.5"), BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("-20")),
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO), "Điều chỉnh giảm do thừa"));
-    udkhItems.add(buildMatrixRow("", "ADJUSTMENT_ITEM", "TT_UDKHCN", "Trung tâm Ứng dụng KHCN & TCĐLCL", "Bổ sung nhiệm vụ KHCN đợt 3",
-        mapDomainCols(dimension, new BigDecimal("229"), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO),
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO), ""));
-    udkhItems.add(buildMatrixRow("", "ADJUSTMENT_ITEM", "TT_UDKHCN", "Trung tâm Ứng dụng KHCN & TCĐLCL", "Bổ sung nhiệm vụ KHCN đợt 4",
-        mapDomainCols(dimension, new BigDecimal("734"), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO),
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO), ""));
-    rows.addAll(udkhItems);
-    unitSections.add(Map.of("sectionNo", 3, "nodeCode", "TT_UDKHCN", "nodeName", "Trung tâm Ứng dụng khoa học công nghệ và Tiêu chuẩn Đo lường Chất lượng Đà Nẵng", "items", udkhItems));
-
-    // 4. TT IOC
-    List<Map<String, Object>> iocItems = new ArrayList<>();
-    iocItems.add(buildMatrixRow("4", "UNIT_ADJUSTMENT_HEADER", "TT_IOC", "Trung tâm Thông tin và giám sát, điều hành thông minh Đà Nẵng", "Trung tâm Thông tin và giám sát, điều hành thông minh Đà Nẵng",
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("1080")),
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("128")), ""));
-    iocItems.add(buildMatrixRow("", "ADJUSTMENT_ITEM", "TT_IOC", "Trung tâm IOC", "Bổ sung vận hành IOC đợt 1",
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("79.2")),
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("79")), ""));
-    iocItems.add(buildMatrixRow("", "ADJUSTMENT_ITEM", "TT_IOC", "Trung tâm IOC", "Bổ sung vận hành IOC đợt 2",
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("90")),
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("90")), ""));
-    iocItems.add(buildMatrixRow("", "ADJUSTMENT_ITEM", "TT_IOC", "Trung tâm IOC", "Bổ sung hạ tầng số & giám sát thông minh",
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("1502")),
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("1061")), "thiếu"));
-    iocItems.add(buildMatrixRow("", "ADJUSTMENT_ITEM", "TT_IOC", "Trung tâm IOC", "Tiết kiệm theo NQ 135",
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("-689")),
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO), "Tiết kiệm theo NQ 135"));
-    iocItems.add(buildMatrixRow("", "ADJUSTMENT_ITEM", "TT_IOC", "Trung tâm IOC", "Điều chỉnh giảm dự toán",
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("-46")),
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO), ""));
-    iocItems.add(buildMatrixRow("", "ADJUSTMENT_ITEM", "TT_IOC", "Trung tâm IOC", "Bổ sung nhiệm vụ CĐS đợt 4",
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("217")),
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("217")), ""));
-    rows.addAll(iocItems);
-    unitSections.add(Map.of("sectionNo", 4, "nodeCode", "TT_IOC", "nodeName", "Trung tâm Thông tin và giám sát, điều hành thông minh Đà Nẵng", "items", iocItems));
-
-    // 5. TT Chuyển đổi số và Công nghệ chiến lược (DDS)
-    List<Map<String, Object>> ddsItems = new ArrayList<>();
-    ddsItems.add(buildMatrixRow("5", "UNIT_ADJUSTMENT_HEADER", "TT_DDS", "Trung tâm Chuyển đổi số và Công nghệ chiến lược Đà Nẵng", "Trung tâm Chuyển đổi số và Công nghệ chiến lược Đà Nẵng",
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("14488")),
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("1801.59")), ""));
-    ddsItems.add(buildMatrixRow("", "ADJUSTMENT_ITEM", "TT_DDS", "Trung tâm DDS", "Bổ sung nhiệm vụ CĐS đợt 1",
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("71.4")),
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("71.4")), ""));
-    ddsItems.add(buildMatrixRow("", "ADJUSTMENT_ITEM", "TT_DDS", "Trung tâm DDS", "Bổ sung nhiệm vụ CĐS đợt 2",
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("1478.4")),
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("995")), ""));
-    ddsItems.add(buildMatrixRow("", "ADJUSTMENT_ITEM", "TT_DDS", "Trung tâm DDS", "Điều chỉnh giảm theo Phê duyệt Phương án tự chủ",
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("-3779")),
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO), "Điều chỉnh giảm theo Phê duyệt Phương án tự chủ"));
-    ddsItems.add(buildMatrixRow("", "ADJUSTMENT_ITEM", "TT_DDS", "Trung tâm DDS", "Điều chỉnh giảm do thừa",
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("-307.4")),
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO), "Điều chỉnh giảm do thừa"));
-    ddsItems.add(buildMatrixRow("", "ADJUSTMENT_ITEM", "TT_DDS", "Trung tâm DDS", "Tiết kiệm theo NQ 135",
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("-2457")),
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO), "Tiết kiệm theo NQ 135"));
-    rows.addAll(ddsItems);
-    unitSections.add(Map.of("sectionNo", 5, "nodeCode", "TT_DDS", "nodeName", "Trung tâm Chuyển đổi số và Công nghệ chiến lược Đà Nẵng", "items", ddsItems));
-
-    // 6. TT Nghiên cứu, đào tạo thiết kế vi mạch và AI (DSAC)
-    List<Map<String, Object>> dsacItems = new ArrayList<>();
-    dsacItems.add(buildMatrixRow("6", "UNIT_ADJUSTMENT_HEADER", "TT_DSAC", "Trung tâm Nghiên cứu, đào tạo thiết kế vi mạch và trí tuệ nhân tạo", "Trung tâm Nghiên cứu, đào tạo thiết kế vi mạch và trí tuệ nhân tạo",
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("1170")),
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO), ""));
-    dsacItems.add(buildMatrixRow("", "ADJUSTMENT_ITEM", "TT_DSAC", "Trung tâm DSAC", "Bổ sung đào tạo vi mạch đợt 1",
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("18")),
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO), ""));
-    dsacItems.add(buildMatrixRow("", "ADJUSTMENT_ITEM", "TT_DSAC", "Trung tâm DSAC", "Bổ sung đào tạo vi mạch đợt 2",
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("219")),
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO), ""));
-    dsacItems.add(buildMatrixRow("", "ADJUSTMENT_ITEM", "TT_DSAC", "Trung tâm DSAC", "Bổ sung đào tạo AI đợt 3",
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("44")),
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO), ""));
-    dsacItems.add(buildMatrixRow("", "ADJUSTMENT_ITEM", "TT_DSAC", "Trung tâm DSAC", "Tiết kiệm theo NQ 135",
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("-460.2")),
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO), "Tiết kiệm theo NQ 135"));
-    dsacItems.add(buildMatrixRow("", "ADJUSTMENT_ITEM", "TT_DSAC", "Trung tâm DSAC", "Điều chỉnh giảm KP CNTT",
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("-995")),
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO), "Điều chỉnh giảm KP CNTT"));
-    rows.addAll(dsacItems);
-    unitSections.add(Map.of("sectionNo", 6, "nodeCode", "TT_DSAC", "nodeName", "Trung tâm Nghiên cứu, đào tạo thiết kế vi mạch và trí tuệ nhân tạo", "items", dsacItems));
-
-    // 7. TT Hỗ trợ khởi nghiệp ĐMST
-    List<Map<String, Object>> dmstItems = new ArrayList<>();
-    dmstItems.add(buildMatrixRow("7", "UNIT_ADJUSTMENT_HEADER", "TT_KN_DMST", "Trung tâm Hỗ trợ khởi nghiệp đổi mới sáng tạo Đà Nẵng", "Trung tâm Hỗ trợ khởi nghiệp đổi mới sáng tạo Đà Nẵng",
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("43.2"), BigDecimal.ZERO),
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("43"), BigDecimal.ZERO), ""));
-    dmstItems.add(buildMatrixRow("", "ADJUSTMENT_ITEM", "TT_KN_DMST", "Trung tâm Khởi nghiệp ĐMST", "Bổ sung sự kiện ĐMST đợt 1",
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("158.4"), BigDecimal.ZERO),
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("114"), BigDecimal.ZERO), ""));
-    dmstItems.add(buildMatrixRow("", "ADJUSTMENT_ITEM", "TT_KN_DMST", "Trung tâm Khởi nghiệp ĐMST", "Bổ sung chương trình ươm tạo KHCN & ĐMST",
-        mapDomainCols(dimension, new BigDecimal("310"), BigDecimal.ZERO, new BigDecimal("830"), BigDecimal.ZERO),
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("593"), BigDecimal.ZERO), ""));
-    dmstItems.add(buildMatrixRow("", "ADJUSTMENT_ITEM", "TT_KN_DMST", "Trung tâm Khởi nghiệp ĐMST", "Tiết kiệm theo NQ 135",
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("-711"), BigDecimal.ZERO),
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO), "Tiết kiệm theo NQ 135"));
-    dmstItems.add(buildMatrixRow("", "ADJUSTMENT_ITEM", "TT_KN_DMST", "Trung tâm Khởi nghiệp ĐMST", "Bổ sung hỗ trợ hệ sinh thái ĐMST đợt 2",
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("113"), BigDecimal.ZERO),
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("113"), BigDecimal.ZERO), ""));
-    dmstItems.add(buildMatrixRow("", "ADJUSTMENT_ITEM", "TT_KN_DMST", "Trung tâm Khởi nghiệp ĐMST", "Bổ sung hỗ trợ hệ sinh thái ĐMST đợt 3",
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("464.6"), BigDecimal.ZERO),
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("464.6"), BigDecimal.ZERO), ""));
-    dmstItems.add(buildMatrixRow("", "ADJUSTMENT_ITEM", "TT_KN_DMST", "Trung tâm Khởi nghiệp ĐMST", "Bổ sung hỗ trợ hệ sinh thái ĐMST đợt 4",
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("420"), BigDecimal.ZERO),
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("420"), BigDecimal.ZERO), ""));
-    rows.addAll(dmstItems);
-    unitSections.add(Map.of("sectionNo", 7, "nodeCode", "TT_KN_DMST", "nodeName", "Trung tâm Hỗ trợ khởi nghiệp đổi mới sáng tạo Đà Nẵng", "items", dmstItems));
-
-    // 8. TT Công nghệ sinh học Đà Nẵng
-    List<Map<String, Object>> cnshItems = new ArrayList<>();
-    cnshItems.add(buildMatrixRow("8", "UNIT_ADJUSTMENT_HEADER", "TT_CNSH", "Trung tâm Công nghệ sinh học Đà Nẵng", "Trung tâm Công nghệ sinh học Đà Nẵng",
-        mapDomainCols(dimension, new BigDecimal("46.8"), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO),
-        mapDomainCols(dimension, new BigDecimal("47"), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO), ""));
-    cnshItems.add(buildMatrixRow("", "ADJUSTMENT_ITEM", "TT_CNSH", "Trung tâm CNSH", "Bổ sung nghiên cứu CNSH đợt 1",
-        mapDomainCols(dimension, new BigDecimal("52.8"), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO),
-        mapDomainCols(dimension, new BigDecimal("44"), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO), ""));
-    cnshItems.add(buildMatrixRow("", "ADJUSTMENT_ITEM", "TT_CNSH", "Trung tâm CNSH", "Bổ sung nghiên cứu CNSH đợt 2",
-        mapDomainCols(dimension, new BigDecimal("995"), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO),
-        mapDomainCols(dimension, new BigDecimal("432"), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO), ""));
-    cnshItems.add(buildMatrixRow("", "ADJUSTMENT_ITEM", "TT_CNSH", "Trung tâm CNSH", "Bổ sung nghiên cứu CNSH đợt 3",
-        mapDomainCols(dimension, new BigDecimal("357"), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO),
-        mapDomainCols(dimension, new BigDecimal("132"), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO), ""));
-    if (isSnapshotOct23) {
-      cnshItems.add(buildMatrixRow("", "ADJUSTMENT_ITEM", "TT_CNSH", "Trung tâm CNSH", "Tiết kiệm theo NQ 135",
-          mapDomainCols(dimension, new BigDecimal("-385"), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO),
-          mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO), "Tiết kiệm theo NQ 135"));
-    } else {
-      cnshItems.add(buildMatrixRow("", "ADJUSTMENT_ITEM", "TT_CNSH", "Trung tâm CNSH", "Tiết kiệm theo NQ 135 (Đợt 1)",
-          mapDomainCols(dimension, new BigDecimal("-336"), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO),
-          mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO), "Tiết kiệm theo NQ 135"));
-      cnshItems.add(buildMatrixRow("", "ADJUSTMENT_ITEM", "TT_CNSH", "Trung tâm CNSH", "Tiết kiệm theo NQ 135 (Đợt 2)",
-          mapDomainCols(dimension, new BigDecimal("-48.7"), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO),
-          mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO), "Tiết kiệm theo NQ 135"));
-    }
-    cnshItems.add(buildMatrixRow("", "ADJUSTMENT_ITEM", "TT_CNSH", "Trung tâm CNSH", "Điều chỉnh theo Phương án tự chủ",
-        mapDomainCols(dimension, new BigDecimal("-30"), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO),
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO), "Phương án tự chủ"));
-    cnshItems.add(buildMatrixRow("", "ADJUSTMENT_ITEM", "TT_CNSH", "Trung tâm CNSH", "Bổ sung nhiệm vụ KHCN cuối kỳ",
-        mapDomainCols(dimension, new BigDecimal("131"), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO),
-        mapDomainCols(dimension, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO), ""));
-    rows.addAll(cnshItems);
-    unitSections.add(Map.of("sectionNo", 8, "nodeCode", "TT_CNSH", "nodeName", "Trung tâm Công nghệ sinh học Đà Nẵng", "items", cnshItems));
-
-    List<Map<String, Object>> columns =
-        finalizeColumnSummaries(colMetaMap, rootAlloc, rootDisb);
-
-    Map<String, Object> result = new LinkedHashMap<>();
-    result.put("reportTitle", "KINH PHÍ SỰ NGHIỆP THEO LĨNH VỰC / NHÓM LĨNH VỰC NĂM " + year);
-    result.put("subtitle", "(Giải ngân tính đến ngày " + asOfDate + ")");
-    result.put("budgetYear", year);
-    result.put("asOfDate", asOfDate);
-    result.put("groupByDimension", dimension);
-    result.put("viewMode", viewMode);
-    result.put("configuredForYear", false);
-    result.put("columns", columns);
-    result.put("rows", rows);
-    result.put("unitAdjustmentSections", unitSections);
-    result.put("totalAllocated", sumColMap(rootAlloc));
-    result.put("totalDisbursed", sumColMap(rootDisb));
-    result.put(
-        "overallDisbursementRatePercent",
-        calcPercent(sumColMap(rootDisb), sumColMap(rootAlloc)));
     return result;
   }
 
@@ -1462,25 +1031,6 @@ public class BudgetReportBusiness {
     m.put("name", name);
     m.put("groupCode", groupCode);
     m.put("groupName", groupName);
-    return m;
-  }
-
-  private Map<String, BigDecimal> mapDomainCols(
-      String dimension,
-      BigDecimal khcn,
-      BigDecimal httb,
-      BigDecimal dmst,
-      BigDecimal cds) {
-    Map<String, BigDecimal> m = new LinkedHashMap<>();
-    if ("DOMAIN_GROUP".equalsIgnoreCase(dimension)) {
-      m.put("GRP_CORE_TECH", safeDec(khcn).add(safeDec(httb)));
-      m.put("GRP_INNOV_DIGITAL", safeDec(dmst).add(safeDec(cds)));
-    } else {
-      m.put("KHCN", safeDec(khcn));
-      m.put("HTTB", safeDec(httb));
-      m.put("DMST", safeDec(dmst));
-      m.put("CDS", safeDec(cds));
-    }
     return m;
   }
 

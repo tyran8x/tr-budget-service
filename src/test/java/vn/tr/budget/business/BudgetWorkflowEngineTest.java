@@ -68,6 +68,18 @@ class BudgetWorkflowEngineTest {
         engineHelper.checkUnitAutonomy(101L, "LK-340-341", new BigDecimal("250000000"));
     assertThat(overLimit.get("canSelfApprove")).isEqualTo(false);
     assertThat(overLimit.get("recommendedApprovalScope")).isEqualTo("DIRECTORATE");
+
+    // Kiểm tra giới hạn theo danh sách mã loại khoản được phép tự chủ (allowedCategoryCodesJson)
+    cfg.setAllowedCategoryCodesJson("[\"281\", \"253\"]");
+    Map<String, Object> allowedCat =
+        engineHelper.checkUnitAutonomy(101L, "281", new BigDecimal("100000000"));
+    assertThat(allowedCat.get("canSelfApprove")).isEqualTo(true);
+
+    Map<String, Object> deniedCat =
+        engineHelper.checkUnitAutonomy(101L, "341", new BigDecimal("100000000"));
+    assertThat(deniedCat.get("canSelfApprove")).isEqualTo(false);
+    assertThat(deniedCat.get("recommendedApprovalScope")).isEqualTo("DIRECTORATE");
+    assertThat(String.valueOf(deniedCat.get("autonomyDenialReason"))).contains("341");
   }
 
   @Test
@@ -136,6 +148,30 @@ class BudgetWorkflowEngineTest {
     assertThat(updated.getSettledAmount()).isEqualByComparingTo("300000000");
     assertThat(updated.getAvailableAmount()).isEqualByComparingTo("550000000");
     assertThat(updated.getDisbursementRatePercent()).isEqualByComparingTo("50.00");
+
+    // Khi hồ sơ ADVANCE đã SETTLED thì không tính trùng vào số dư tạm ứng chưa thanh toán (advancedAmount)
+    List<BudgetDisbursement> disbsWithSettledAdvance =
+        List.of(
+            BudgetDisbursement.builder()
+                .disbursementType("ADVANCE")
+                .amount(new BigDecimal("100000000"))
+                .settledAmount(new BigDecimal("100000000"))
+                .approvalStatus("SETTLED")
+                .build(),
+            BudgetDisbursement.builder()
+                .disbursementType("ADVANCE")
+                .amount(new BigDecimal("50000000"))
+                .approvalStatus("APPROVED_DISBURSED")
+                .build());
+    when(budgetDisbursementRepo.findByAllocationIdOrderByIdAsc(1L))
+        .thenReturn(disbsWithSettledAdvance);
+    when(budgetTransactionRepo.findByAllocationIdOrderByIdAsc(1L)).thenReturn(List.of());
+
+    BudgetAllocation updatedAdv = engineHelper.recalculateAllocationMetrics(1L);
+    assertThat(updatedAdv.getInitialAmount()).isEqualByComparingTo("1000000000");
+    assertThat(updatedAdv.getAdvancedAmount()).isEqualByComparingTo("50000000");
+    assertThat(updatedAdv.getSettledAmount()).isEqualByComparingTo("100000000");
+    assertThat(updatedAdv.getDisbursedAmount()).isEqualByComparingTo("150000000");
   }
 
   @Test

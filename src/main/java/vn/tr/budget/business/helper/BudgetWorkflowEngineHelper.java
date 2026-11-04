@@ -3,6 +3,7 @@ package vn.tr.budget.business.helper;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -81,17 +82,40 @@ public class BudgetWorkflowEngineHelper {
     boolean canCarryOver = Boolean.TRUE.equals(cfg.getCanCarryOver()) && allowCarryOver;
     BigDecimal limit = cfg.getSelfApproveLimitAmount();
 
-    boolean canSelfApprove = canSelfAllocate;
+    boolean categoryAllowed = true;
+    String denialReason = null;
+    String allowedCodesRaw = cfg.getAllowedCategoryCodesJson();
+    if (allowedCodesRaw != null
+        && !allowedCodesRaw.isBlank()
+        && categoryCode != null
+        && !categoryCode.isBlank()) {
+      List<String> allowedCodes = parseAllowedCategoryCodes(allowedCodesRaw);
+      if (!allowedCodes.isEmpty() && !allowedCodes.contains(categoryCode.trim().toUpperCase())) {
+        categoryAllowed = false;
+        canSelfAllocate = false;
+        denialReason =
+            "Mã mục lục ngân sách ["
+                + categoryCode
+                + "] không nằm trong phạm vi tự chủ được phép ("
+                + allowedCodesRaw
+                + ") của đơn vị.";
+      }
+    }
+
+    boolean canSelfApprove = canSelfAllocate && categoryAllowed;
     if (canSelfApprove
         && limit != null
         && limit.compareTo(BigDecimal.ZERO) > 0
         && proposedAmount != null
         && proposedAmount.compareTo(limit) > 0) {
       canSelfApprove = false;
+      denialReason =
+          "Số tiền đề xuất vượt hạn mức tự phê duyệt (" + limit.toPlainString() + " VNĐ) của đơn vị.";
     }
 
     result.put("configured", true);
     result.put("unitConfigId", cfg.getId());
+    result.put("categoryAllowed", categoryAllowed);
     result.put("canSelfAllocate", canSelfAllocate);
     result.put("canSelfTransfer", canSelfTransfer);
     result.put("canCarryOver", canCarryOver);
@@ -99,7 +123,27 @@ public class BudgetWorkflowEngineHelper {
     result.put("selfApproveLimitAmount", limit);
     result.put("treasuryAccountNo", cfg.getTreasuryAccountNo());
     result.put("recommendedApprovalScope", canSelfApprove ? "UNIT_SELF" : "DIRECTORATE");
+    if (denialReason != null) {
+      result.put("reason", denialReason);
+      result.put("autonomyDenialReason", denialReason);
+    }
     return result;
+  }
+
+  private List<String> parseAllowedCategoryCodes(String raw) {
+    List<String> codes = new ArrayList<>();
+    if (raw == null || raw.isBlank()) {
+      return codes;
+    }
+    String cleaned = raw.replace("[", "").replace("]", "").replace("\"", "").replace("'", "");
+    String[] tokens = cleaned.split("[,;|]");
+    for (String token : tokens) {
+      String trimmed = token.trim();
+      if (!trimmed.isEmpty()) {
+        codes.add(trimmed.toUpperCase());
+      }
+    }
+    return codes;
   }
 
   /**
@@ -168,7 +212,10 @@ public class BudgetWorkflowEngineHelper {
       }
     }
 
-    BigDecimal initial = hasInitialTx ? txInitial : safe(alloc.getInitialAmount());
+    BigDecimal initial =
+        hasInitialTx && txInitial.compareTo(BigDecimal.ZERO) > 0
+            ? txInitial
+            : safe(alloc.getInitialAmount());
     BigDecimal supplement =
         txSupplement.compareTo(BigDecimal.ZERO) > 0
             ? txSupplement
@@ -201,6 +248,7 @@ public class BudgetWorkflowEngineHelper {
         budgetDisbursementRepo.findByAllocationIdOrderByIdAsc(allocationId);
     BigDecimal committed = BigDecimal.ZERO;
     BigDecimal advanced = BigDecimal.ZERO;
+    BigDecimal advanceSettlementDeduction = BigDecimal.ZERO;
     BigDecimal disbursed = BigDecimal.ZERO;
     BigDecimal settled = BigDecimal.ZERO;
 
@@ -218,10 +266,14 @@ public class BudgetWorkflowEngineHelper {
       switch (dtype) {
         case "COMMITMENT" -> committed = committed.add(amt);
         case "ADVANCE" -> {
-          advanced = advanced.add(amt);
+          disbursed = disbursed.add(amt);
           if ("SETTLED".equals(status)) {
-            disbursed = disbursed.add(amt);
             settled = settled.add(sAmt);
+            if (amt.compareTo(sAmt) > 0) {
+              advanced = advanced.add(amt.subtract(sAmt));
+            }
+          } else {
+            advanced = advanced.add(amt);
           }
         }
         case "DIRECT_PAYMENT", "DISBURSEMENT" -> {
@@ -230,7 +282,12 @@ public class BudgetWorkflowEngineHelper {
             settled = settled.add(sAmt);
           }
         }
-        case "ADVANCE_SETTLEMENT", "SETTLEMENT" -> {
+        case "ADVANCE_SETTLEMENT" -> {
+          disbursed = disbursed.add(amt);
+          settled = settled.add(sAmt);
+          advanceSettlementDeduction = advanceSettlementDeduction.add(sAmt);
+        }
+        case "SETTLEMENT" -> {
           disbursed = disbursed.add(amt);
           settled = settled.add(sAmt);
         }
@@ -241,6 +298,10 @@ public class BudgetWorkflowEngineHelper {
           }
         }
       }
+    }
+
+    if (advanceSettlementDeduction.compareTo(BigDecimal.ZERO) > 0) {
+      advanced = advanced.subtract(advanceSettlementDeduction).max(BigDecimal.ZERO);
     }
 
     if (disbs.isEmpty()) {

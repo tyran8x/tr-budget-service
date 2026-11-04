@@ -319,7 +319,7 @@ public class BudgetTransactionController extends BaseController {
     return success(budgetTransactionBusiness.cancelExpiredAllocation(body));
   }
 
-  @SaCheckPermission("BudgetTransactionView")
+  @SaCheckPermission("BudgetTransactionList")
   @GetMapping("/operation-role-matrix")
   @Operation(
       summary =

@@ -1,10 +1,19 @@
 package vn.tr.budget.business;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.*;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -14,8 +23,10 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import vn.tr.budget.business.helper.BudgetWorkflowEngineHelper;
+import vn.tr.budget.controller.BudgetInternalController;
 import vn.tr.budget.dao.model.BudgetAllocation;
 import vn.tr.budget.dao.model.BudgetDisbursement;
+import vn.tr.budget.dao.model.BudgetTransaction;
 import vn.tr.budget.dao.service.BudgetAllocationRepo;
 import vn.tr.budget.dao.service.BudgetDisbursementRepo;
 import vn.tr.budget.dao.service.BudgetDisbursementService;
@@ -66,6 +77,8 @@ class BudgetDashboardAndWebhookTest {
             .disbursedAmount(new BigDecimal("200000000"))
             .settledAmount(new BigDecimal("200000000"))
             .availableAmount(new BigDecimal("750000000"))
+            .estimateYearPlus1(new BigDecimal("1100000000"))
+            .estimateYearPlus2(new BigDecimal("1200000000"))
             .build();
 
     BudgetAllocation unitHighBurn =
@@ -83,6 +96,8 @@ class BudgetDashboardAndWebhookTest {
             .disbursedAmount(new BigDecimal("420000000"))
             .settledAmount(new BigDecimal("400000000"))
             .availableAmount(new BigDecimal("30000000"))
+            .estimateYearPlus1(new BigDecimal("550000000"))
+            .estimateYearPlus2(new BigDecimal("600000000"))
             .build();
 
     when(budgetAllocationRepo.findByBudgetYearOrderByIdAsc(2026))
@@ -132,6 +147,14 @@ class BudgetDashboardAndWebhookTest {
     assertNotNull(rollingYears.get(0).get("baselineRecurrentCeiling"));
     assertNotNull(rollingYears.get(0).get("developmentInvestmentCeiling"));
     assertNotNull(rollingYears.get(0).get("totalMtefCeiling"));
+    assertEquals(
+        0,
+        new BigDecimal("1650000000")
+            .compareTo((BigDecimal) rollingYears.get(1).get("totalMtefCeiling")));
+    assertEquals(
+        0,
+        new BigDecimal("1800000000")
+            .compareTo((BigDecimal) rollingYears.get(2).get("totalMtefCeiling")));
 
     // 4. Kiểm tra Mô phỏng kịch bản ngân sách What-If (UPG-08)
     Map<String, Object> whatIf =
@@ -144,6 +167,9 @@ class BudgetDashboardAndWebhookTest {
     assertEquals(new BigDecimal("150000000"), whatIf.get("savedRecurrentAmount"));
     assertEquals(new BigDecimal("105000000"), whatIf.get("reallocatedToPriorityAmount"));
     assertEquals(new BigDecimal("45000000"), whatIf.get("salaryReformReserveAmount"));
+    assertTrue(
+        ((BigDecimal) whatIf.get("simulatedYearEndDisbursementRate")).compareTo(BigDecimal.ZERO)
+            > 0);
   }
 
   @Test
@@ -228,26 +254,21 @@ class BudgetDashboardAndWebhookTest {
             businessLogicHelper,
             budgetAllocationRepo);
 
-    // 1. Khi DB trống -> kiểm tra ví dụ minh họa tại 2 mốc ngày 2026-10-23 (SEPARATE_INITIAL) & 2026-10-30 (CUMULATIVE_EFFECTIVE)
+    // 1. Khi DB trống -> trả về ma trận rỗng thực tế từ DB (không trả dữ liệu mẫu giả lập)
     when(budgetAllocationRepo.findByBudgetYearOrderByIdAsc(2026)).thenReturn(List.of());
 
-    Map<String, Object> matrixOct23 =
+    Map<String, Object> emptyMatrix =
         reportBusiness.generateDynamicDomainMatrix(
             2026, "2026-10-23", "DOMAIN", "SEPARATE_INITIAL", null);
-    assertEquals("SEPARATE_INITIAL", matrixOct23.get("viewMode"));
+    assertEquals("SEPARATE_INITIAL", emptyMatrix.get("viewMode"));
     @SuppressWarnings("unchecked")
-    List<Map<String, Object>> colsOct23 = (List<Map<String, Object>>) matrixOct23.get("columns");
-    assertEquals(4, colsOct23.size());
-    assertEquals(new BigDecimal("166445.810306"), matrixOct23.get("totalAllocated"));
+    List<Map<String, Object>> emptyCols = (List<Map<String, Object>>) emptyMatrix.get("columns");
+    assertEquals(1, emptyCols.size());
+    assertEquals("GENERAL", emptyCols.get(0).get("code"));
+    assertEquals(BigDecimal.ZERO, emptyMatrix.get("totalAllocated"));
+    assertEquals(BigDecimal.ZERO, emptyMatrix.get("totalDisbursed"));
 
-    Map<String, Object> matrixOct30 =
-        reportBusiness.generateDynamicDomainMatrix(
-            2026, "2026-10-30", "DOMAIN", "CUMULATIVE_EFFECTIVE", null);
-    assertEquals("CUMULATIVE_EFFECTIVE", matrixOct30.get("viewMode"));
-    assertEquals(new BigDecimal("166332.470306"), matrixOct30.get("totalAllocated"));
-    assertEquals(new BigDecimal("106239.89"), matrixOct30.get("totalDisbursed"));
-
-    // 2. Khi DB có dữ liệu của một Đơn vị khác với các Lĩnh vực tùy biến bất kỳ -> tự động sinh cột động theo DB
+    // 2. Khi DB có dữ liệu của các Lĩnh vực tùy biến và giao dịch điều chỉnh theo mốc asOfDate -> tự động sinh cột động theo DB
     BudgetAllocation customUnit1 =
         BudgetAllocation.builder()
             .id(10L)
@@ -284,6 +305,30 @@ class BudgetDashboardAndWebhookTest {
 
     when(budgetAllocationRepo.findByBudgetYearOrderByIdAsc(2026))
         .thenReturn(List.of(customUnit1, customUnit2));
+    reportBusiness.setBudgetTransactionRepo(budgetTransactionRepo);
+    when(budgetTransactionRepo.findByBudgetYearOrderByIdDesc(2026))
+        .thenReturn(
+            List.of(
+                BudgetTransaction.builder()
+                    .id(501L)
+                    .allocationId(10L)
+                    .nodeCode("PHONG_QLCN")
+                    .nodeName("Phòng Quản lý Công nghiệp")
+                    .domainCode("XUC_TIEN_TM")
+                    .budgetYear(2026)
+                    .txType("SUPPLEMENT")
+                    .txDate(LocalDate.of(2026, 10, 28))
+                    .amount(new BigDecimal("800"))
+                    .approvalStatus("APPROVED")
+                    .build()));
+
+    Map<String, Object> matrixOct23 =
+        reportBusiness.generateDynamicDomainMatrix(
+            2026, "2026-10-23", "DOMAIN", "SEPARATE_INITIAL", null);
+    assertEquals("SEPARATE_INITIAL", matrixOct23.get("viewMode"));
+    assertEquals(new BigDecimal("13000"), matrixOct23.get("totalInitial"));
+    assertEquals(new BigDecimal("14200"), matrixOct23.get("totalAllocated"));
+    assertEquals(BigDecimal.ZERO, matrixOct23.get("totalAdjustment"));
 
     Map<String, Object> customMatrix =
         reportBusiness.generateDynamicDomainMatrix(
@@ -294,8 +339,66 @@ class BudgetDashboardAndWebhookTest {
     assertEquals(2, customCols.size());
     assertEquals("XUC_TIEN_TM", customCols.get(0).get("code"));
     assertEquals("KHUYEN_CONG", customCols.get(1).get("code"));
-    assertEquals(new BigDecimal("14200"), customMatrix.get("totalAllocated"));
+    assertEquals(new BigDecimal("15000"), customMatrix.get("totalAllocated"));
     assertEquals(new BigDecimal("9500"), customMatrix.get("totalDisbursed"));
+    assertEquals(new BigDecimal("800"), customMatrix.get("totalAdjustment"));
+  }
+
+  @Test
+  @DisplayName(
+      "S2S Internal Controller: Kiểm tra 5 endpoint nội bộ /internal/budget tương thích với BudgetInternalClient")
+  void shouldExposeAllFiveInternalEndpointsOnBudgetInternalController() {
+    BudgetAllocationBusiness allocBusiness = mock(BudgetAllocationBusiness.class);
+    BudgetDisbursementBusiness disbBusiness = mock(BudgetDisbursementBusiness.class);
+    BudgetDashboardBusiness dashBusiness = mock(BudgetDashboardBusiness.class);
+
+    vn.tr.common.feign.budget.data.BudgetPlanSyncResultData syncResult =
+        vn.tr.common.feign.budget.data.BudgetPlanSyncResultData.builder()
+            .linkedPlanCode("KH-2026-01")
+            .effectiveAmount(new BigDecimal("500"))
+            .build();
+
+    when(allocBusiness.syncFromPlan(any())).thenReturn(syncResult);
+    when(allocBusiness.getBudgetSnapshotByPlanCode("KH-2026-01")).thenReturn(syncResult);
+    when(disbBusiness.reserveCommitment(any()))
+        .thenReturn(Map.of("committed", true, "disbursementCode", "CKC-01"));
+    when(disbBusiness.settleFromPaymentWebhook(eq(55L), any()))
+        .thenReturn(Map.of("settled", true, "id", 55L));
+    when(dashBusiness.getOverview(2026, 101L, null))
+        .thenReturn(Map.of("budgetYear", 2026, "nodeId", 101L));
+
+    BudgetInternalController internalController =
+        new BudgetInternalController(allocBusiness, disbBusiness, dashBusiness);
+
+    assertEquals(
+        "KH-2026-01",
+        internalController
+            .syncAllocationFromPlan(
+                vn.tr.common.feign.budget.data.BudgetPlanSyncRequestData.builder()
+                    .planCode("KH-2026-01")
+                    .build())
+            .getData()
+            .getLinkedPlanCode());
+    assertEquals(
+        "KH-2026-01",
+        internalController
+            .getBudgetSnapshotByPlanCode("KH-2026-01")
+            .getData()
+            .getLinkedPlanCode());
+    assertEquals(
+        true,
+        internalController
+            .reserveCommitment(Map.of("taskCode", "NV-01"))
+            .getData()
+            .get("committed"));
+    assertEquals(
+        true,
+        internalController
+            .settleDisbursementFromPaymentWebhook(55L, Map.of("paymentTxCode", "TX-01"))
+            .getData()
+            .get("settled"));
+    assertEquals(
+        2026, internalController.getDashboardOverview(2026, 101L).getData().get("budgetYear"));
   }
 
   @Test

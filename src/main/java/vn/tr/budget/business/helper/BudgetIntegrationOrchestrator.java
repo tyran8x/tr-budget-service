@@ -11,6 +11,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import lombok.extern.slf4j.Slf4j;
@@ -26,6 +27,7 @@ import vn.tr.common.core.domain.R;
 import vn.tr.common.core.event.notification.NotificationRequestData;
 import vn.tr.common.core.event.notification.NotificationRequestData.ActionConfigData;
 import vn.tr.common.feign.identity.UnifiedIdentityResolver;
+import vn.tr.common.feign.identity.UserPersonContextData;
 import vn.tr.common.feign.notification.service.NotificationInternalClient;
 import vn.tr.common.feign.payment.data.CreatePaymentOrderData;
 import vn.tr.common.feign.payment.data.PaymentOrderResultData;
@@ -112,9 +114,9 @@ public class BudgetIntegrationOrchestrator {
     UnifiedIdentityResolver resolver = identityResolverProvider.getIfAvailable();
     if (resolver != null) {
       try {
-        var ctxOpt = resolver.resolveCurrentUser();
+        Optional<UserPersonContextData> ctxOpt = resolver.resolveCurrentUser();
         if (ctxOpt.isPresent()) {
-          var ctx = ctxOpt.get();
+          UserPersonContextData ctx = ctxOpt.get();
           if (StrUtil.isNotBlank(ctx.getDisplayName())) {
             return ctx.getDisplayName();
           }
@@ -149,7 +151,7 @@ public class BudgetIntegrationOrchestrator {
     UnifiedIdentityResolver resolver = identityResolverProvider.getIfAvailable();
     if (resolver != null) {
       try {
-        var ctxOpt = resolver.resolveCurrentUser();
+        Optional<UserPersonContextData> ctxOpt = resolver.resolveCurrentUser();
         if (ctxOpt.isPresent() && ctxOpt.get().getPersonId() != null) {
           return ctxOpt.get().getPersonId();
         }
@@ -617,13 +619,23 @@ public class BudgetIntegrationOrchestrator {
       long daysRemaining = ChronoUnit.DAYS.between(today, d.getSlaDueDate());
       if (daysRemaining < 0) {
         overdueCount++;
+        long daysOverdue = Math.abs(daysRemaining);
         alertedItems.add(
             Map.of(
                 "id", d.getId(),
                 "code", StrUtil.nullToEmpty(d.getCode()),
                 "name", StrUtil.nullToEmpty(d.getName()),
                 "alertType", "OVERDUE_SETTLEMENT",
-                "daysOverdue", Math.abs(daysRemaining)));
+                "daysOverdue", daysOverdue));
+        sendInAppNotification(
+            d,
+            "SLA_OVERDUE",
+            "Cảnh báo quá hạn thanh toán tạm ứng: " + StrUtil.nullToEmpty(d.getCode()),
+            "Hồ sơ giải ngân ["
+                + StrUtil.nullToEmpty(d.getName())
+                + "] đã quá hạn quyết toán "
+                + daysOverdue
+                + " ngày.");
       } else if (daysRemaining <= 7) {
         dueSoonCount++;
         alertedItems.add(
@@ -633,6 +645,15 @@ public class BudgetIntegrationOrchestrator {
                 "name", StrUtil.nullToEmpty(d.getName()),
                 "alertType", "DUE_SOON_SETTLEMENT",
                 "daysRemaining", daysRemaining));
+        sendInAppNotification(
+            d,
+            "SLA_WARNING",
+            "Nhắc hạn thanh toán tạm ứng: " + StrUtil.nullToEmpty(d.getCode()),
+            "Hồ sơ giải ngân ["
+                + StrUtil.nullToEmpty(d.getName())
+                + "] còn "
+                + daysRemaining
+                + " ngày đến hạn quyết toán.");
       }
     }
 
@@ -643,6 +664,29 @@ public class BudgetIntegrationOrchestrator {
     summary.put("dueSoonCount", dueSoonCount);
     summary.put("alertedItems", alertedItems);
     return summary;
+  }
+
+  private void sendInAppNotification(
+      BudgetDisbursement disb, String alertType, String title, String message) {
+    if (disb == null) {
+      return;
+    }
+    Set<String> recipients = new LinkedHashSet<>();
+    if (disb.getRequestedByPersonId() != null) {
+      recipients.addAll(resolvePersonIdsToUserIdStrings(List.of(disb.getRequestedByPersonId())));
+    }
+    if (StrUtil.isNotBlank(disb.getNodeCode()) || disb.getNodeId() != null) {
+      recipients.addAll(resolveNodeRecipientUserIds(disb.getNodeCode(), disb.getNodeId()));
+    }
+    String priority = "SLA_OVERDUE".equalsIgnoreCase(alertType) ? "URGENT" : "HIGH";
+    sendNotification(
+        "budget.disbursement." + StrUtil.nullToEmpty(alertType).toLowerCase(),
+        recipients,
+        List.of("ACCOUNTANT", "FINANCE_HEAD"),
+        priority,
+        title,
+        message,
+        "/budget/disbursements");
   }
 
   private Set<String> resolvePersonIdsToUserIdStrings(Collection<Long> personIds) {

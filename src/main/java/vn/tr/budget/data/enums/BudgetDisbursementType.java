@@ -18,4 +18,16 @@ public enum BudgetDisbursementType {
 
   private final String code;
   private final String label;
+
+  public static BudgetDisbursementType fromCode(String code) {
+    if (code == null || code.isBlank()) {
+      return null;
+    }
+    for (BudgetDisbursementType value : values()) {
+      if (value.code.equalsIgnoreCase(code.trim())) {
+        return value;
+      }
+    }
+    return null;
+  }
 }

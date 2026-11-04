@@ -3,6 +3,9 @@ package vn.tr.budget.business;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.math.BigDecimal;
@@ -17,14 +20,20 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import vn.tr.budget.business.helper.BudgetWorkflowEngineHelper;
 import vn.tr.budget.dao.model.BudgetAllocation;
+import vn.tr.budget.dao.model.BudgetEstimateItem;
+import vn.tr.budget.dao.model.BudgetTransaction;
 import vn.tr.budget.dao.service.BudgetAllocationRepo;
 import vn.tr.budget.dao.service.BudgetDisbursementRepo;
 import vn.tr.budget.dao.service.BudgetDisbursementService;
 import vn.tr.budget.dao.service.BudgetEstimateItemRepo;
 import vn.tr.budget.dao.service.BudgetTransactionRepo;
+import vn.tr.budget.dao.service.BudgetTransactionService;
 import vn.tr.budget.data.dto.BudgetDisbursementData;
+import vn.tr.budget.data.dto.BudgetTransactionData;
 import vn.tr.budget.data.mapper.BudgetDisbursementMapper;
+import vn.tr.budget.data.mapper.BudgetTransactionMapper;
 import vn.tr.budget.data.validator.BudgetDisbursementValidator;
+import vn.tr.budget.data.validator.BudgetTransactionValidator;
 import vn.tr.common.core.exception.base.BaseException;
 import vn.tr.common.jpa.audit.AuditRollbackHelper;
 import vn.tr.common.jpa.helper.GenericUpsertHelper;
@@ -148,5 +157,110 @@ class BudgetBusinessFlowTest {
 
     Map<String, Object> ai = dashboardBusiness.generateAiAdvisorInsights(2026);
     assertThat((List<?>) ai.get("recommendations")).hasSize(3);
+  }
+
+  @Test
+  @DisplayName("Chống duyệt trùng giao dịch (Idempotency Gate): Giao dịch đã APPROVED không được ghi sổ kép lần 2")
+  void shouldPreventDoubleApprovalOnTransaction() {
+    BudgetTransactionService txService = mock(BudgetTransactionService.class);
+    BudgetTransactionMapper txMapper = mock(BudgetTransactionMapper.class);
+    BudgetTransactionValidator txValidator = mock(BudgetTransactionValidator.class);
+
+    BudgetTransaction alreadyApproved =
+        BudgetTransaction.builder()
+            .id(88L)
+            .code("BTX-2026-088")
+            .txType("SUPPLEMENT")
+            .amount(new BigDecimal("500000000"))
+            .approvalStatus("APPROVED")
+            .build();
+
+    when(txService.findById(88L)).thenReturn(Optional.of(alreadyApproved));
+    when(txMapper.toData(alreadyApproved))
+        .thenReturn(
+            BudgetTransactionData.builder()
+                .id(88L)
+                .code("BTX-2026-088")
+                .approvalStatus("APPROVED")
+                .build());
+
+    BudgetTransactionBusiness txBusiness =
+        new BudgetTransactionBusiness(
+            txService,
+            txMapper,
+            txValidator,
+            genericUpsertHelper,
+            auditRollbackHelper,
+            businessLogicHelper,
+            workflowEngineHelper,
+            budgetAllocationRepo);
+
+    BudgetTransactionData res = txBusiness.approveTransaction(88L, Map.of("approvedByName", "GĐ"));
+    assertThat(res.getApprovalStatus()).isEqualTo("APPROVED");
+    verify(workflowEngineHelper, never()).executeDoubleEntryLedger(any());
+  }
+
+  @Test
+  @DisplayName("Cây Dự toán Thu - Chi đa cấp (3+ tầng): Lồng ghép đệ quy và cộng dồn chỉ tiêu từ nút lá lên nút gốc")
+  void shouldBuildMultiLevelRevenueExpenditureTree() {
+    List<BudgetEstimateItem> items =
+        List.of(
+            BudgetEstimateItem.builder()
+                .id(1L)
+                .code("EXP-ROOT")
+                .name("Chi ngân sách địa phương")
+                .itemType("EXPENDITURE")
+                .levelDepth(1)
+                .sortOrder(1)
+                .build(),
+            BudgetEstimateItem.builder()
+                .id(2L)
+                .code("EXP-TX")
+                .name("Chi thường xuyên")
+                .parentId(1L)
+                .parentCode("EXP-ROOT")
+                .itemType("EXPENDITURE")
+                .levelDepth(2)
+                .sortOrder(1)
+                .build(),
+            BudgetEstimateItem.builder()
+                .id(3L)
+                .code("EXP-TX-CNTT")
+                .name("Chi ứng dụng CNTT & Chuyển đổi số")
+                .parentId(2L)
+                .parentCode("EXP-TX")
+                .itemType("EXPENDITURE")
+                .levelDepth(3)
+                .sortOrder(1)
+                .build());
+
+    List<BudgetAllocation> allocs =
+        List.of(
+            BudgetAllocation.builder()
+                .id(10L)
+                .code("PB-CNTT-01")
+                .budgetYear(2026)
+                .estimateItemId(3L)
+                .estimateItemCode("EXP-TX-CNTT")
+                .itemType("EXPENDITURE")
+                .effectiveAmount(new BigDecimal("400000000"))
+                .disbursedAmount(new BigDecimal("300000000"))
+                .settledAmount(new BigDecimal("250000000"))
+                .build());
+
+    when(budgetEstimateItemRepo.findAll()).thenReturn(items);
+    when(budgetAllocationRepo.findByBudgetYearOrderByIdAsc(2026)).thenReturn(allocs);
+
+    List<Map<String, Object>> tree = dashboardBusiness.getRevenueExpenditureTree(2026);
+    assertThat(tree).hasSize(3);
+    Map<String, Object> root = tree.getFirst();
+    assertThat((BigDecimal) root.get("effectiveAmount")).isEqualByComparingTo("400000000");
+    @SuppressWarnings("unchecked")
+    List<Map<String, Object>> level2 = (List<Map<String, Object>>) root.get("children");
+    assertThat(level2).hasSize(1);
+    @SuppressWarnings("unchecked")
+    List<Map<String, Object>> level3 = (List<Map<String, Object>>) level2.getFirst().get("children");
+    assertThat(level3).hasSize(1);
+    assertThat(level3.getFirst().get("code")).isEqualTo("EXP-TX-CNTT");
   }
 }

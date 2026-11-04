@@ -239,8 +239,9 @@ public class BudgetEstimateItemController extends BaseController {
   @GetMapping("/tree")
   @Operation(summary = "Lấy cây Danh mục Dự toán Thu - Chi đa cấp")
   public R<List<Map<String, Object>>> getEstimateTree(
+      @RequestParam(value = "budgetYear", required = false) Integer budgetYear,
       @RequestParam(value = "itemType", required = false) String itemType) {
-    return success(budgetEstimateItemBusiness.getEstimateTree(itemType));
+    return success(budgetEstimateItemBusiness.getTree(budgetYear, itemType));
   }
 
 }

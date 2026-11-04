@@ -17,4 +17,16 @@ public enum BudgetApprovalScope {
 
   private final String code;
   private final String label;
+
+  public static BudgetApprovalScope fromCode(String code) {
+    if (code == null || code.isBlank()) {
+      return null;
+    }
+    for (BudgetApprovalScope value : values()) {
+      if (value.code.equalsIgnoreCase(code.trim())) {
+        return value;
+      }
+    }
+    return null;
+  }
 }

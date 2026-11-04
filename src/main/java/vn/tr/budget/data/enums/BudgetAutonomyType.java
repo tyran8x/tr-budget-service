@@ -20,4 +20,16 @@ public enum BudgetAutonomyType {
 
   private final String code;
   private final String label;
+
+  public static BudgetAutonomyType fromCode(String code) {
+    if (code == null || code.isBlank()) {
+      return null;
+    }
+    for (BudgetAutonomyType value : values()) {
+      if (value.code.equalsIgnoreCase(code.trim())) {
+        return value;
+      }
+    }
+    return null;
+  }
 }

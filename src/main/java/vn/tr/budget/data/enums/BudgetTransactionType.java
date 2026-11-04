@@ -22,4 +22,16 @@ public enum BudgetTransactionType {
 
   private final String code;
   private final String label;
+
+  public static BudgetTransactionType fromCode(String code) {
+    if (code == null || code.isBlank()) {
+      return null;
+    }
+    for (BudgetTransactionType value : values()) {
+      if (value.code.equalsIgnoreCase(code.trim())) {
+        return value;
+      }
+    }
+    return null;
+  }
 }

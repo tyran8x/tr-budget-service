@@ -30,6 +30,7 @@ import vn.tr.common.web.data.dto.BulkSortOrderData;
 import vn.tr.common.web.utils.BusinessLogicHelper;
 import vn.tr.common.web.utils.CoreUtils;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 
 /**
@@ -260,12 +261,33 @@ public class BudgetEstimateItemBusiness {
   /** Lấy danh sách cây Dự toán Thu - Chi đa cấp. */
   @Transactional(readOnly = true)
   public List<Map<String, Object>> getEstimateTree(String itemType) {
-    List<BudgetEstimateItem> all =
+    return getTree(null, itemType);
+  }
+
+  /** Lấy danh sách cây Dự toán Thu - Chi đa cấp đệ quy theo parentId / parentCode. */
+  @Transactional(readOnly = true)
+  public List<Map<String, Object>> getTree(Integer budgetYear, String itemType) {
+    List<BudgetEstimateItem> fetched =
         StrUtil.isNotBlank(itemType)
             ? budgetEstimateItemService.getRepo().findByItemTypeOrderByIdAsc(itemType.toUpperCase())
             : budgetEstimateItemService.getRepo().findAll();
-    List<Map<String, Object>> result = new ArrayList<>();
+    List<BudgetEstimateItem> all = new ArrayList<>(fetched);
+    all.sort(
+        Comparator.comparing(
+                BudgetEstimateItem::getSortOrder, Comparator.nullsLast(Comparator.naturalOrder()))
+            .thenComparing(
+                BudgetEstimateItem::getCode, Comparator.nullsLast(Comparator.naturalOrder()))
+            .thenComparing(
+                BudgetEstimateItem::getId, Comparator.nullsLast(Comparator.naturalOrder())));
+
+    Map<Long, Map<String, Object>> nodeById = new LinkedHashMap<>();
+    Map<String, Long> codeToIdMap = new LinkedHashMap<>();
+    List<Map<String, Object>> allNodes = new ArrayList<>();
+
     for (BudgetEstimateItem item : all) {
+      if (item.getId() != null && item.getCode() != null) {
+        codeToIdMap.put(item.getCode(), item.getId());
+      }
       Map<String, Object> row = new LinkedHashMap<>();
       row.put("id", item.getId());
       row.put("code", item.getCode());
@@ -278,14 +300,42 @@ public class BudgetEstimateItemBusiness {
       row.put("levelDepth", item.getLevelDepth());
       row.put("isHeader", item.getIsHeader());
       row.put("formula", item.getFormula());
+      row.put("categoryId", item.getCategoryId());
       row.put("categoryCode", item.getCategoryCode());
       row.put("categoryName", item.getCategoryName());
+      row.put("subItemCode", item.getSubItemCode());
+      row.put("fundingSourceCode", item.getFundingSourceCode());
+      row.put("autonomyType", item.getAutonomyType());
       row.put("unitOfMeasure", item.getUnitOfMeasure());
       row.put("normStandardAmount", item.getNormStandardAmount());
       row.put("requireVoucher", item.getRequireVoucher());
-      result.add(row);
+      row.put("sortOrder", item.getSortOrder());
+      if (budgetYear != null) {
+        row.put("budgetYear", budgetYear);
+      }
+      row.put("children", new ArrayList<Map<String, Object>>());
+      if (item.getId() != null) {
+        nodeById.put(item.getId(), row);
+      }
+      allNodes.add(row);
     }
-    return result;
+
+    List<Map<String, Object>> roots = new ArrayList<>();
+    for (Map<String, Object> row : allNodes) {
+      Long parentId = (Long) row.get("parentId");
+      if (parentId == null && row.get("parentCode") != null) {
+        parentId = codeToIdMap.get(String.valueOf(row.get("parentCode")));
+      }
+      if (parentId != null && nodeById.containsKey(parentId) && !parentId.equals(row.get("id"))) {
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> children =
+            (List<Map<String, Object>>) nodeById.get(parentId).get("children");
+        children.add(row);
+      } else {
+        roots.add(row);
+      }
+    }
+    return roots;
   }
 
 }

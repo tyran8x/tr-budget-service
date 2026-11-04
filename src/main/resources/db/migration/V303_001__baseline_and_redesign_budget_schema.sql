@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS budget_category (
     sort_order                  INTEGER DEFAULT 0,
     status                      VARCHAR(30) DEFAULT 'ACTIVE',
     is_deleted                  BOOLEAN NOT NULL DEFAULT FALSE,
+    deleted_at                  TIMESTAMP,
     created_at                  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     created_by                  VARCHAR(100),
     updated_at                  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -44,6 +45,7 @@ CREATE TABLE IF NOT EXISTS budget_category (
     sla_disbursement_warning_days INTEGER DEFAULT 5
 );
 
+ALTER TABLE budget_category ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP;
 ALTER TABLE budget_category ADD COLUMN IF NOT EXISTS app_code VARCHAR(50) NOT NULL DEFAULT 'ADMIN';
 ALTER TABLE budget_category ADD COLUMN IF NOT EXISTS parent_id BIGINT;
 ALTER TABLE budget_category ADD COLUMN IF NOT EXISTS parent_code VARCHAR(100);
@@ -53,10 +55,23 @@ ALTER TABLE budget_category ADD COLUMN IF NOT EXISTS level_depth INTEGER DEFAULT
 ALTER TABLE budget_category ADD COLUMN IF NOT EXISTS type_code VARCHAR(50);
 ALTER TABLE budget_category ADD COLUMN IF NOT EXISTS sub_item_code VARCHAR(50);
 ALTER TABLE budget_category ADD COLUMN IF NOT EXISTS source_code VARCHAR(50);
+ALTER TABLE budget_category ADD COLUMN IF NOT EXISTS budget_year INTEGER;
+ALTER TABLE budget_category ADD COLUMN IF NOT EXISTS domain_code VARCHAR(100);
+ALTER TABLE budget_category ADD COLUMN IF NOT EXISTS domain_group_code VARCHAR(100);
+ALTER TABLE budget_category ADD COLUMN IF NOT EXISTS domain_group_name VARCHAR(250);
+ALTER TABLE budget_category ADD COLUMN IF NOT EXISTS previous_year_domain_code VARCHAR(100);
+ALTER TABLE budget_category ADD COLUMN IF NOT EXISTS node_id BIGINT;
+ALTER TABLE budget_category ADD COLUMN IF NOT EXISTS node_code VARCHAR(100);
+ALTER TABLE budget_category ADD COLUMN IF NOT EXISTS node_name VARCHAR(250);
+ALTER TABLE budget_category ADD COLUMN IF NOT EXISTS group_code VARCHAR(50);
+ALTER TABLE budget_category ADD COLUMN IF NOT EXISTS sub_group_code VARCHAR(50);
+ALTER TABLE budget_category ADD COLUMN IF NOT EXISTS annual_limit_amount NUMERIC(19, 2);
+ALTER TABLE budget_category ADD COLUMN IF NOT EXISTS is_leaf BOOLEAN DEFAULT TRUE;
 
-CREATE INDEX IF NOT EXISTS idx_budget_category_app_code ON budget_category (app_code, code) WHERE is_deleted = FALSE;
-CREATE INDEX IF NOT EXISTS idx_budget_category_parent_id ON budget_category (parent_id) WHERE is_deleted = FALSE;
-CREATE INDEX IF NOT EXISTS idx_budget_category_group ON budget_category (category_group, status) WHERE is_deleted = FALSE;
+CREATE UNIQUE INDEX IF NOT EXISTS uk_budget_category_app_code ON budget_category (app_code, code) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_budget_category_app_code ON budget_category (app_code, code) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_budget_category_parent_id ON budget_category (parent_id) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_budget_category_group ON budget_category (category_group, status) WHERE deleted_at IS NULL;
 
 -- -----------------------------------------------------------------------------
 -- 2. BẢNG: budget_estimate_item (Cây Danh mục & Cấu hình Dự toán Thu - Chi đa cấp)
@@ -69,6 +84,7 @@ CREATE TABLE IF NOT EXISTS budget_estimate_item (
     sort_order                  INTEGER DEFAULT 0,
     status                      VARCHAR(30) DEFAULT 'ACTIVE',
     is_deleted                  BOOLEAN NOT NULL DEFAULT FALSE,
+    deleted_at                  TIMESTAMP,
     created_at                  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     created_by                  VARCHAR(100),
     updated_at                  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -97,16 +113,21 @@ CREATE TABLE IF NOT EXISTS budget_estimate_item (
     is_require_voucher          BOOLEAN DEFAULT TRUE
 );
 
+ALTER TABLE budget_estimate_item ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP;
 ALTER TABLE budget_estimate_item ADD COLUMN IF NOT EXISTS app_code VARCHAR(50) NOT NULL DEFAULT 'ADMIN';
 ALTER TABLE budget_estimate_item ADD COLUMN IF NOT EXISTS tree_path VARCHAR(500);
 ALTER TABLE budget_estimate_item ADD COLUMN IF NOT EXISTS display_index VARCHAR(50);
 ALTER TABLE budget_estimate_item ADD COLUMN IF NOT EXISTS default_funding_source_code VARCHAR(100);
 ALTER TABLE budget_estimate_item ADD COLUMN IF NOT EXISTS max_ceiling_amount NUMERIC(18, 2);
 ALTER TABLE budget_estimate_item ADD COLUMN IF NOT EXISTS legal_basis_ref VARCHAR(500);
+ALTER TABLE budget_estimate_item ADD COLUMN IF NOT EXISTS sub_item_code VARCHAR(50);
+ALTER TABLE budget_estimate_item ADD COLUMN IF NOT EXISTS funding_source_code VARCHAR(50);
+ALTER TABLE budget_estimate_item ADD COLUMN IF NOT EXISTS autonomy_type VARCHAR(50);
 
-CREATE INDEX IF NOT EXISTS idx_budget_estimate_item_app_code ON budget_estimate_item (app_code, code) WHERE is_deleted = FALSE;
-CREATE INDEX IF NOT EXISTS idx_budget_estimate_item_parent_id ON budget_estimate_item (parent_id) WHERE is_deleted = FALSE;
-CREATE INDEX IF NOT EXISTS idx_budget_estimate_item_category_id ON budget_estimate_item (category_id) WHERE is_deleted = FALSE;
+CREATE UNIQUE INDEX IF NOT EXISTS uk_budget_estimate_item_app_code ON budget_estimate_item (app_code, code) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_budget_estimate_item_app_code ON budget_estimate_item (app_code, code) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_budget_estimate_item_parent_id ON budget_estimate_item (parent_id) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_budget_estimate_item_category_id ON budget_estimate_item (category_id) WHERE deleted_at IS NULL;
 
 -- -----------------------------------------------------------------------------
 -- 3. BẢNG: budget_unit_config (Cấu hình Đơn vị Sử dụng Ngân sách & Tự chủ TC)
@@ -119,6 +140,7 @@ CREATE TABLE IF NOT EXISTS budget_unit_config (
     sort_order                  INTEGER DEFAULT 0,
     status                      VARCHAR(30) DEFAULT 'ACTIVE',
     is_deleted                  BOOLEAN NOT NULL DEFAULT FALSE,
+    deleted_at                  TIMESTAMP,
     created_at                  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     created_by                  VARCHAR(100),
     updated_at                  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -152,6 +174,7 @@ CREATE TABLE IF NOT EXISTS budget_unit_config (
     approver_person_name        VARCHAR(255)
 );
 
+ALTER TABLE budget_unit_config ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP;
 ALTER TABLE budget_unit_config ADD COLUMN IF NOT EXISTS app_code VARCHAR(50) NOT NULL DEFAULT 'ADMIN';
 ALTER TABLE budget_unit_config ADD COLUMN IF NOT EXISTS parent_node_id BIGINT;
 ALTER TABLE budget_unit_config ADD COLUMN IF NOT EXISTS budget_relation_code VARCHAR(20);
@@ -161,11 +184,19 @@ ALTER TABLE budget_unit_config ADD COLUMN IF NOT EXISTS treasury_deposit_account
 ALTER TABLE budget_unit_config ADD COLUMN IF NOT EXISTS self_transfer_limit_amount NUMERIC(18, 2) DEFAULT 0;
 ALTER TABLE budget_unit_config ADD COLUMN IF NOT EXISTS unit_head_person_id BIGINT;
 ALTER TABLE budget_unit_config ADD COLUMN IF NOT EXISTS unit_head_person_name VARCHAR(255);
+ALTER TABLE budget_unit_config ADD COLUMN IF NOT EXISTS unit_level INTEGER DEFAULT 3;
+ALTER TABLE budget_unit_config ADD COLUMN IF NOT EXISTS recurrent_self_guarantee_rate NUMERIC(5, 2) DEFAULT 0;
+ALTER TABLE budget_unit_config ADD COLUMN IF NOT EXISTS default_chapter_code VARCHAR(20);
+ALTER TABLE budget_unit_config ADD COLUMN IF NOT EXISTS treasury_relation_code VARCHAR(20);
+ALTER TABLE budget_unit_config ADD COLUMN IF NOT EXISTS pay_bank_account_id BIGINT;
+ALTER TABLE budget_unit_config ADD COLUMN IF NOT EXISTS bank_account_no VARCHAR(50);
+ALTER TABLE budget_unit_config ADD COLUMN IF NOT EXISTS bank_name VARCHAR(255);
 ALTER TABLE budget_unit_config ALTER COLUMN allowed_category_codes_json TYPE TEXT;
 ALTER TABLE budget_unit_config ALTER COLUMN node_code DROP NOT NULL;
 ALTER TABLE budget_unit_config ALTER COLUMN node_name DROP NOT NULL;
 
-CREATE INDEX IF NOT EXISTS idx_budget_unit_config_node_id ON budget_unit_config (app_code, node_id) WHERE is_deleted = FALSE;
+CREATE UNIQUE INDEX IF NOT EXISTS uk_budget_unit_config_app_code ON budget_unit_config (app_code, code) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_budget_unit_config_node_id ON budget_unit_config (app_code, node_id) WHERE deleted_at IS NULL;
 
 -- -----------------------------------------------------------------------------
 -- 4. BẢNG: budget_allocation (Phương án & Quyết định Phân bổ Dự toán Kinh phí)
@@ -178,6 +209,7 @@ CREATE TABLE IF NOT EXISTS budget_allocation (
     sort_order                  INTEGER DEFAULT 0,
     status                      VARCHAR(30) DEFAULT 'ACTIVE',
     is_deleted                  BOOLEAN NOT NULL DEFAULT FALSE,
+    deleted_at                  TIMESTAMP,
     created_at                  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     created_by                  VARCHAR(100),
     updated_at                  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -242,6 +274,7 @@ CREATE TABLE IF NOT EXISTS budget_allocation (
     review_comment              VARCHAR(1000)
 );
 
+ALTER TABLE budget_allocation ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP;
 ALTER TABLE budget_allocation ADD COLUMN IF NOT EXISTS app_code VARCHAR(50) NOT NULL DEFAULT 'ADMIN';
 ALTER TABLE budget_allocation ADD COLUMN IF NOT EXISTS parent_allocation_id BIGINT;
 ALTER TABLE budget_allocation ADD COLUMN IF NOT EXISTS funding_source_id BIGINT;
@@ -278,10 +311,11 @@ ALTER TABLE budget_allocation ADD COLUMN IF NOT EXISTS currency_code VARCHAR(10)
 ALTER TABLE budget_allocation ALTER COLUMN node_code DROP NOT NULL;
 ALTER TABLE budget_allocation ALTER COLUMN node_name DROP NOT NULL;
 
-CREATE INDEX IF NOT EXISTS idx_budget_allocation_year_node ON budget_allocation (app_code, budget_year, node_id, workflow_status) WHERE is_deleted = FALSE;
-CREATE INDEX IF NOT EXISTS idx_budget_allocation_estimate_item ON budget_allocation (estimate_item_id) WHERE is_deleted = FALSE;
-CREATE INDEX IF NOT EXISTS idx_budget_allocation_category ON budget_allocation (category_id) WHERE is_deleted = FALSE;
-CREATE INDEX IF NOT EXISTS idx_budget_allocation_linked_plan ON budget_allocation (linked_plan_code) WHERE is_deleted = FALSE;
+CREATE UNIQUE INDEX IF NOT EXISTS uk_budget_allocation_app_code ON budget_allocation (app_code, code) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_budget_allocation_year_node ON budget_allocation (app_code, budget_year, node_id, workflow_status) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_budget_allocation_estimate_item ON budget_allocation (estimate_item_id) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_budget_allocation_category ON budget_allocation (category_id) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_budget_allocation_linked_plan ON budget_allocation (linked_plan_code) WHERE deleted_at IS NULL;
 
 -- -----------------------------------------------------------------------------
 -- 5. BẢNG: budget_disbursement (Cam kết chi, Tạm ứng, Giải ngân KBNN & Quyết toán)
@@ -294,6 +328,7 @@ CREATE TABLE IF NOT EXISTS budget_disbursement (
     sort_order                  INTEGER DEFAULT 0,
     status                      VARCHAR(30) DEFAULT 'ACTIVE',
     is_deleted                  BOOLEAN NOT NULL DEFAULT FALSE,
+    deleted_at                  TIMESTAMP,
     created_at                  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     created_by                  VARCHAR(100),
     updated_at                  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -369,9 +404,13 @@ CREATE TABLE IF NOT EXISTS budget_disbursement (
     approval_status             VARCHAR(50) NOT NULL DEFAULT 'DRAFT'
 );
 
+ALTER TABLE budget_disbursement ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP;
 ALTER TABLE budget_disbursement ADD COLUMN IF NOT EXISTS app_code VARCHAR(50) NOT NULL DEFAULT 'ADMIN';
 ALTER TABLE budget_disbursement ADD COLUMN IF NOT EXISTS parent_disbursement_id BIGINT;
 ALTER TABLE budget_disbursement ADD COLUMN IF NOT EXISTS commitment_disbursement_id BIGINT;
+ALTER TABLE budget_disbursement ADD COLUMN IF NOT EXISTS category_id BIGINT;
+ALTER TABLE budget_disbursement ADD COLUMN IF NOT EXISTS category_code VARCHAR(100);
+ALTER TABLE budget_disbursement ADD COLUMN IF NOT EXISTS category_name VARCHAR(250);
 ALTER TABLE budget_disbursement ADD COLUMN IF NOT EXISTS sub_item_code VARCHAR(50);
 ALTER TABLE budget_disbursement ADD COLUMN IF NOT EXISTS payment_method VARCHAR(50) DEFAULT 'TREASURY_TRANSFER';
 ALTER TABLE budget_disbursement ADD COLUMN IF NOT EXISTS requested_amount NUMERIC(18, 2) DEFAULT 0;
@@ -381,6 +420,7 @@ ALTER TABLE budget_disbursement ADD COLUMN IF NOT EXISTS retention_amount NUMERI
 ALTER TABLE budget_disbursement ADD COLUMN IF NOT EXISTS advance_recovery_amount NUMERIC(18, 2) DEFAULT 0;
 ALTER TABLE budget_disbursement ADD COLUMN IF NOT EXISTS beneficiary_type VARCHAR(50) DEFAULT 'CONTRACTOR';
 ALTER TABLE budget_disbursement ADD COLUMN IF NOT EXISTS beneficiary_id BIGINT;
+ALTER TABLE budget_disbursement ADD COLUMN IF NOT EXISTS beneficiary_enterprise_id BIGINT;
 ALTER TABLE budget_disbursement ADD COLUMN IF NOT EXISTS beneficiary_bank_code VARCHAR(50);
 ALTER TABLE budget_disbursement ADD COLUMN IF NOT EXISTS contract_id BIGINT;
 ALTER TABLE budget_disbursement ADD COLUMN IF NOT EXISTS invoice_no VARCHAR(100);
@@ -391,22 +431,35 @@ ALTER TABLE budget_disbursement ADD COLUMN IF NOT EXISTS treasury_form_code VARC
 ALTER TABLE budget_disbursement ADD COLUMN IF NOT EXISTS treasury_status VARCHAR(50);
 ALTER TABLE budget_disbursement ADD COLUMN IF NOT EXISTS dvc_kbnn_dossier_no VARCHAR(100);
 ALTER TABLE budget_disbursement ADD COLUMN IF NOT EXISTS attachment_ids VARCHAR(1000);
+ALTER TABLE budget_disbursement ADD COLUMN IF NOT EXISTS linked_plan_item_id BIGINT;
+ALTER TABLE budget_disbursement ADD COLUMN IF NOT EXISTS linked_plan_item_name VARCHAR(500);
+ALTER TABLE budget_disbursement ADD COLUMN IF NOT EXISTS linked_task_project_id BIGINT;
+ALTER TABLE budget_disbursement ADD COLUMN IF NOT EXISTS linked_work_item_id BIGINT;
 ALTER TABLE budget_disbursement ADD COLUMN IF NOT EXISTS linked_task_id BIGINT;
 ALTER TABLE budget_disbursement ADD COLUMN IF NOT EXISTS linked_task_code VARCHAR(100);
 ALTER TABLE budget_disbursement ADD COLUMN IF NOT EXISTS linked_asset_id BIGINT;
 ALTER TABLE budget_disbursement ADD COLUMN IF NOT EXISTS linked_asset_code VARCHAR(100);
+ALTER TABLE budget_disbursement ADD COLUMN IF NOT EXISTS pay_transaction_id BIGINT;
+ALTER TABLE budget_disbursement ADD COLUMN IF NOT EXISTS pay_e_receipt_id BIGINT;
 ALTER TABLE budget_disbursement ADD COLUMN IF NOT EXISTS payment_order_id BIGINT;
+ALTER TABLE budget_disbursement ADD COLUMN IF NOT EXISTS payment_status VARCHAR(50);
 ALTER TABLE budget_disbursement ADD COLUMN IF NOT EXISTS advance_settlement_due_date DATE;
 ALTER TABLE budget_disbursement ADD COLUMN IF NOT EXISTS approved_date TIMESTAMP;
 ALTER TABLE budget_disbursement ADD COLUMN IF NOT EXISTS settled_date TIMESTAMP;
 ALTER TABLE budget_disbursement ADD COLUMN IF NOT EXISTS wf_instance_id BIGINT;
+ALTER TABLE budget_disbursement ADD COLUMN IF NOT EXISTS wf_process_code VARCHAR(100);
+ALTER TABLE budget_disbursement ADD COLUMN IF NOT EXISTS decision_document_id BIGINT;
+ALTER TABLE budget_disbursement ADD COLUMN IF NOT EXISTS attachment_file_ids_json TEXT;
+ALTER TABLE budget_disbursement ADD COLUMN IF NOT EXISTS location_id BIGINT;
+ALTER TABLE budget_disbursement ADD COLUMN IF NOT EXISTS currency_code VARCHAR(10) DEFAULT 'VND';
 ALTER TABLE budget_disbursement ADD COLUMN IF NOT EXISTS reject_reason VARCHAR(1000);
 ALTER TABLE budget_disbursement ALTER COLUMN allocation_code DROP NOT NULL;
 ALTER TABLE budget_disbursement ALTER COLUMN node_name DROP NOT NULL;
 
-CREATE INDEX IF NOT EXISTS idx_budget_disbursement_alloc ON budget_disbursement (app_code, allocation_id, approval_status) WHERE is_deleted = FALSE;
-CREATE INDEX IF NOT EXISTS idx_budget_disbursement_year_node ON budget_disbursement (app_code, budget_year, node_id) WHERE is_deleted = FALSE;
-CREATE INDEX IF NOT EXISTS idx_budget_disbursement_sla ON budget_disbursement (sla_due_date, approval_status) WHERE is_deleted = FALSE;
+CREATE UNIQUE INDEX IF NOT EXISTS uk_budget_disbursement_app_code ON budget_disbursement (app_code, code) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_budget_disbursement_alloc ON budget_disbursement (app_code, allocation_id, approval_status) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_budget_disbursement_year_node ON budget_disbursement (app_code, budget_year, node_id) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_budget_disbursement_sla ON budget_disbursement (sla_due_date, approval_status) WHERE deleted_at IS NULL;
 
 -- -----------------------------------------------------------------------------
 -- 6. BẢNG: budget_transaction (Sổ cái Biến động Nguồn Kinh phí Bút toán kép)
@@ -419,6 +472,7 @@ CREATE TABLE IF NOT EXISTS budget_transaction (
     sort_order                  INTEGER DEFAULT 0,
     status                      VARCHAR(30) DEFAULT 'ACTIVE',
     is_deleted                  BOOLEAN NOT NULL DEFAULT FALSE,
+    deleted_at                  TIMESTAMP,
     created_at                  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     created_by                  VARCHAR(100),
     updated_at                  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -471,6 +525,7 @@ CREATE TABLE IF NOT EXISTS budget_transaction (
     approval_status             VARCHAR(50) NOT NULL DEFAULT 'APPROVED'
 );
 
+ALTER TABLE budget_transaction ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP;
 ALTER TABLE budget_transaction ADD COLUMN IF NOT EXISTS app_code VARCHAR(50) NOT NULL DEFAULT 'ADMIN';
 ALTER TABLE budget_transaction ADD COLUMN IF NOT EXISTS category_id BIGINT;
 ALTER TABLE budget_transaction ADD COLUMN IF NOT EXISTS entry_direction VARCHAR(20) DEFAULT 'DEBIT';
@@ -501,8 +556,9 @@ ALTER TABLE budget_transaction ADD COLUMN IF NOT EXISTS currency_code VARCHAR(10
 ALTER TABLE budget_transaction ALTER COLUMN allocation_code DROP NOT NULL;
 ALTER TABLE budget_transaction ALTER COLUMN node_name DROP NOT NULL;
 
-CREATE INDEX IF NOT EXISTS idx_budget_transaction_alloc ON budget_transaction (app_code, allocation_id, approval_status) WHERE is_deleted = FALSE;
-CREATE INDEX IF NOT EXISTS idx_budget_transaction_year_type ON budget_transaction (app_code, budget_year, tx_type) WHERE is_deleted = FALSE;
+CREATE UNIQUE INDEX IF NOT EXISTS uk_budget_transaction_app_code ON budget_transaction (app_code, code) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_budget_transaction_alloc ON budget_transaction (app_code, allocation_id, approval_status) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_budget_transaction_year_type ON budget_transaction (app_code, budget_year, tx_type) WHERE deleted_at IS NULL;
 
 -- -----------------------------------------------------------------------------
 -- 7. BẢNG: budget_report (Báo cáo Thực hiện Thu - Chi & Tổng hợp Quyết toán)
@@ -515,6 +571,7 @@ CREATE TABLE IF NOT EXISTS budget_report (
     sort_order                      INTEGER DEFAULT 0,
     status                          VARCHAR(30) DEFAULT 'ACTIVE',
     is_deleted                      BOOLEAN NOT NULL DEFAULT FALSE,
+    deleted_at                      TIMESTAMP,
     created_at                      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     created_by                      VARCHAR(100),
     updated_at                      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -567,6 +624,7 @@ CREATE TABLE IF NOT EXISTS budget_report (
     workflow_status                 VARCHAR(50) NOT NULL DEFAULT 'APPROVED'
 );
 
+ALTER TABLE budget_report ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP;
 ALTER TABLE budget_report ADD COLUMN IF NOT EXISTS app_code VARCHAR(50) NOT NULL DEFAULT 'ADMIN';
 ALTER TABLE budget_report ADD COLUMN IF NOT EXISTS period_label VARCHAR(100);
 ALTER TABLE budget_report ADD COLUMN IF NOT EXISTS form_template_code VARCHAR(100) DEFAULT '01a/SDKP-ĐVDT';
@@ -581,12 +639,21 @@ ALTER TABLE budget_report ADD COLUMN IF NOT EXISTS reconciliation_statement_json
 ALTER TABLE budget_report ADD COLUMN IF NOT EXISTS treasury_confirmation_code VARCHAR(100);
 ALTER TABLE budget_report ADD COLUMN IF NOT EXISTS treasury_confirmed_date DATE;
 ALTER TABLE budget_report ADD COLUMN IF NOT EXISTS attachment_ids VARCHAR(1000);
+ALTER TABLE budget_report ADD COLUMN IF NOT EXISTS prepared_by_person_id BIGINT;
+ALTER TABLE budget_report ADD COLUMN IF NOT EXISTS prepared_by_person_name VARCHAR(250);
 ALTER TABLE budget_report ADD COLUMN IF NOT EXISTS submitted_date TIMESTAMP;
 ALTER TABLE budget_report ADD COLUMN IF NOT EXISTS approved_by_person_id BIGINT;
 ALTER TABLE budget_report ADD COLUMN IF NOT EXISTS approved_by_person_name VARCHAR(255);
 ALTER TABLE budget_report ADD COLUMN IF NOT EXISTS approved_date TIMESTAMP;
 ALTER TABLE budget_report ADD COLUMN IF NOT EXISTS wf_instance_id BIGINT;
+ALTER TABLE budget_report ADD COLUMN IF NOT EXISTS wf_process_code VARCHAR(100);
+ALTER TABLE budget_report ADD COLUMN IF NOT EXISTS linked_rpt_submission_id BIGINT;
+ALTER TABLE budget_report ADD COLUMN IF NOT EXISTS decision_document_id BIGINT;
+ALTER TABLE budget_report ADD COLUMN IF NOT EXISTS doc_signature_id BIGINT;
+ALTER TABLE budget_report ADD COLUMN IF NOT EXISTS attachment_file_ids_json TEXT;
+ALTER TABLE budget_report ADD COLUMN IF NOT EXISTS notes TEXT;
 ALTER TABLE budget_report ADD COLUMN IF NOT EXISTS review_comment VARCHAR(1000);
 ALTER TABLE budget_report ALTER COLUMN detail_lines_json TYPE TEXT;
 
-CREATE INDEX IF NOT EXISTS idx_budget_report_year_period ON budget_report (app_code, budget_year, report_period, period_number) WHERE is_deleted = FALSE;
+CREATE UNIQUE INDEX IF NOT EXISTS uk_budget_report_app_code ON budget_report (app_code, code) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_budget_report_year_period ON budget_report (app_code, budget_year, report_period, period_number) WHERE deleted_at IS NULL;

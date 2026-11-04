@@ -4,6 +4,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -40,9 +41,6 @@ public class BudgetDashboardBusiness {
   public Map<String, Object> getOverview(Integer budgetYear, Long nodeId, String periodType) {
     int year = budgetYear != null ? budgetYear : LocalDate.now().getYear();
     List<BudgetAllocation> allocs = budgetAllocationRepo.findByBudgetYearOrderByIdAsc(year);
-    if (allocs.isEmpty()) {
-      allocs = budgetAllocationRepo.findAll();
-    }
 
     BigDecimal totalRevenueEstimate = BigDecimal.ZERO;
     BigDecimal totalRevenueActual = BigDecimal.ZERO;
@@ -142,9 +140,6 @@ public class BudgetDashboardBusiness {
   public List<Map<String, Object>> getUnitMatrix(Integer budgetYear) {
     int year = budgetYear != null ? budgetYear : LocalDate.now().getYear();
     List<BudgetAllocation> allocs = budgetAllocationRepo.findByBudgetYearOrderByIdAsc(year);
-    if (allocs.isEmpty()) {
-      allocs = budgetAllocationRepo.findAll();
-    }
 
     Map<String, Map<String, Object>> unitMap = new LinkedHashMap<>();
     for (BudgetAllocation a : allocs) {
@@ -210,18 +205,35 @@ public class BudgetDashboardBusiness {
 
   public List<Map<String, Object>> getRevenueExpenditureTree(Integer budgetYear) {
     int year = budgetYear != null ? budgetYear : LocalDate.now().getYear();
-    List<BudgetEstimateItem> items = budgetEstimateItemRepo.findAll();
+    List<BudgetEstimateItem> items = new ArrayList<>(budgetEstimateItemRepo.findAll());
+    items.sort(
+        Comparator.comparing(
+                BudgetEstimateItem::getSortOrder, Comparator.nullsLast(Comparator.naturalOrder()))
+            .thenComparing(
+                BudgetEstimateItem::getCode, Comparator.nullsLast(Comparator.naturalOrder()))
+            .thenComparing(
+                BudgetEstimateItem::getId, Comparator.nullsLast(Comparator.naturalOrder())));
+
     List<BudgetAllocation> allocs = budgetAllocationRepo.findByBudgetYearOrderByIdAsc(year);
 
     Map<Long, BigDecimal> itemEffective = new LinkedHashMap<>();
     Map<Long, BigDecimal> itemDisbursed = new LinkedHashMap<>();
     Map<Long, BigDecimal> itemAvailable = new LinkedHashMap<>();
+    Map<String, Long> codeToIdMap = new LinkedHashMap<>();
+    for (BudgetEstimateItem item : items) {
+      if (item.getId() != null && item.getCode() != null) {
+        codeToIdMap.put(item.getCode(), item.getId());
+      }
+    }
 
     for (BudgetAllocation a : allocs) {
-      if (a.getEstimateItemId() == null) {
+      Long iid = a.getEstimateItemId();
+      if (iid == null && a.getEstimateItemCode() != null) {
+        iid = codeToIdMap.get(a.getEstimateItemCode());
+      }
+      if (iid == null) {
         continue;
       }
-      Long iid = a.getEstimateItemId();
       itemEffective.put(
           iid, itemEffective.getOrDefault(iid, BigDecimal.ZERO).add(safe(a.getEffectiveAmount())));
       itemDisbursed.put(
@@ -230,32 +242,20 @@ public class BudgetDashboardBusiness {
           iid, itemAvailable.getOrDefault(iid, BigDecimal.ZERO).add(safe(a.getAvailableAmount())));
     }
 
-    List<Map<String, Object>> result = new ArrayList<>();
+    Map<Long, Map<String, Object>> nodeById = new LinkedHashMap<>();
+    List<Map<String, Object>> allNodes = new ArrayList<>();
+
     for (BudgetEstimateItem item : items) {
       BigDecimal eff = itemEffective.getOrDefault(item.getId(), BigDecimal.ZERO);
       BigDecimal disb = itemDisbursed.getOrDefault(item.getId(), BigDecimal.ZERO);
       BigDecimal avail = itemAvailable.getOrDefault(item.getId(), BigDecimal.ZERO);
-
-      if (Boolean.TRUE.equals(item.getIsHeader())) {
-        for (BudgetEstimateItem child : items) {
-          if (item.getId().equals(child.getParentId())) {
-            eff = eff.add(itemEffective.getOrDefault(child.getId(), BigDecimal.ZERO));
-            disb = disb.add(itemDisbursed.getOrDefault(child.getId(), BigDecimal.ZERO));
-            avail = avail.add(itemAvailable.getOrDefault(child.getId(), BigDecimal.ZERO));
-          }
-        }
-      }
-
-      BigDecimal rate =
-          eff.compareTo(BigDecimal.ZERO) > 0
-              ? disb.multiply(new BigDecimal("100")).divide(eff, 2, RoundingMode.HALF_UP)
-              : BigDecimal.ZERO;
 
       Map<String, Object> row = new LinkedHashMap<>();
       row.put("id", item.getId());
       row.put("code", item.getCode());
       row.put("name", item.getName());
       row.put("parentId", item.getParentId());
+      row.put("parentCode", item.getParentCode());
       row.put("itemType", item.getItemType());
       row.put("numberingStyle", item.getNumberingStyle());
       row.put("levelDepth", item.getLevelDepth());
@@ -265,10 +265,62 @@ public class BudgetDashboardBusiness {
       row.put("effectiveAmount", eff);
       row.put("disbursedAmount", disb);
       row.put("availableAmount", avail);
-      row.put("disbursementRatePercent", rate);
-      result.add(row);
+      row.put("disbursementRatePercent", BigDecimal.ZERO);
+      row.put("children", new ArrayList<Map<String, Object>>());
+      if (item.getId() != null) {
+        nodeById.put(item.getId(), row);
+      }
+      allNodes.add(row);
     }
-    return result;
+
+    List<Map<String, Object>> roots = new ArrayList<>();
+    for (Map<String, Object> row : allNodes) {
+      Long parentId = (Long) row.get("parentId");
+      if (parentId == null && row.get("parentCode") != null) {
+        parentId = codeToIdMap.get(String.valueOf(row.get("parentCode")));
+      }
+      if (parentId != null && nodeById.containsKey(parentId) && !parentId.equals(row.get("id"))) {
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> children =
+            (List<Map<String, Object>>) nodeById.get(parentId).get("children");
+        children.add(row);
+      } else {
+        roots.add(row);
+      }
+    }
+
+    for (Map<String, Object> root : roots) {
+      rollupEstimateTreeMetrics(root);
+    }
+
+    return allNodes;
+  }
+
+  @SuppressWarnings("unchecked")
+  private void rollupEstimateTreeMetrics(Map<String, Object> node) {
+    List<Map<String, Object>> children = (List<Map<String, Object>>) node.get("children");
+    BigDecimal eff = safe((BigDecimal) node.get("effectiveAmount"));
+    BigDecimal disb = safe((BigDecimal) node.get("disbursedAmount"));
+    BigDecimal avail = safe((BigDecimal) node.get("availableAmount"));
+
+    if (children != null && !children.isEmpty()) {
+      for (Map<String, Object> child : children) {
+        rollupEstimateTreeMetrics(child);
+        eff = eff.add(safe((BigDecimal) child.get("effectiveAmount")));
+        disb = disb.add(safe((BigDecimal) child.get("disbursedAmount")));
+        avail = avail.add(safe((BigDecimal) child.get("availableAmount")));
+      }
+    }
+
+    BigDecimal rate =
+        eff.compareTo(BigDecimal.ZERO) > 0
+            ? disb.multiply(new BigDecimal("100")).divide(eff, 2, RoundingMode.HALF_UP)
+            : BigDecimal.ZERO;
+
+    node.put("effectiveAmount", eff);
+    node.put("disbursedAmount", disb);
+    node.put("availableAmount", avail);
+    node.put("disbursementRatePercent", rate);
   }
 
   public List<Map<String, Object>> getDisbursementScorecard(Integer budgetYear) {
@@ -450,9 +502,13 @@ public class BudgetDashboardBusiness {
    * và tự động đề xuất phương án điều chuyển nội bộ (UPG-02).
    */
   public Map<String, Object> getBurnRateForecast(Integer budgetYear) {
-    int year = budgetYear != null ? budgetYear : LocalDate.now().getYear();
-    int elapsedMonths = Math.max(LocalDate.now().getMonthValue(), 6);
-    int remainingMonths = Math.max(12 - elapsedMonths, 1);
+    int currentYear = LocalDate.now().getYear();
+    int year = budgetYear != null ? budgetYear : currentYear;
+    int elapsedMonths =
+        year < currentYear
+            ? 12
+            : (year > currentYear ? 1 : Math.max(LocalDate.now().getMonthValue(), 1));
+    int remainingMonths = Math.max(12 - elapsedMonths, 0);
 
     List<Map<String, Object>> unitMatrix = getUnitMatrix(year);
     List<Map<String, Object>> unitForecasts = new ArrayList<>();
@@ -576,6 +632,16 @@ public class BudgetDashboardBusiness {
     BigDecimal baseEffective = safe((BigDecimal) currentOverview.get("totalEffectiveBudget"));
     BigDecimal baseRevenue = safe((BigDecimal) currentOverview.get("totalRevenueEstimate"));
 
+    List<BudgetAllocation> yearAllocs = budgetAllocationRepo.findByBudgetYearOrderByIdAsc(yearN);
+    BigDecimal sumEstimatePlus1 = BigDecimal.ZERO;
+    BigDecimal sumEstimatePlus2 = BigDecimal.ZERO;
+    for (BudgetAllocation alloc : yearAllocs) {
+      if (!"REVENUE".equalsIgnoreCase(alloc.getItemType())) {
+        sumEstimatePlus1 = sumEstimatePlus1.add(safe(alloc.getEstimateYearPlus1()));
+        sumEstimatePlus2 = sumEstimatePlus2.add(safe(alloc.getEstimateYearPlus2()));
+      }
+    }
+
     List<Map<String, Object>> rollingYears = new ArrayList<>();
     BigDecimal[] growthMultipliers = {
       BigDecimal.ONE, new BigDecimal("1.08"), new BigDecimal("1.16")
@@ -589,7 +655,16 @@ public class BudgetDashboardBusiness {
     for (int i = 0; i < 3; i++) {
       int y = yearN + i;
       BigDecimal mult = growthMultipliers[i];
-      BigDecimal expCeiling = baseEffective.multiply(mult).setScale(0, RoundingMode.HALF_UP);
+      BigDecimal expCeiling;
+      if (i == 0) {
+        expCeiling = baseEffective.setScale(0, RoundingMode.HALF_UP);
+      } else if (i == 1 && sumEstimatePlus1.compareTo(BigDecimal.ZERO) > 0) {
+        expCeiling = sumEstimatePlus1.setScale(0, RoundingMode.HALF_UP);
+      } else if (i == 2 && sumEstimatePlus2.compareTo(BigDecimal.ZERO) > 0) {
+        expCeiling = sumEstimatePlus2.setScale(0, RoundingMode.HALF_UP);
+      } else {
+        expCeiling = baseEffective.multiply(mult).setScale(0, RoundingMode.HALF_UP);
+      }
       BigDecimal revProjection = baseRevenue.multiply(mult).setScale(0, RoundingMode.HALF_UP);
       BigDecimal baselineRecurrent =
           expCeiling.multiply(new BigDecimal("0.72")).setScale(0, RoundingMode.HALF_UP);
@@ -644,7 +719,7 @@ public class BudgetDashboardBusiness {
 
     BigDecimal baseEffective = safe((BigDecimal) overview.get("totalEffectiveBudget"));
     BigDecimal baseRevenue = safe((BigDecimal) overview.get("totalRevenueEstimate"));
-    BigDecimal baseDisbursed = safe((BigDecimal) overview.get("totalDisbursedAmount"));
+    BigDecimal baseDisbursed = safe((BigDecimal) overview.get("totalDisbursedBudget"));
 
     BigDecimal savedRecurrentAmount =
         baseEffective
@@ -699,6 +774,8 @@ public class BudgetDashboardBusiness {
     res.put("reallocateSavedToDevelopmentPercent", reallocateToPriorityPercent);
     res.put("baselineEffectiveBudget", baseEffective);
     res.put("baselineRevenueEstimate", baseRevenue);
+    res.put("baselineDisbursedBudget", baseDisbursed);
+    res.put("baseDisbursed", baseDisbursed);
     res.put("savedRecurrentAmount", savedRecurrentAmount);
     res.put("reallocatedToPriorityAmount", reallocatedToPriorityAmount);
     res.put("salaryReformReserveAmount", salaryReformReserveAmount);

@@ -47,7 +47,35 @@ public class BudgetCategoryImportData {
   @Size(max = 500, message = "Tên không được vượt quá 500 ký tự")
   private String name;
 
-  @ExcelProperty(value = "Mô tả", index = 3)
+  @ExcelProperty(value = "Phân nhóm mục lục", index = 3)
+  @ColumnWidth(22)
+  private String categoryGroup;
+
+  @ExcelProperty(value = "Mã chương", index = 4)
+  @ColumnWidth(14)
+  private String chapterCode;
+
+  @ExcelProperty(value = "Mã loại", index = 5)
+  @ColumnWidth(14)
+  private String typeCode;
+
+  @ExcelProperty(value = "Mã khoản", index = 6)
+  @ColumnWidth(14)
+  private String clauseCode;
+
+  @ExcelProperty(value = "Mã tiểu mục", index = 7)
+  @ColumnWidth(16)
+  private String subItemCode;
+
+  @ExcelProperty(value = "Mã lĩnh vực", index = 8)
+  @ColumnWidth(18)
+  private String domainCode;
+
+  @ExcelProperty(value = "Nguồn kinh phí", index = 9)
+  @ColumnWidth(20)
+  private String fundingSource;
+
+  @ExcelProperty(value = "Mô tả", index = 10)
   @ColumnWidth(45)
   private String description;
 }
