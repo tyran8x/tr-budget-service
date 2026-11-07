@@ -66,10 +66,18 @@ public class BudgetIntegrationOrchestrator {
   public static final String WF_PROCESS_TRANSACTION = "WF_BUDGET_TRANSACTION_APPROVAL";
   public static final String WF_PROCESS_DISBURSEMENT = "WF_BUDGET_DISBURSEMENT_APPROVAL";
 
+  private static final long CIRCUIT_BACKOFF_MS = 60_000L;
+
   private final ObjectProvider<WorkflowFeignClient> workflowClientProvider;
   private final ObjectProvider<NotificationInternalClient> notificationClientProvider;
   private final ObjectProvider<UnifiedIdentityResolver> identityResolverProvider;
   private final BudgetDisbursementRepo budgetDisbursementRepo;
+
+  private volatile long identityBackoffUntil = 0L;
+  private volatile long workflowBackoffUntil = 0L;
+  private volatile long notificationBackoffUntil = 0L;
+  private volatile long planningBackoffUntil = 0L;
+  private volatile long paymentBackoffUntil = 0L;
 
   @Autowired(required = false)
   private ObjectProvider<PlanningInternalClient> planningClientProvider;
@@ -111,7 +119,18 @@ public class BudgetIntegrationOrchestrator {
         }
       }
     }
-    UnifiedIdentityResolver resolver = identityResolverProvider.getIfAvailable();
+    try {
+      var loginUser = vn.tr.common.satoken.utils.LoginHelper.getLoginUser();
+      if (loginUser != null && StrUtil.isNotBlank(loginUser.getFullName())) {
+        return loginUser.getFullName().trim();
+      }
+    } catch (Exception ignored) {
+      // Bỏ qua khi không có ngữ cảnh Sa-Token
+    }
+    UnifiedIdentityResolver resolver =
+        System.currentTimeMillis() >= identityBackoffUntil && identityResolverProvider != null
+            ? identityResolverProvider.getIfAvailable()
+            : null;
     if (resolver != null) {
       try {
         Optional<UserPersonContextData> ctxOpt = resolver.resolveCurrentUser();
@@ -124,7 +143,9 @@ public class BudgetIntegrationOrchestrator {
             return ctx.getUsername();
           }
         }
+        identityBackoffUntil = System.currentTimeMillis() + CIRCUIT_BACKOFF_MS;
       } catch (Exception e) {
+        identityBackoffUntil = System.currentTimeMillis() + CIRCUIT_BACKOFF_MS;
         log.debug("[BudgetIdentity] Fallback current user actor resolution: {}", e.getMessage());
       }
     }
@@ -148,14 +169,19 @@ public class BudgetIntegrationOrchestrator {
         }
       }
     }
-    UnifiedIdentityResolver resolver = identityResolverProvider.getIfAvailable();
+    UnifiedIdentityResolver resolver =
+        System.currentTimeMillis() >= identityBackoffUntil && identityResolverProvider != null
+            ? identityResolverProvider.getIfAvailable()
+            : null;
     if (resolver != null) {
       try {
         Optional<UserPersonContextData> ctxOpt = resolver.resolveCurrentUser();
         if (ctxOpt.isPresent() && ctxOpt.get().getPersonId() != null) {
           return ctxOpt.get().getPersonId();
         }
+        identityBackoffUntil = System.currentTimeMillis() + CIRCUIT_BACKOFF_MS;
       } catch (Exception e) {
+        identityBackoffUntil = System.currentTimeMillis() + CIRCUIT_BACKOFF_MS;
         log.debug("[BudgetIdentity] Fallback current personId resolution: {}", e.getMessage());
       }
     }
@@ -167,6 +193,12 @@ public class BudgetIntegrationOrchestrator {
    * ghi cũ chỉ có {@code name} mà chưa có {@code id} hoặc khi Directory Service tạm thời offline.
    */
   public String resolvePersonNameWithFallback(Long personId, String snapshotName) {
+    if (StrUtil.isNotBlank(snapshotName)) {
+      return snapshotName.trim();
+    }
+    if (personId == null || System.currentTimeMillis() < identityBackoffUntil) {
+      return null;
+    }
     UnifiedIdentityResolver resolver =
         identityResolverProvider != null ? identityResolverProvider.getIfAvailable() : null;
     if (resolver != null) {
@@ -176,10 +208,11 @@ public class BudgetIntegrationOrchestrator {
           return resolved;
         }
       } catch (Exception e) {
+        identityBackoffUntil = System.currentTimeMillis() + CIRCUIT_BACKOFF_MS;
         log.debug("[BudgetIdentity] Fallback person name for id={}: {}", personId, e.getMessage());
       }
     }
-    return StrUtil.isNotBlank(snapshotName) ? snapshotName.trim() : null;
+    return null;
   }
 
   /**
@@ -187,6 +220,12 @@ public class BudgetIntegrationOrchestrator {
    * snapshotName}.
    */
   public String resolveNodeNameWithFallback(Long nodeId, String snapshotName) {
+    if (StrUtil.isNotBlank(snapshotName)) {
+      return snapshotName.trim();
+    }
+    if (nodeId == null || System.currentTimeMillis() < identityBackoffUntil) {
+      return null;
+    }
     UnifiedIdentityResolver resolver =
         identityResolverProvider != null ? identityResolverProvider.getIfAvailable() : null;
     if (resolver != null) {
@@ -196,10 +235,11 @@ public class BudgetIntegrationOrchestrator {
           return resolved;
         }
       } catch (Exception e) {
+        identityBackoffUntil = System.currentTimeMillis() + CIRCUIT_BACKOFF_MS;
         log.debug("[BudgetIdentity] Fallback node name for id={}: {}", nodeId, e.getMessage());
       }
     }
-    return StrUtil.isNotBlank(snapshotName) ? snapshotName.trim() : null;
+    return null;
   }
 
   /**
@@ -207,6 +247,12 @@ public class BudgetIntegrationOrchestrator {
    * snapshotCode}.
    */
   public String resolveNodeCodeWithFallback(Long nodeId, String snapshotCode) {
+    if (StrUtil.isNotBlank(snapshotCode)) {
+      return snapshotCode.trim();
+    }
+    if (nodeId == null || System.currentTimeMillis() < identityBackoffUntil) {
+      return null;
+    }
     UnifiedIdentityResolver resolver =
         identityResolverProvider != null ? identityResolverProvider.getIfAvailable() : null;
     if (resolver != null) {
@@ -216,17 +262,18 @@ public class BudgetIntegrationOrchestrator {
           return resolved;
         }
       } catch (Exception e) {
+        identityBackoffUntil = System.currentTimeMillis() + CIRCUIT_BACKOFF_MS;
         log.debug("[BudgetIdentity] Fallback node code for id={}: {}", nodeId, e.getMessage());
       }
     }
-    return StrUtil.isNotBlank(snapshotCode) ? snapshotCode.trim() : null;
+    return null;
   }
 
   /**
    * Tra cứu {@code nodeId} từ {@code nodeCode} khi bản ghi cũ / request chỉ gửi {@code nodeCode}.
    */
   public Long resolveNodeIdByCode(String nodeCode) {
-    if (StrUtil.isBlank(nodeCode)) {
+    if (StrUtil.isBlank(nodeCode) || System.currentTimeMillis() < identityBackoffUntil) {
       return null;
     }
     UnifiedIdentityResolver resolver =
@@ -238,6 +285,7 @@ public class BudgetIntegrationOrchestrator {
           return ctxOpt.get().getPrimaryNodeId();
         }
       } catch (Exception e) {
+        identityBackoffUntil = System.currentTimeMillis() + CIRCUIT_BACKOFF_MS;
         log.debug(
             "[BudgetIdentity] Fallback nodeId resolution for code={}: {}",
             nodeCode,
@@ -251,7 +299,10 @@ public class BudgetIntegrationOrchestrator {
    * Tra cứu tên Đơn vị từ {@code nodeCode} khi bản ghi chỉ có {@code nodeCode}.
    */
   public String resolveNodeNameByCodeWithFallback(String nodeCode, String snapshotName) {
-    if (StrUtil.isNotBlank(nodeCode)) {
+    if (StrUtil.isNotBlank(snapshotName)) {
+      return snapshotName.trim();
+    }
+    if (StrUtil.isNotBlank(nodeCode) && System.currentTimeMillis() >= identityBackoffUntil) {
       UnifiedIdentityResolver resolver =
           identityResolverProvider != null ? identityResolverProvider.getIfAvailable() : null;
       if (resolver != null) {
@@ -261,12 +312,13 @@ public class BudgetIntegrationOrchestrator {
             return ctxOpt.get().getPrimaryNodeName();
           }
         } catch (Exception e) {
+          identityBackoffUntil = System.currentTimeMillis() + CIRCUIT_BACKOFF_MS;
           log.debug(
               "[BudgetIdentity] Fallback nodeName by code={}: {}", nodeCode, e.getMessage());
         }
       }
     }
-    return StrUtil.isNotBlank(snapshotName) ? snapshotName.trim() : null;
+    return null;
   }
 
   /**
@@ -309,7 +361,9 @@ public class BudgetIntegrationOrchestrator {
             .build();
 
     PlanningInternalClient planningClient =
-        planningClientProvider != null ? planningClientProvider.getIfAvailable() : null;
+        System.currentTimeMillis() >= planningBackoffUntil && planningClientProvider != null
+            ? planningClientProvider.getIfAvailable()
+            : null;
     if (planningClient != null) {
       try {
         R<PlanBudgetSyncResultData> res = planningClient.syncBudgetMetricsToPlan(req);
@@ -329,6 +383,7 @@ public class BudgetIntegrationOrchestrator {
           return summary;
         }
       } catch (Exception e) {
+        planningBackoffUntil = System.currentTimeMillis() + CIRCUIT_BACKOFF_MS;
         log.warn(
             "[Budget->Plan Sync] Degraded mode when syncing allocation {} to plan {}: {}",
             alloc.getCode(),
@@ -357,7 +412,9 @@ public class BudgetIntegrationOrchestrator {
       return null;
     }
     PaymentInternalClient paymentClient =
-        paymentClientProvider != null ? paymentClientProvider.getIfAvailable() : null;
+        System.currentTimeMillis() >= paymentBackoffUntil && paymentClientProvider != null
+            ? paymentClientProvider.getIfAvailable()
+            : null;
     if (paymentClient != null) {
       try {
         CreatePaymentOrderData orderReq =
@@ -383,6 +440,7 @@ public class BudgetIntegrationOrchestrator {
           return res.getData().getTransactionCode();
         }
       } catch (Exception e) {
+        paymentBackoffUntil = System.currentTimeMillis() + CIRCUIT_BACKOFF_MS;
         log.debug(
             "[BudgetPayment] Fallback payment tx code for disbursement {}: {}",
             disb.getCode(),
@@ -395,7 +453,7 @@ public class BudgetIntegrationOrchestrator {
   }
 
   public Long startAllocationWorkflow(BudgetAllocation alloc) {
-    if (alloc == null || alloc.getId() == null) {
+    if (alloc == null || alloc.getId() == null || System.currentTimeMillis() < workflowBackoffUntil) {
       return null;
     }
     WorkflowFeignClient wfClient = workflowClientProvider.getIfAvailable();
@@ -424,6 +482,7 @@ public class BudgetIntegrationOrchestrator {
       R<Long> res = wfClient.startWorkflow(req);
       return res != null ? res.getData() : null;
     } catch (Exception e) {
+      workflowBackoffUntil = System.currentTimeMillis() + CIRCUIT_BACKOFF_MS;
       log.warn(
           "[BudgetWorkflow] Degraded mode when starting workflow for BudgetAllocation id={}: {}",
           alloc.getId(),
@@ -433,7 +492,7 @@ public class BudgetIntegrationOrchestrator {
   }
 
   public void executeWorkflowAction(String appCode, Long entityId, String action, String comment) {
-    if (entityId == null) {
+    if (entityId == null || System.currentTimeMillis() < workflowBackoffUntil) {
       return;
     }
     WorkflowFeignClient wfClient = workflowClientProvider.getIfAvailable();
@@ -453,6 +512,7 @@ public class BudgetIntegrationOrchestrator {
                 .build());
       }
     } catch (Exception e) {
+      workflowBackoffUntil = System.currentTimeMillis() + CIRCUIT_BACKOFF_MS;
       log.warn(
           "[BudgetWorkflow] Degraded mode when executing action={} for {} id={}: {}",
           action,
@@ -473,7 +533,10 @@ public class BudgetIntegrationOrchestrator {
     result.put("approvalScope", alloc.getApprovalScope());
     result.put("currentVersion", alloc.getCurrentVersion());
 
-    WorkflowFeignClient wfClient = workflowClientProvider.getIfAvailable();
+    WorkflowFeignClient wfClient =
+        System.currentTimeMillis() >= workflowBackoffUntil
+            ? workflowClientProvider.getIfAvailable()
+            : null;
     if (wfClient != null && alloc.getId() != null) {
       try {
         R<WfEntityStatus> res = wfClient.getEntityStatus("BudgetAllocation", alloc.getId());
@@ -483,6 +546,7 @@ public class BudgetIntegrationOrchestrator {
           return result;
         }
       } catch (Exception e) {
+        workflowBackoffUntil = System.currentTimeMillis() + CIRCUIT_BACKOFF_MS;
         log.debug("[BudgetWorkflow] Using built-in timeline for id={}", alloc.getId());
       }
     }
@@ -691,7 +755,9 @@ public class BudgetIntegrationOrchestrator {
 
   private Set<String> resolvePersonIdsToUserIdStrings(Collection<Long> personIds) {
     Set<String> result = new LinkedHashSet<>();
-    if (personIds == null || personIds.isEmpty()) {
+    if (personIds == null
+        || personIds.isEmpty()
+        || System.currentTimeMillis() < identityBackoffUntil) {
       return result;
     }
     UnifiedIdentityResolver resolver = identityResolverProvider.getIfAvailable();
@@ -704,6 +770,7 @@ public class BudgetIntegrationOrchestrator {
           }
         }
       } catch (Exception e) {
+        identityBackoffUntil = System.currentTimeMillis() + CIRCUIT_BACKOFF_MS;
         log.debug("[BudgetIdentity] Fallback personIds mapping: {}", e.getMessage());
       }
     }
@@ -712,6 +779,9 @@ public class BudgetIntegrationOrchestrator {
 
   private Set<String> resolveNodeRecipientUserIds(String nodeCode, Long nodeId) {
     Set<String> result = new LinkedHashSet<>();
+    if (System.currentTimeMillis() < identityBackoffUntil) {
+      return result;
+    }
     UnifiedIdentityResolver resolver = identityResolverProvider.getIfAvailable();
     if (resolver == null) {
       return result;
@@ -719,20 +789,26 @@ public class BudgetIntegrationOrchestrator {
     try {
       if (StrUtil.isNotBlank(nodeCode)) {
         List<Long> uids = resolver.resolveRecipientUserIdsForNode(nodeCode, false);
-        if (uids != null) {
+        if (uids != null && !uids.isEmpty()) {
           uids.forEach(uid -> result.add(String.valueOf(uid)));
+        } else {
+          identityBackoffUntil = System.currentTimeMillis() + CIRCUIT_BACKOFF_MS;
         }
       } else if (nodeId != null) {
-        resolver
-            .resolveUsersByNodeId(nodeId, false)
-            .forEach(
-                ctx -> {
-                  if (ctx.getUserId() != null) {
-                    result.add(String.valueOf(ctx.getUserId()));
-                  }
-                });
+        var users = resolver.resolveUsersByNodeId(nodeId, false);
+        if (users != null && !users.isEmpty()) {
+          users.forEach(
+              ctx -> {
+                if (ctx.getUserId() != null) {
+                  result.add(String.valueOf(ctx.getUserId()));
+                }
+              });
+        } else {
+          identityBackoffUntil = System.currentTimeMillis() + CIRCUIT_BACKOFF_MS;
+        }
       }
     } catch (Exception e) {
+      identityBackoffUntil = System.currentTimeMillis() + CIRCUIT_BACKOFF_MS;
       log.debug("[BudgetIdentity] Fallback node recipient resolution: {}", e.getMessage());
     }
     return result;
@@ -746,7 +822,10 @@ public class BudgetIntegrationOrchestrator {
       String title,
       String body,
       String routePath) {
-    NotificationInternalClient client = notificationClientProvider.getIfAvailable();
+    NotificationInternalClient client =
+        System.currentTimeMillis() >= notificationBackoffUntil
+            ? notificationClientProvider.getIfAvailable()
+            : null;
     if (client == null) {
       log.info("[BudgetNotification][Simulated] eventType={} title={}", eventType, title);
       return;
@@ -776,6 +855,7 @@ public class BudgetIntegrationOrchestrator {
               .build();
       client.sendNotification(req);
     } catch (Exception e) {
+      notificationBackoffUntil = System.currentTimeMillis() + CIRCUIT_BACKOFF_MS;
       log.warn(
           "[BudgetNotification] Degraded mode when sending notification eventType={}: {}",
           eventType,

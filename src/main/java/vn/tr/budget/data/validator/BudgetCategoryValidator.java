@@ -1,5 +1,7 @@
 package vn.tr.budget.data.validator;
 
+import java.math.BigDecimal;
+import java.time.LocalDate;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 import org.springframework.validation.Errors;
@@ -27,7 +29,11 @@ public class BudgetCategoryValidator extends BaseValidator {
   @Override
   public void validate(Object target, Errors errors) {
     if (target == null) {
-      rejectTargetNull(errors, "BudgetCategoryData", MessageUtils.message("error.target.null", "BudgetCategoryData"));
+      rejectTargetNull(
+          errors,
+          "BudgetCategoryData",
+          MessageUtils.messageOrDefault(
+              "error.target.null", "Dữ liệu danh mục ngân sách không được để trống", "BudgetCategoryData"));
       return;
     }
 
@@ -39,7 +45,32 @@ public class BudgetCategoryValidator extends BaseValidator {
           "code",
           data.getCode(),
           isDuplicateCode(data.getId(), data.getCode()),
-          MessageUtils.message("error.code.duplicate", data.getCode()));
+          MessageUtils.messageOrDefault(
+              "error.code.duplicate",
+              "Mã định danh '" + data.getCode() + "' đã tồn tại trong hệ thống",
+              data.getCode()));
+    }
+
+    int maxYear = LocalDate.now().getYear() + 5;
+    if (data.getBudgetYear() != null
+        && (data.getBudgetYear() < 2000 || data.getBudgetYear() > maxYear)) {
+      errors.rejectValue(
+          "budgetYear",
+          "budget.error.year.invalid",
+          MessageUtils.messageOrDefault(
+              "budget.error.year.invalid",
+              "Năm ngân sách phải nằm trong khoảng từ 2000 đến " + maxYear,
+              maxYear));
+    }
+
+    if (data.getAnnualLimitAmount() != null
+        && data.getAnnualLimitAmount().compareTo(BigDecimal.ZERO) < 0) {
+      errors.rejectValue(
+          "annualLimitAmount",
+          "budget.error.amount.negative",
+          MessageUtils.messageOrDefault(
+              "budget.error.amount.negative",
+              "Số tiền dự toán / kinh phí không được nhỏ hơn 0"));
     }
   }
 

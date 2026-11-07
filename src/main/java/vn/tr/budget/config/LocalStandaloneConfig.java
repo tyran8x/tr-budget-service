@@ -13,8 +13,13 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletRequestWrapper;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import java.sql.Connection;
+import java.sql.Statement;
+import java.text.Normalizer;
 import java.util.Map;
 import java.util.Set;
+import javax.sql.DataSource;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
@@ -41,7 +46,21 @@ import vn.tr.common.satoken.utils.LoginHelper;
 @Configuration
 @Profile("local")
 @Order(Ordered.HIGHEST_PRECEDENCE)
+@RequiredArgsConstructor
 public class LocalStandaloneConfig implements WebMvcConfigurer {
+
+  private final DataSource dataSource;
+
+  public static String vnUnaccent(String input) {
+    if (input == null) {
+      return null;
+    }
+    String normalized = Normalizer.normalize(input, Normalizer.Form.NFD);
+    return normalized
+        .replaceAll("\\p{InCombiningDiacriticalMarks}+", "")
+        .replace('đ', 'd')
+        .replace('Đ', 'D');
+  }
 
   @PostConstruct
   public void initLocalSameTokenBypass() {
@@ -52,6 +71,13 @@ public class LocalStandaloneConfig implements WebMvcConfigurer {
             return token != null && !token.isBlank();
           }
         });
+    try (Connection conn = dataSource.getConnection();
+        Statement stmt = conn.createStatement()) {
+      stmt.execute(
+          "CREATE ALIAS IF NOT EXISTS vn_unaccent FOR \"vn.tr.budget.config.LocalStandaloneConfig.vnUnaccent\"");
+    } catch (Exception e) {
+      log.debug("Could not register H2 vn_unaccent alias: {}", e.getMessage());
+    }
   }
 
   @Bean
@@ -135,7 +161,10 @@ public class LocalStandaloneConfig implements WebMvcConfigurer {
                   if ("true".equalsIgnoreCase(request.getHeader("X-Enforce-Auth"))) {
                     return true;
                   }
-                  rawToken = "local-huydq1-budget-token";
+                  rawToken =
+                      isNormalRole ? "normal-local-budget-token" : "local-huydq1-budget-token";
+                } else if (isNormalRole && !rawToken.startsWith("normal-")) {
+                  rawToken = "normal-" + rawToken;
                 }
 
                 if (!isNormalRole) {
@@ -151,16 +180,30 @@ public class LocalStandaloneConfig implements WebMvcConfigurer {
                       user.setUsername("normal_user@danang.gov.vn");
                       user.setFullName("Chuyên viên Thử nghiệm (Không quyền Ngân sách)");
                       user.setUserType("INTERNAL");
-                      user.setAppCodes(Set.of("ict-dng"));
+                      user.setAppCodes(Set.of("ict-dng", "sgtvt", "budget"));
                       user.setRoleCodes(Set.of("ROLE_ICT-DNG_SELF"));
                       user.setPermissionCodes(Set.of("EvalSelfView"));
-                      user.setPermissionsByApp(Map.of("ict-dng", Set.of("EvalSelfView")));
+                      user.setPermissionsByApp(
+                          Map.of(
+                              "ict-dng", Set.of("EvalSelfView"),
+                              "sgtvt", Set.of("EvalSelfView"),
+                              "budget", Set.of("EvalSelfView")));
                     } else {
                       user.setUserId("12");
                       user.setUsername("huydq1@danang.gov.vn");
                       user.setFullName("Đinh Quang Huy");
                       user.setUserType("INTERNAL");
-                      user.setAppCodes(Set.of("budget", "plan", "sys", "ict-dng"));
+                      user.setAppCodes(
+                          Set.of(
+                              "budget",
+                              "plan",
+                              "sys",
+                              "ict-dng",
+                              "sgtvt",
+                              "sct",
+                              "qlc",
+                              "ADMIN",
+                              "DEFAULT"));
                       user.setRoleCodes(Set.of("ROLE_SYS_ADMIN"));
                       user.setPermissionCodes(Set.of("*"));
                       user.setPermissionsByApp(
@@ -174,6 +217,16 @@ public class LocalStandaloneConfig implements WebMvcConfigurer {
                               "sys",
                               Set.of("*"),
                               "ict-dng",
+                              Set.of("*"),
+                              "sgtvt",
+                              Set.of("*"),
+                              "sct",
+                              Set.of("*"),
+                              "qlc",
+                              Set.of("*"),
+                              "ADMIN",
+                              Set.of("*"),
+                              "DEFAULT",
                               Set.of("*")));
                     }
                     user.setPermissionsLoaded(true);
@@ -200,10 +253,16 @@ public class LocalStandaloneConfig implements WebMvcConfigurer {
                       ? authHeader.substring(7).trim()
                       : authHeader.trim();
                 }
+                String saHeader = request.getHeader("satoken");
+                if (saHeader != null && !saHeader.isBlank()) {
+                  return saHeader.trim();
+                }
                 Cookie[] cookies = request.getCookies();
                 if (cookies != null) {
                   for (Cookie c : cookies) {
-                    if ("_tr_sec_sid".equals(c.getName()) || "_tr_client_sid".equals(c.getName())) {
+                    if ("satoken".equals(c.getName())
+                        || "_tr_sec_sid".equals(c.getName())
+                        || "_tr_client_sid".equals(c.getName())) {
                       if (c.getValue() != null && !c.getValue().isBlank()) {
                         return c.getValue().trim();
                       }

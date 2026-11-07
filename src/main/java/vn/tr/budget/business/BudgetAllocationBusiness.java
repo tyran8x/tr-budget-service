@@ -94,9 +94,7 @@ public class BudgetAllocationBusiness {
     if (StrUtil.isBlank(data.getItemType())) {
       data.setItemType("EXPENDITURE");
     }
-    if (StrUtil.isBlank(data.getWorkflowStatus())) {
-      data.setWorkflowStatus("DRAFT");
-    }
+    data.setWorkflowStatus("DRAFT");
     if (data.getCurrentVersion() == null) {
       data.setCurrentVersion(1);
     }

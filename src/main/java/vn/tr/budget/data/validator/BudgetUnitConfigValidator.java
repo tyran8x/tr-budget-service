@@ -1,5 +1,6 @@
 package vn.tr.budget.data.validator;
 
+import java.math.BigDecimal;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 import org.springframework.validation.Errors;
@@ -27,7 +28,11 @@ public class BudgetUnitConfigValidator extends BaseValidator {
   @Override
   public void validate(Object target, Errors errors) {
     if (target == null) {
-      rejectTargetNull(errors, "BudgetUnitConfigData", MessageUtils.message("error.target.null", "BudgetUnitConfigData"));
+      rejectTargetNull(
+          errors,
+          "BudgetUnitConfigData",
+          MessageUtils.messageOrDefault(
+              "error.target.null", "Dữ liệu cấu hình đơn vị tự chủ không được để trống", "BudgetUnitConfigData"));
       return;
     }
 
@@ -39,7 +44,31 @@ public class BudgetUnitConfigValidator extends BaseValidator {
           "code",
           data.getCode(),
           isDuplicateCode(data.getId(), data.getCode()),
-          MessageUtils.message("error.code.duplicate", data.getCode()));
+          MessageUtils.messageOrDefault(
+              "error.code.duplicate",
+              "Mã định danh '" + data.getCode() + "' đã tồn tại trong hệ thống",
+              data.getCode()));
+    }
+
+    if (data.getSelfApproveLimitAmount() != null
+        && data.getSelfApproveLimitAmount().compareTo(BigDecimal.ZERO) < 0) {
+      errors.rejectValue(
+          "selfApproveLimitAmount",
+          "budget.error.amount.negative",
+          MessageUtils.messageOrDefault(
+              "budget.error.amount.negative",
+              "Số tiền dự toán / kinh phí không được nhỏ hơn 0"));
+    }
+
+    if (data.getRecurrentSelfGuaranteeRate() != null
+        && (data.getRecurrentSelfGuaranteeRate().compareTo(BigDecimal.ZERO) < 0
+            || data.getRecurrentSelfGuaranteeRate().compareTo(new BigDecimal("100")) > 0)) {
+      errors.rejectValue(
+          "recurrentSelfGuaranteeRate",
+          "budget.error.rate.invalid",
+          MessageUtils.messageOrDefault(
+              "budget.error.rate.invalid",
+              "Tỷ lệ tự bảo đảm chi thường xuyên phải nằm trong khoảng từ 0% đến 100%"));
     }
   }
 
