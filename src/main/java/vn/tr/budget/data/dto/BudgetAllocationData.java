@@ -149,4 +149,31 @@ public class BudgetAllocationData extends BaseCommonData {
   private Long locationId;
 
   private String currencyCode;
+
+  /** Mã Đơn vị chủ quản cấp Sở/Ngành (SCT, SXD, SGTVT, SYT, SNNMT, STC, SKHCN, SNV). */
+  private String agencyCode;
+
+  /** Tên Đơn vị chủ quản theo thời điểm lập dự toán. */
+  private String agencyName;
+
+  /** Chế độ thời điểm tổ chức: PRE_MERGER, POST_MERGER, CROSS_MERGER_HYBRID. */
+  private String temporalRegime;
+
+  /** Loại biến động phả hệ phòng ban: RETAINED, MERGED_CONSOLIDATED, TRANSFERRED_INTACT, TRANSFERRED_EXTERNAL. */
+  private String lineageTransitionType;
+
+  /** Mã phòng ban kế thừa sau sáp nhập (nếu khoản dự toán lập cho phòng ban trước sáp nhập). */
+  private String successorNodeCode;
+
+  /** Tên phòng ban kế thừa sau sáp nhập. */
+  private String successorNodeName;
+
+  /** Danh sách phòng ban tiền thân hợp nhất dự toán. */
+  private String predecessorNodeName;
+
+  /** ID tài khoản người lập tờ trình dự toán (CoreUser). */
+  private Long submittedByUserId;
+
+  /** ID tài khoản người phê duyệt dự toán (CoreUser). */
+  private Long approvedByUserId;
 }

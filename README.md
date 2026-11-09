@@ -49,11 +49,11 @@ tr-budget-service/
 | **Database / Table Prefix** | `tr_budget` / `budget_` | AppCode: `budget` (Shorthand: `Budget`) |
 | **Base Package** | `vn.tr.budget` | Top packages: `business`, `config`, `controller`, `dao`, `data`, `excel` |
 | **Entities (`dao.model`)** | **7** | Thực thể JPA ánh xạ bảng PostgreSQL |
-| **REST Controllers / Endpoints** | **9** / **143** | Tổng số lớp Controller và hàm API endpoint |
+| **REST Controllers / Endpoints** | **9** / **145** | Tổng số lớp Controller và hàm API endpoint |
 | **Mã quyền `@SaCheckPermission`** | **77** | Quyền truy cập bảo vệ API theo chuẩn `{EntityName}{Action}` |
 | **Business / Service / Repo** | **8** / **21** / **7** | Kèm **7** lớp Dynamic Specifications |
 | **DTOs / Criteria / Mappers / Validators** | **14** / **7** / **7** / **7** | Lớp truyền tải dữ liệu, bộ lọc, ánh xạ MapStruct & kiểm tra hợp lệ |
-| **Enums / Unit Tests** | **6** / **3** | Danh mục liệt kê & kịch bản kiểm thử tự động |
+| **Enums / Unit Tests** | **6** / **4** | Danh mục liệt kê & kịch bản kiểm thử tự động |
 | **Phụ thuộc `tr-common-*`** | **13** | `tr-common-core`, `tr-common-jpa`, `tr-common-web`, `tr-common-redis`, `tr-common-kafka`, `tr-common-log`, `tr-common-security`, `tr-common-satoken`, `tr-common-encrypt`, `tr-common-feign`, `tr-common-excel`, `tr-common-ratelimiter`, `tr-common-doc` |
 
 ### 2. Danh mục Thực thể CSDL (`7` Entities)
@@ -68,13 +68,13 @@ tr-budget-service/
 | 6 | `BudgetTransaction` | `budget_transaction` | `vn.tr.budget.dao.model` | Entity đại diện cho Sổ cái Biến động Nguồn Kinh phí Bút toán kép (BudgetTransaction). |
 | 7 | `BudgetUnitConfig` | `budget_unit_config` | `vn.tr.budget.dao.model` | Entity đại diện cho Cấu hình Đơn vị Sử dụng Ngân sách & Tự chủ Tài chính (BudgetUnitConfig). |
 
-### 3. Danh mục REST Controllers, Endpoints & Phân quyền (`9` Controllers / `143` Endpoints)
+### 3. Danh mục REST Controllers, Endpoints & Phân quyền (`9` Controllers / `145` Endpoints)
 
 | # | Controller | Base Path | Số API | Endpoints tiêu biểu (`Method Path (Hàm)`) | Quyền `@SaCheckPermission` | Mô tả |
 | --- | --- | --- | --- | --- | --- | --- |
 | 1 | `BudgetAllocationController` | `/allocations` | 24 | `POST /` (create), `PUT /{id}` (update), `DELETE /{id}` (delete), `DELETE /` (bulkDelete), `GET /` (findAll), `GET /{id}` (findById), `GET /{id}/clone` (cloneById), `POST /{id}/rollback` (rollback), ... *(+16 API)* | `BudgetAllocationCreate`, `BudgetAllocationEdit`, `BudgetAllocationDelete`, `BudgetAllocationBatchDelete`, `BudgetAllocationList`, `BudgetAllocationDetail`, `BudgetAllocationClone`, `BudgetAllocationRollback`, ... *(+3)* | Phương án & Quyết định Phân bổ Dự toán Kinh phí Đa kỳ — API quản lý Lập, Thẩm định, Giao & Phân bổ Dự toán Kinh phí theo Năm/Quý/Tháng, Đơn vị và Cây Thu-Chi (kế thừa & nâng cấp từ QlkpPhanBoKinhPhi) |
 | 2 | `BudgetCategoryController` | `/categories` | 16 | `POST /` (create), `PUT /{id}` (update), `DELETE /{id}` (delete), `DELETE /` (bulkDelete), `GET /` (findAll), `GET /{id}` (findById), `GET /{id}/clone` (cloneById), `POST /{id}/rollback` (rollback), ... *(+8 API)* | `BudgetCategoryCreate`, `BudgetCategoryEdit`, `BudgetCategoryDelete`, `BudgetCategoryBatchDelete`, `BudgetCategoryList`, `BudgetCategoryDetail`, `BudgetCategoryClone`, `BudgetCategoryRollback`, ... *(+3)* | Danh mục Loại - Khoản Mục lục Ngân sách & Nguồn Kinh phí — API quản lý Danh mục Loại - Khoản - Mục lục Ngân sách Nhà nước và Nguồn kinh phí (kế thừa & nâng cấp từ QlkpDmLoaiKhoan) |
-| 3 | `BudgetDashboardController` | `/dashboard` | 8 | `GET /overview` (getOverview), `GET /unit-matrix` (getUnitMatrix), `GET /revenue-expenditure-tree` (getRevenueExpenditureTree), `GET /disbursement-scorecard` (getDisbursementScorecard), `POST /ai-advisor` (getAiAdvisorInsights), `GET /burn-rate-forecast` (getBurnRateForecast), `GET /mtef-summary` (getMtefSummary), `POST /what-if-simulation` (simulateWhatIfScenario) | `BudgetAllocationList` | Dashboard & Báo cáo Điều hành Kinh phí — API thống kê tổng quan Dự toán Thu - Chi, Tiến độ Giải ngân, Ma trận Đơn vị, Bảng điểm Kỷ luật Giải ngân và Cố vấn AI |
+| 3 | `BudgetDashboardController` | `/dashboard` | 10 | `GET /overview` (getOverview), `GET /unit-matrix` (getUnitMatrix), `GET /target-scope` (getTargetScopeContext), `POST /validate-target-scope` (validateTargetScopeSelection), `GET /revenue-expenditure-tree` (getRevenueExpenditureTree), `GET /disbursement-scorecard` (getDisbursementScorecard), `POST /ai-advisor` (getAiAdvisorInsights), `GET /burn-rate-forecast` (getBurnRateForecast), ... *(+2 API)* | `BudgetAllocationList` | Dashboard & Báo cáo Điều hành Kinh phí — API thống kê tổng quan Dự toán Thu - Chi, Tiến độ Giải ngân, Ma trận Đơn vị, Bảng điểm Kỷ luật Giải ngân và Cố vấn AI |
 | 4 | `BudgetDisbursementController` | `/disbursements` | 19 | `POST /` (create), `PUT /{id}` (update), `DELETE /{id}` (delete), `DELETE /` (bulkDelete), `GET /` (findAll), `GET /{id}` (findById), `GET /{id}/clone` (cloneById), `POST /{id}/rollback` (rollback), ... *(+11 API)* | `BudgetDisbursementCreate`, `BudgetDisbursementEdit`, `BudgetDisbursementDelete`, `BudgetDisbursementBatchDelete`, `BudgetDisbursementList`, `BudgetDisbursementDetail`, `BudgetDisbursementClone`, `BudgetDisbursementRollback`, ... *(+3)* | Hồ sơ Cam kết chi, Tạm ứng, Giải ngân Kho bạc & Quyết toán — API quản lý Hồ sơ Cam kết chi, Tạm ứng, Giải ngân Kho bạc Nhà nước, Hoàn ứng & Quyết toán chứng từ |
 | 5 | `BudgetEstimateItemController` | `/estimate-items` | 14 | `POST /` (create), `PUT /{id}` (update), `DELETE /{id}` (delete), `DELETE /` (bulkDelete), `GET /` (findAll), `GET /{id}` (findById), `GET /{id}/clone` (cloneById), `POST /{id}/rollback` (rollback), ... *(+6 API)* | `BudgetEstimateItemCreate`, `BudgetEstimateItemEdit`, `BudgetEstimateItemDelete`, `BudgetEstimateItemBatchDelete`, `BudgetEstimateItemList`, `BudgetEstimateItemDetail`, `BudgetEstimateItemClone`, `BudgetEstimateItemRollback`, ... *(+3)* | Cây Danh mục & Cấu hình Dự toán Thu - Chi Đa cấp — API quản lý Cây Danh mục & Cấu hình Dự toán Thu - Chi đa cấp (kế thừa & nâng cấp từ QlkpDmDuToanThuChi & QlkpCauHinhDuToan) |
 | 6 | `BudgetInternalController` | `/internal/budget` | 5 | `POST /allocations/sync-from-plan` (syncAllocationFromPlan), `GET /allocations/by-plan/{planCode}` (getBudgetSnapshotByPlanCode), `POST /disbursements/reserve-commitment` (reserveCommitment), `POST /disbursements/{id}/payment-webhook-settle` (settleDisbursementFromPaymentWebhook), `GET /dashboard/overview` (getDashboardOverview) | — | Internal Budget S2S API — API nội bộ liên thông Kinh phí - Kế hoạch - Thanh toán (Sa-Token Same-Token) |
@@ -95,7 +95,7 @@ tr-budget-service/
 | **Mappers (`data.mapper.*`)** | 7 | `BudgetAllocationMapper`, `BudgetCategoryMapper`, `BudgetDisbursementMapper`, `BudgetEstimateItemMapper`, `BudgetReportMapper`, `BudgetTransactionMapper`, `BudgetUnitConfigMapper` |
 | **Validators (`data.validator.*`)** | 7 | `BudgetAllocationValidator`, `BudgetCategoryValidator`, `BudgetDisbursementValidator`, `BudgetEstimateItemValidator`, `BudgetReportValidator`, `BudgetTransactionValidator`, `BudgetUnitConfigValidator` |
 | **Enums (`data.enums.*`)** | 6 | `BudgetApprovalScope`, `BudgetAutonomyType`, `BudgetDisbursementType`, `BudgetPeriodType`, `BudgetTransactionType`, `BudgetWorkflowStatus` |
-| **Unit / Integration Tests** | 3 | `BudgetBusinessFlowTest`, `BudgetDashboardAndWebhookTest`, `BudgetWorkflowEngineTest` |
+| **Unit / Integration Tests** | 4 | `BudgetBusinessFlowTest`, `BudgetDashboardAndWebhookTest`, `BudgetTargetScopeValidatorTest`, `BudgetWorkflowEngineTest` |
 
 <!-- AUTO-GENERATED-BE-README:END -->
 
@@ -129,4 +129,4 @@ mvn spring-boot:run -f tr-business-services/tr-budget-service/pom.xml -Dspring-b
 
 ---
 
-Cập nhật lần cuối: 2026-11-01
+Cập nhật lần cuối: 2026-11-08

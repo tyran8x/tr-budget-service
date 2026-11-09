@@ -39,16 +39,51 @@ public class BudgetDashboardController extends BaseController {
   public R<Map<String, Object>> getOverview(
       @RequestParam(value = "budgetYear", required = false) Integer budgetYear,
       @RequestParam(value = "nodeId", required = false) Long nodeId,
-      @RequestParam(value = "periodType", required = false) String periodType) {
-    return success(budgetDashboardBusiness.getOverview(budgetYear, nodeId, periodType));
+      @RequestParam(value = "periodType", required = false) String periodType,
+      @RequestParam(value = "agencyCode", required = false) String agencyCode,
+      @RequestParam(value = "temporalRegime", required = false) String temporalRegime) {
+    return success(
+        budgetDashboardBusiness.getOverview(
+            budgetYear, nodeId, periodType, agencyCode, temporalRegime));
   }
 
   @SaCheckPermission("BudgetAllocationList")
   @GetMapping("/unit-matrix")
   @Operation(summary = "Lấy bảng tổng hợp phân bổ, bổ sung, chuyển nguồn & giải ngân theo từng Đơn vị / Phòng ban")
   public R<List<Map<String, Object>>> getUnitMatrix(
-      @RequestParam(value = "budgetYear", required = false) Integer budgetYear) {
-    return success(budgetDashboardBusiness.getUnitMatrix(budgetYear));
+      @RequestParam(value = "budgetYear", required = false) Integer budgetYear,
+      @RequestParam(value = "agencyCode", required = false) String agencyCode,
+      @RequestParam(value = "temporalRegime", required = false) String temporalRegime) {
+    return success(
+        budgetDashboardBusiness.getUnitMatrix(budgetYear, agencyCode, temporalRegime));
+  }
+
+  @SaCheckPermission("BudgetAllocationList")
+  @GetMapping({"/target-scope", "/node-scope", "/org-scope"})
+  @Operation(
+      summary =
+          "Lấy dữ liệu Phạm vi Node gốc (SCT, SXD, SGTVT, SYT...), Node trực thuộc và Target (Nhân sự / Tài khoản) theo Thời điểm Sáp nhập")
+  public R<Map<String, Object>> getTargetScopeContext(
+      @RequestParam(value = "rootNodeCode", required = false) String rootNodeCode,
+      @RequestParam(value = "agencyCode", required = false) String agencyCode,
+      @RequestParam(value = "temporalRegime", required = false) String temporalRegime,
+      @RequestParam(value = "budgetYear", required = false) Integer budgetYear,
+      @RequestParam(value = "nodeId", required = false) Long nodeId,
+      @RequestParam(value = "nodeCode", required = false) String nodeCode) {
+    String effectiveRoot = rootNodeCode != null ? rootNodeCode : agencyCode;
+    return success(
+        budgetDashboardBusiness.getOrgScopeContext(
+            effectiveRoot, temporalRegime, budgetYear, nodeId, nodeCode));
+  }
+
+  @SaCheckPermission("BudgetAllocationList")
+  @PostMapping({"/validate-target-scope", "/validate-node-scope", "/validate-org-scope"})
+  @Operation(
+      summary =
+          "Kiểm tra hợp lệ Node gốc, Node dự toán và Target (Nhân sự lập dự toán / Tài khoản người dùng) theo Thời điểm Sáp nhập")
+  public R<Map<String, Object>> validateTargetScopeSelection(
+      @RequestBody Map<String, Object> body) {
+    return success(budgetDashboardBusiness.validateOrgScopeSelection(body));
   }
 
   @SaCheckPermission("BudgetAllocationList")

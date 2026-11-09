@@ -8,8 +8,10 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import vn.tr.budget.dao.model.BudgetAllocation;
@@ -20,6 +22,7 @@ import vn.tr.budget.dao.service.BudgetAllocationRepo;
 import vn.tr.budget.dao.service.BudgetDisbursementRepo;
 import vn.tr.budget.dao.service.BudgetEstimateItemRepo;
 import vn.tr.budget.dao.service.BudgetTransactionRepo;
+import vn.tr.common.feign.identity.TemporalTargetScopeHelper;
 
 /**
  * Nghiệp vụ Dashboard Thống kê Dự toán Thu - Chi, Ma trận Kinh phí theo Đơn vị,
@@ -38,8 +41,45 @@ public class BudgetDashboardBusiness {
   private final BudgetDisbursementRepo budgetDisbursementRepo;
   private final BudgetEstimateItemRepo budgetEstimateItemRepo;
 
+  @Autowired(required = false)
+  private TemporalTargetScopeHelper temporalScopeHelper =
+      new TemporalTargetScopeHelper();
+  @org.springframework.beans.factory.annotation.Autowired(required = false)
+  private vn.tr.common.feign.identity.UnifiedIdentityResolver unifiedIdentityResolver;
+
+  @jakarta.annotation.PostConstruct
+  void initTemporalScopeHelper() {
+      if (temporalScopeHelper != null && temporalScopeHelper.getIdentityResolver() == null && unifiedIdentityResolver != null) {
+          temporalScopeHelper.setIdentityResolver(unifiedIdentityResolver);
+      }
+  }
+
   public Map<String, Object> getOverview(Integer budgetYear, Long nodeId, String periodType) {
+    return getOverview(budgetYear, nodeId, periodType, null, null);
+  }
+
+  public Map<String, Object> getOverview(
+      Integer budgetYear,
+      Long nodeId,
+      String periodType,
+      String agencyCode,
+      String temporalRegime) {
     int year = budgetYear != null ? budgetYear : LocalDate.now().getYear();
+    String normAgency =
+        temporalScopeHelper != null ? temporalScopeHelper.normalizeAgencyCode(agencyCode) : null;
+    String effectiveRegime =
+        temporalScopeHelper != null
+            ? temporalScopeHelper.resolveTemporalRegime(null, null, year, temporalRegime)
+            : "POST_MERGER";
+    Set<String> allowedCodes =
+        normAgency != null && temporalScopeHelper != null
+            ? temporalScopeHelper.resolveMatchingNodeCodesForAgency(normAgency, effectiveRegime)
+            : Set.of();
+    Set<Long> allowedIds =
+        normAgency != null && temporalScopeHelper != null
+            ? temporalScopeHelper.resolveMatchingNodeIdsForAgency(normAgency, effectiveRegime)
+            : Set.of();
+
     List<BudgetAllocation> allocs = budgetAllocationRepo.findByBudgetYearOrderByIdAsc(year);
 
     BigDecimal totalRevenueEstimate = BigDecimal.ZERO;
@@ -62,6 +102,9 @@ public class BudgetDashboardBusiness {
 
     for (BudgetAllocation a : allocs) {
       if (nodeId != null && !nodeId.equals(a.getNodeId())) {
+        continue;
+      }
+      if (normAgency != null && !matchesAllocationAgencyScope(a, normAgency, allowedCodes, allowedIds)) {
         continue;
       }
       if (periodType != null
@@ -114,6 +157,11 @@ public class BudgetDashboardBusiness {
 
     Map<String, Object> res = new LinkedHashMap<>();
     res.put("budgetYear", year);
+    res.put("agencyCode", normAgency != null ? normAgency : "ALL");
+    res.put("temporalRegime", effectiveRegime);
+    if (temporalScopeHelper != null) {
+      res.put("temporalRegimeLabel", temporalScopeHelper.getRegimeLabel(effectiveRegime));
+    }
     res.put("totalAllocations", totalAllocations);
     res.put("approvedAllocations", approvedAllocations);
     res.put("pendingAllocations", pendingAllocations);
@@ -138,7 +186,27 @@ public class BudgetDashboardBusiness {
   }
 
   public List<Map<String, Object>> getUnitMatrix(Integer budgetYear) {
+    return getUnitMatrix(budgetYear, null, null);
+  }
+
+  public List<Map<String, Object>> getUnitMatrix(
+      Integer budgetYear, String agencyCode, String temporalRegime) {
     int year = budgetYear != null ? budgetYear : LocalDate.now().getYear();
+    String normAgency =
+        temporalScopeHelper != null ? temporalScopeHelper.normalizeAgencyCode(agencyCode) : null;
+    String effectiveRegime =
+        temporalScopeHelper != null
+            ? temporalScopeHelper.resolveTemporalRegime(null, null, year, temporalRegime)
+            : "POST_MERGER";
+    Set<String> allowedCodes =
+        normAgency != null && temporalScopeHelper != null
+            ? temporalScopeHelper.resolveMatchingNodeCodesForAgency(normAgency, effectiveRegime)
+            : Set.of();
+    Set<Long> allowedIds =
+        normAgency != null && temporalScopeHelper != null
+            ? temporalScopeHelper.resolveMatchingNodeIdsForAgency(normAgency, effectiveRegime)
+            : Set.of();
+
     List<BudgetAllocation> allocs = budgetAllocationRepo.findByBudgetYearOrderByIdAsc(year);
 
     Map<String, Map<String, Object>> unitMap = new LinkedHashMap<>();
@@ -146,15 +214,37 @@ public class BudgetDashboardBusiness {
       if ("REVENUE".equalsIgnoreCase(a.getItemType())) {
         continue;
       }
-      String key = a.getNodeCode() != null ? a.getNodeCode() : "NODE_" + a.getNodeId();
+      if (normAgency != null && !matchesAllocationAgencyScope(a, normAgency, allowedCodes, allowedIds)) {
+        continue;
+      }
+
+      var canonicalDept =
+          temporalScopeHelper != null
+              ? temporalScopeHelper.resolveCanonicalDepartmentForRollup(
+                  normAgency, effectiveRegime, a.getNodeId(), a.getNodeCode(), a.getNodeName())
+              : null;
+
+      Long resolvedNodeId = canonicalDept != null ? canonicalDept.getNodeId() : a.getNodeId();
+      String resolvedNodeCode = canonicalDept != null ? canonicalDept.getCode() : a.getNodeCode();
+      String resolvedNodeName = canonicalDept != null ? canonicalDept.getName() : a.getNodeName();
+      String key = resolvedNodeCode != null ? resolvedNodeCode : "NODE_" + resolvedNodeId;
+
       Map<String, Object> row =
           unitMap.computeIfAbsent(
               key,
               k -> {
                 Map<String, Object> m = new LinkedHashMap<>();
-                m.put("nodeId", a.getNodeId());
-                m.put("nodeCode", a.getNodeCode());
-                m.put("nodeName", a.getNodeName());
+                m.put("nodeId", resolvedNodeId);
+                m.put("nodeCode", resolvedNodeCode);
+                m.put("nodeName", resolvedNodeName);
+                m.put("agencyCode", canonicalDept != null ? canonicalDept.getAgencyCode() : normAgency);
+                m.put("temporalRegime", effectiveRegime);
+                if (canonicalDept != null) {
+                  m.put("transitionType", canonicalDept.getTransitionType());
+                  m.put("transitionBadge", canonicalDept.getTransitionBadge());
+                  m.put("predecessorNodeNames", canonicalDept.getPredecessorNodeNames());
+                  m.put("leadPersonName", canonicalDept.getLeadPersonName());
+                }
                 m.put("allocationsCount", 0);
                 m.put("initialAmount", BigDecimal.ZERO);
                 m.put("supplementAmount", BigDecimal.ZERO);
@@ -201,6 +291,152 @@ public class BudgetDashboardBusiness {
     }
 
     return new ArrayList<>(unitMap.values());
+  }
+
+  private boolean matchesAllocationAgencyScope(
+      BudgetAllocation a, String normAgency, Set<String> allowedCodes, Set<Long> allowedIds) {
+    if (normAgency == null) {
+      return true;
+    }
+    if (a.getNodeId() != null && allowedIds.contains(a.getNodeId())) {
+      return true;
+    }
+    if (a.getNodeCode() != null && allowedCodes.contains(a.getNodeCode())) {
+      return true;
+    }
+    if (temporalScopeHelper != null) {
+      String inferred =
+          temporalScopeHelper.inferAgencyCodeFromDepartment(
+              a.getNodeId(), a.getNodeCode(), a.getNodeName());
+      if (inferred != null) {
+        return normAgency.equalsIgnoreCase(inferred)
+            || ("SXD".equalsIgnoreCase(normAgency) && "SGTVT".equalsIgnoreCase(inferred));
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Lấy dữ liệu Phạm vi Đơn vị chủ quản, Phòng ban, Nhân sự lập dự toán &amp; Tài khoản người dùng
+   * theo Thời điểm Sáp nhập dùng cho Phân hệ Quản lý Kinh phí.
+   */
+  public Map<String, Object> getOrgScopeContext(
+      String agencyCode,
+      String temporalRegime,
+      Integer budgetYear,
+      Long nodeId,
+      String nodeCode) {
+    int year = budgetYear != null ? budgetYear : LocalDate.now().getYear();
+    String normAgency =
+        temporalScopeHelper != null
+            ? temporalScopeHelper.normalizeAgencyCode(agencyCode != null ? agencyCode : "SXD")
+            : "SXD";
+    String effectiveRegime =
+        temporalScopeHelper != null
+            ? temporalScopeHelper.resolveTemporalRegime(null, null, year, temporalRegime)
+            : "POST_MERGER";
+
+    Map<String, Object> ctx = new LinkedHashMap<>();
+    ctx.put("budgetYear", year);
+    ctx.put("agencyCode", normAgency);
+    ctx.put("temporalRegime", effectiveRegime);
+    if (temporalScopeHelper != null) {
+      List<String> allowedTypes = temporalScopeHelper.getAllowedTargetTypesForModule("BUDGET");
+      ctx.put("temporalRegimeLabel", temporalScopeHelper.getRegimeLabel(effectiveRegime));
+      ctx.put("availableTargetTypes", temporalScopeHelper.getAvailableTargetTypes());
+      ctx.put("allowedTargetTypes", allowedTypes);
+      ctx.put("agencies", temporalScopeHelper.getAgenciesByRegime(effectiveRegime, year));
+      ctx.put(
+          "departments",
+          temporalScopeHelper.getDepartmentsByAgencyAndRegime(
+              normAgency, effectiveRegime, null, null, year));
+      ctx.put(
+          "targets",
+          temporalScopeHelper.getTargetsByScopeAndAllowedTypes(
+              normAgency, effectiveRegime, nodeId, nodeCode, null, allowedTypes));
+      ctx.put(
+          "persons",
+          temporalScopeHelper.getPersonsByScope(
+              normAgency, effectiveRegime, nodeId, nodeCode, null));
+      ctx.put(
+          "users",
+          temporalScopeHelper.getUsersByScope(
+              normAgency, effectiveRegime, nodeId, nodeCode, null, true));
+      ctx.put(
+          "consolidationPreview",
+          temporalScopeHelper.buildMergerConsolidationPreview(normAgency, null, year));
+    }
+    return ctx;
+  }
+
+  @SuppressWarnings("unchecked")
+  public Map<String, Object> validateOrgScopeSelection(Map<String, Object> body) {
+    String agencyCode =
+        body != null && body.get("rootNodeCode") != null
+            ? body.get("rootNodeCode").toString()
+            : (body != null && body.get("agencyCode") != null
+                ? body.get("agencyCode").toString()
+                : null);
+    String temporalRegime =
+        body != null && body.get("temporalRegime") != null ? body.get("temporalRegime").toString() : null;
+    Integer budgetYear =
+        body != null && body.get("budgetYear") != null
+            ? Integer.valueOf(body.get("budgetYear").toString())
+            : null;
+    Long nodeId =
+        body != null && body.get("nodeId") != null ? Long.valueOf(body.get("nodeId").toString()) : null;
+    String nodeCode = body != null && body.get("nodeCode") != null ? body.get("nodeCode").toString() : null;
+    String nodeName = body != null && body.get("nodeName") != null ? body.get("nodeName").toString() : null;
+    Long personId =
+        body != null && body.get("personId") != null ? Long.valueOf(body.get("personId").toString()) : null;
+    String personCode = body != null && body.get("personCode") != null ? body.get("personCode").toString() : null;
+    String personName = body != null && body.get("personName") != null ? body.get("personName").toString() : null;
+    Long userId =
+        body != null && body.get("userId") != null ? Long.valueOf(body.get("userId").toString()) : null;
+    String username = body != null && body.get("username") != null ? body.get("username").toString() : null;
+    String targetType = body != null && body.get("targetType") != null ? body.get("targetType").toString() : null;
+    Long targetId =
+        body != null && body.get("targetId") != null ? Long.valueOf(body.get("targetId").toString()) : null;
+    String targetCode = body != null && body.get("targetCode") != null ? body.get("targetCode").toString() : null;
+    String targetName = body != null && body.get("targetName") != null ? body.get("targetName").toString() : null;
+    List<String> allowedTargetTypes =
+        body != null && body.get("allowedTargetTypes") instanceof List<?> rawTypes
+            ? (List<String>) rawTypes
+            : null;
+
+    if (targetType != null || targetId != null || targetCode != null || targetName != null) {
+      return temporalScopeHelper.validatePolymorphicTargetScope(
+          agencyCode,
+          temporalRegime,
+          null,
+          null,
+          budgetYear,
+          nodeId,
+          nodeCode,
+          nodeName,
+          targetType,
+          targetId != null ? targetId : (personId != null ? personId : userId),
+          targetCode != null ? targetCode : (personCode != null ? personCode : username),
+          targetName != null ? targetName : personName,
+          allowedTargetTypes != null
+              ? allowedTargetTypes
+              : temporalScopeHelper.getAllowedTargetTypesForModule("BUDGET"));
+    }
+
+    return temporalScopeHelper.validateScopeSelection(
+        agencyCode,
+        temporalRegime,
+        null,
+        null,
+        budgetYear,
+        nodeId,
+        nodeCode,
+        nodeName,
+        personId,
+        personCode,
+        personName,
+        userId,
+        username);
   }
 
   public List<Map<String, Object>> getRevenueExpenditureTree(Integer budgetYear) {
