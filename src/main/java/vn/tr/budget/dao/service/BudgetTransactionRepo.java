@@ -42,6 +42,15 @@ public interface BudgetTransactionRepo
   @Query(value = "SELECT * FROM budget_transaction WHERE id = :id LIMIT 1", nativeQuery = true)
   Optional<BudgetTransaction> findByIdIncludingDeleted(@Param("id") Long id);
 
+  @Query(
+      value =
+          "SELECT * FROM budget_transaction WHERE id = :id AND (app_code = :appCode OR :appCode IS NULL) LIMIT 1",
+      nativeQuery = true)
+  Optional<BudgetTransaction> findByIdIncludingDeletedByAppCode(
+      @Param("id") Long id, @Param("appCode") String appCode);
+
+  List<BudgetTransaction> findByCounterpartTxId(Long counterpartTxId);
+
   List<BudgetTransaction> findByAllocationIdOrderByIdAsc(Long allocationId);
 
   List<BudgetTransaction> findByBudgetYearOrderByIdDesc(Integer budgetYear);

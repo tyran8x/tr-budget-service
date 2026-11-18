@@ -42,7 +42,32 @@ public interface BudgetEstimateItemRepo
   @Query(value = "SELECT * FROM budget_estimate_item WHERE id = :id LIMIT 1", nativeQuery = true)
   Optional<BudgetEstimateItem> findByIdIncludingDeleted(@Param("id") Long id);
 
+  @Query(
+      value =
+          "SELECT * FROM budget_estimate_item WHERE id = :id AND (app_code = :appCode OR :appCode IS NULL) LIMIT 1",
+      nativeQuery = true)
+  Optional<BudgetEstimateItem> findByIdIncludingDeletedByAppCode(
+      @Param("id") Long id, @Param("appCode") String appCode);
+
   List<BudgetEstimateItem> findByParentIdOrderByIdAsc(Long parentId);
 
   List<BudgetEstimateItem> findByItemTypeOrderByIdAsc(String itemType);
+
+  @Query(
+      "SELECT COUNT(e) > 0 FROM BudgetEstimateItem e "
+          + "WHERE UPPER(e.code) = UPPER(:code) "
+          + "AND COALESCE(e.budgetYear, 0) = COALESCE(:budgetYear, 0) "
+          + "AND (:excludeId IS NULL OR e.id <> :excludeId)")
+  boolean existsDuplicateCodeInYear(
+      @Param("code") String code,
+      @Param("budgetYear") Integer budgetYear,
+      @Param("excludeId") Long excludeId);
+
+  @Query(
+      "SELECT e FROM BudgetEstimateItem e "
+          + "WHERE UPPER(e.code) = UPPER(:code) "
+          + "AND COALESCE(e.budgetYear, 0) = COALESCE(:budgetYear, 0) "
+          + "ORDER BY e.deletedAt ASC NULLS FIRST, e.updatedAt DESC")
+  List<BudgetEstimateItem> findByCodeInYearSorted(
+      @Param("code") String code, @Param("budgetYear") Integer budgetYear);
 }

@@ -6,6 +6,8 @@ import org.springframework.stereotype.Component;
 import org.springframework.validation.Errors;
 import vn.tr.budget.dao.service.BudgetReportService;
 import vn.tr.budget.data.dto.BudgetReportData;
+import vn.tr.budget.data.enums.BudgetPeriodType;
+import vn.tr.budget.data.enums.BudgetWorkflowStatus;
 import vn.tr.common.core.utils.MessageUtils;
 import vn.tr.common.web.validator.BaseValidator;
 
@@ -60,6 +62,28 @@ public class BudgetReportValidator extends BaseValidator {
               "budget.error.year.invalid",
               "Năm ngân sách phải nằm trong khoảng từ 2000 đến " + maxYear,
               maxYear));
+    }
+
+    if (data.getReportPeriod() != null
+        && !data.getReportPeriod().isBlank()
+        && !BudgetPeriodType.isValid(data.getReportPeriod())) {
+      errors.rejectValue(
+          "reportPeriod",
+          "budget.error.period.invalid",
+          MessageUtils.messageOrDefault(
+              "budget.error.period.invalid",
+              "Kỳ báo cáo '" + data.getReportPeriod() + "' không hợp lệ"));
+    }
+
+    if (data.getWorkflowStatus() != null
+        && !data.getWorkflowStatus().isBlank()
+        && !BudgetWorkflowStatus.isValid(data.getWorkflowStatus())) {
+      errors.rejectValue(
+          "workflowStatus",
+          "budget.error.status.invalid",
+          MessageUtils.messageOrDefault(
+              "budget.error.status.invalid",
+              "Trạng thái báo cáo '" + data.getWorkflowStatus() + "' không hợp lệ"));
     }
   }
 

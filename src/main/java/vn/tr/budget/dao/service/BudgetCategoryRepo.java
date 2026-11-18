@@ -42,6 +42,13 @@ public interface BudgetCategoryRepo
   @Query(value = "SELECT * FROM budget_category WHERE id = :id LIMIT 1", nativeQuery = true)
   Optional<BudgetCategory> findByIdIncludingDeleted(@Param("id") Long id);
 
+  @Query(
+      value =
+          "SELECT * FROM budget_category WHERE id = :id AND (app_code = :appCode OR :appCode IS NULL) LIMIT 1",
+      nativeQuery = true)
+  Optional<BudgetCategory> findByIdIncludingDeletedByAppCode(
+      @Param("id") Long id, @Param("appCode") String appCode);
+
   List<BudgetCategory> findByParentIdOrderByIdAsc(Long parentId);
 
   List<BudgetCategory> findByBudgetYearAndCategoryGroupInOrderBySortOrderAscIdAsc(

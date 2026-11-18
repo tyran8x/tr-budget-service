@@ -7,6 +7,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.validation.Errors;
 import vn.tr.budget.dao.service.BudgetCategoryService;
 import vn.tr.budget.data.dto.BudgetCategoryData;
+import vn.tr.budget.data.enums.BudgetAutonomyType;
 import vn.tr.common.core.utils.MessageUtils;
 import vn.tr.common.web.validator.BaseValidator;
 
@@ -71,6 +72,17 @@ public class BudgetCategoryValidator extends BaseValidator {
           MessageUtils.messageOrDefault(
               "budget.error.amount.negative",
               "Số tiền dự toán / kinh phí không được nhỏ hơn 0"));
+    }
+
+    if (data.getAutonomyType() != null
+        && !data.getAutonomyType().isBlank()
+        && !BudgetAutonomyType.isValid(data.getAutonomyType())) {
+      errors.rejectValue(
+          "autonomyType",
+          "budget.error.autonomyType.invalid",
+          MessageUtils.messageOrDefault(
+              "budget.error.autonomyType.invalid",
+              "Loại hình tự chủ '" + data.getAutonomyType() + "' không hợp lệ"));
     }
   }
 

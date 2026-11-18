@@ -23,6 +23,8 @@ import vn.tr.budget.dao.service.BudgetEstimateItemRepo;
 import vn.tr.budget.dao.service.BudgetReportRepo;
 import vn.tr.budget.dao.service.BudgetTransactionRepo;
 import vn.tr.budget.dao.service.BudgetUnitConfigRepo;
+import vn.tr.common.core.constant.AppCodeConstants;
+import vn.tr.common.core.context.HeaderContext;
 import vn.tr.common.core.enums.LifecycleStatus;
 
 /**
@@ -47,11 +49,13 @@ public class BudgetDataInitializer implements ApplicationRunner {
   @Override
   @Transactional
   public void run(ApplicationArguments args) {
-    ensureYearDomainConfigsSeeded();
-    if (budgetAllocationRepo.count() > 0) {
-      log.info("[BudgetDataInitializer] Database đã có dữ liệu kinh phí, bỏ qua bước seed.");
-      return;
-    }
+    HeaderContext.setAppCode(AppCodeConstants.BUDGET);
+    try {
+      ensureYearDomainConfigsSeeded();
+      if (budgetAllocationRepo.count() > 0) {
+        log.info("[BudgetDataInitializer] Database đã có dữ liệu kinh phí, bỏ qua bước seed.");
+        return;
+      }
 
     log.info(
         "[BudgetDataInitializer] Khởi tạo dữ liệu Quản lý Kinh phí & Dự toán Thu - Chi (Gắn với tài khoản Đinh Quang Huy - huydq1@danang.gov.vn)...");
@@ -990,6 +994,9 @@ public class BudgetDataInitializer implements ApplicationRunner {
                 .build()));
 
     log.info("[BudgetDataInitializer] Hoàn tất khởi tạo dữ liệu mẫu Quản lý Kinh phí & Dự toán Thu - Chi!");
+    } finally {
+      HeaderContext.clear();
+    }
   }
 
   /**

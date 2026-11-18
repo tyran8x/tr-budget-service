@@ -1,14 +1,11 @@
 package vn.tr.budget.controller;
 
 import cn.dev33.satoken.annotation.SaCheckPermission;
+import cn.dev33.satoken.annotation.SaMode;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
-import java.io.IOException;
-import java.io.InputStream;
-import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import lombok.RequiredArgsConstructor;
@@ -25,15 +22,12 @@ import org.springframework.web.multipart.MultipartFile;
 import vn.tr.budget.business.BudgetCategoryBusiness;
 import vn.tr.budget.data.criteria.BudgetCategorySearchCriteria;
 import vn.tr.budget.data.dto.BudgetCategoryData;
-import vn.tr.budget.data.dto.BudgetCategoryImportData;
 import vn.tr.budget.data.mapper.BudgetCategoryMapper;
 import vn.tr.budget.excel.BudgetCategoryExcelService;
+import vn.tr.budget.excel.BudgetExcelControllerHelper;
 import vn.tr.common.core.domain.R;
 import vn.tr.common.core.domain.data.PagedData;
-import vn.tr.common.core.exception.base.BaseException;
-import vn.tr.common.core.utils.MessageUtils;
-import vn.tr.common.excel.core.ImportBatchResult;
-import vn.tr.common.excel.core.ImportRowResult;
+import vn.tr.common.core.domain.data.RefData;
 import vn.tr.common.log.annotation.Log;
 import vn.tr.common.log.enums.BusinessType;
 import vn.tr.common.web.core.BaseController;
@@ -49,13 +43,14 @@ import vn.tr.common.web.data.dto.DeleteData;
 @RestController
 @RequestMapping("/categories")
 @RequiredArgsConstructor
-@Tag(name = "Danh mục Loại - Khoản Mục lục Ngân sách & Nguồn Kinh phí", description = "API quản lý Danh mục Loại - Khoản - Mục lục Ngân sách Nhà nước và Nguồn kinh phí (kế thừa & nâng cấp từ QlkpDmLoaiKhoan)")
+@Tag(
+    name = "Danh mục Loại - Khoản Mục lục Ngân sách & Nguồn Kinh phí",
+    description = "API quản lý Danh mục Loại - Khoản - Mục lục Ngân sách Nhà nước và Nguồn kinh phí")
 public class BudgetCategoryController extends BaseController {
 
   private final BudgetCategoryBusiness budgetCategoryBusiness;
   private final BudgetCategoryExcelService budgetCategoryExcelService;
   private final BudgetCategoryMapper budgetCategoryMapper;
-  private final HttpServletResponse response;
 
   @SaCheckPermission("BudgetCategoryCreate")
   @PostMapping
@@ -69,7 +64,8 @@ public class BudgetCategoryController extends BaseController {
   @PutMapping("/{id}")
   @Operation(summary = "Cập nhật Danh mục Loại - Khoản Mục lục Ngân sách & Nguồn Kinh phí")
   @Log(title = "[BudgetCategory] Update", businessType = BusinessType.UPDATE)
-  public R<BudgetCategoryData> update(@PathVariable Long id, @Valid @RequestBody BudgetCategoryData data) {
+  public R<BudgetCategoryData> update(
+      @PathVariable Long id, @Valid @RequestBody BudgetCategoryData data) {
     return success(budgetCategoryBusiness.update(id, data));
   }
 
@@ -97,6 +93,21 @@ public class BudgetCategoryController extends BaseController {
     return success(budgetCategoryBusiness.findAll(criteria));
   }
 
+  @SaCheckPermission(
+      value = {
+        "BudgetCategoryList",
+        "BudgetAllocationCreate",
+        "BudgetAllocationEdit",
+        "BudgetEstimateItemCreate",
+        "BudgetEstimateItemEdit"
+      },
+      mode = SaMode.OR)
+  @GetMapping("/options")
+  @Operation(summary = "Lấy danh sách rút gọn (Lookup Options) Danh mục Loại - Khoản")
+  public R<PagedData<RefData<Long>>> getOptions(BudgetCategorySearchCriteria criteria) {
+    return success(budgetCategoryBusiness.getOptions(criteria));
+  }
+
   @SaCheckPermission("BudgetCategoryDetail")
   @GetMapping("/{id}")
   @Operation(summary = "Lấy chi tiết Danh mục Loại - Khoản Mục lục Ngân sách & Nguồn Kinh phí")
@@ -105,7 +116,7 @@ public class BudgetCategoryController extends BaseController {
   }
 
   @SaCheckPermission("BudgetCategoryClone")
-  @GetMapping("/{id}/clone")
+  @PostMapping("/{id}/clone")
   @Operation(summary = "Sao chép Danh mục Loại - Khoản Mục lục Ngân sách & Nguồn Kinh phí")
   @Log(title = "[BudgetCategory] Clone", businessType = BusinessType.INSERT)
   public R<BudgetCategoryData> cloneById(@PathVariable Long id) {
@@ -136,7 +147,7 @@ public class BudgetCategoryController extends BaseController {
       title = "[BudgetCategory] Export Excel",
       businessType = BusinessType.EXPORT,
       isSaveRequestData = false)
-  public void export(BudgetCategorySearchCriteria criteria) {
+  public void export(BudgetCategorySearchCriteria criteria, HttpServletResponse response) {
     budgetCategoryExcelService.export(criteria, response);
   }
 
@@ -147,7 +158,7 @@ public class BudgetCategoryController extends BaseController {
       title = "[BudgetCategory] Download Template",
       businessType = BusinessType.IMPORT,
       isSaveRequestData = false)
-  public void downloadTemplate() {
+  public void downloadTemplate(HttpServletResponse response) {
     budgetCategoryExcelService.importTemplate(response);
   }
 
@@ -155,43 +166,9 @@ public class BudgetCategoryController extends BaseController {
   @PostMapping("/import/validate")
   @Operation(summary = "Validate file Excel Import")
   public R<Map<String, Object>> validateImport(@RequestParam("file") MultipartFile file) {
-    try (InputStream is = file.getInputStream()) {
-      ImportBatchResult<BudgetCategoryImportData> batchResult =
-          budgetCategoryExcelService.validateExcel(is, file.getOriginalFilename(), true);
-
-      List<BudgetCategoryData> dataList = new ArrayList<>();
-      List<Map<String, Object>> errorsList = new ArrayList<>();
-
-      for (ImportRowResult<BudgetCategoryImportData> rowResult : batchResult.getRowResults()) {
-        BudgetCategoryData data = budgetCategoryMapper.toImportData(rowResult.getOriginalData());
-        dataList.add(data);
-
-        if (rowResult.hasErrors()) {
-          for (String err : rowResult.getValidationErrors()) {
-            Map<String, Object> errMap = new HashMap<>();
-            errMap.put("row", rowResult.getRowNumber());
-            errMap.put("field", "");
-            errMap.put("message", err);
-            errorsList.add(errMap);
-          }
-        }
-      }
-
-      Map<String, Object> summary = new HashMap<>();
-      summary.put("total", batchResult.getTotalRows());
-      summary.put("valid", batchResult.getTotalRows() - batchResult.getErrorCount());
-      summary.put("invalid", batchResult.getErrorCount());
-
-      Map<String, Object> result = new HashMap<>();
-      result.put("data", dataList);
-      result.put("errors", errorsList);
-      result.put("summary", summary);
-      result.put("valid", batchResult.getErrorCount() == 0);
-
-      return success(result);
-    } catch (IOException e) {
-      throw new BaseException(MessageUtils.message("error.excel.read", e.getMessage()));
-    }
+    return success(
+        BudgetExcelControllerHelper.validateImport(
+            file, budgetCategoryExcelService, budgetCategoryMapper));
   }
 
   @SaCheckPermission("BudgetCategoryImport")
@@ -199,43 +176,23 @@ public class BudgetCategoryController extends BaseController {
   @Operation(summary = "Import dữ liệu Danh mục Loại - Khoản Mục lục Ngân sách & Nguồn Kinh phí từ JSON")
   @Log(title = "[BudgetCategory] Import Commit", businessType = BusinessType.IMPORT)
   public R<Map<String, Object>> importData(@RequestBody Map<String, List<BudgetCategoryData>> body) {
-    List<BudgetCategoryData> dataList = body.get("data");
-    if (dataList == null || dataList.isEmpty()) {
-      throw new BaseException("Dữ liệu import trống");
-    }
-
-    int created = 0;
-    int updated = 0;
-    List<Map<String, Object>> errors = new ArrayList<>();
-
-    for (int i = 0; i < dataList.size(); i++) {
-      BudgetCategoryData data = dataList.get(i);
-      try {
-        if (data.getId() != null
-            && data.getId() > 0
-            && budgetCategoryBusiness.getInjectedRepo().existsById(data.getId())) {
-          budgetCategoryBusiness.update(data.getId(), data);
-          updated++;
-        } else {
-          budgetCategoryBusiness.create(data);
-          created++;
-        }
-      } catch (Exception e) {
-        Map<String, Object> errMap = new HashMap<>();
-        errMap.put("row", i + 1);
-        errMap.put("message", e.getMessage());
-        errors.add(errMap);
-      }
-    }
-
-    Map<String, Object> result = new HashMap<>();
-    result.put("created", created);
-    result.put("updated", updated);
-    result.put("errors", errors);
-    return success(result);
+    return success(
+        BudgetExcelControllerHelper.importData(
+            body.get("data"),
+            BudgetCategoryData::getId,
+            id -> budgetCategoryBusiness.getInjectedRepo().existsById(id),
+            budgetCategoryBusiness::create,
+            budgetCategoryBusiness::update));
   }
 
-  @SaCheckPermission("BudgetCategoryList")
+  @SaCheckPermission(
+      value = {
+        "BudgetCategoryList",
+        "BudgetAllocationList",
+        "BudgetTransactionList",
+        "BudgetReportList"
+      },
+      mode = SaMode.OR)
   @GetMapping("/year-domain-configs")
   @Operation(
       summary =
@@ -265,5 +222,4 @@ public class BudgetCategoryController extends BaseController {
   public R<Map<String, Object>> cloneYearDomainConfig(@RequestBody Map<String, Object> body) {
     return success(budgetCategoryBusiness.cloneYearDomainConfig(body));
   }
-
 }

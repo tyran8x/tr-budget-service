@@ -42,6 +42,13 @@ public interface BudgetUnitConfigRepo
   @Query(value = "SELECT * FROM budget_unit_config WHERE id = :id LIMIT 1", nativeQuery = true)
   Optional<BudgetUnitConfig> findByIdIncludingDeleted(@Param("id") Long id);
 
+  @Query(
+      value =
+          "SELECT * FROM budget_unit_config WHERE id = :id AND (app_code = :appCode OR :appCode IS NULL) LIMIT 1",
+      nativeQuery = true)
+  Optional<BudgetUnitConfig> findByIdIncludingDeletedByAppCode(
+      @Param("id") Long id, @Param("appCode") String appCode);
+
   Optional<BudgetUnitConfig> findFirstByNodeIdOrderByIdDesc(Long nodeId);
 
   Optional<BudgetUnitConfig> findFirstByNodeCodeIgnoreCaseOrderByIdDesc(String nodeCode);

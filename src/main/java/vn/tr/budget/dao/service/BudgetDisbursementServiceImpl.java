@@ -1,7 +1,6 @@
 package vn.tr.budget.dao.service;
 
 import cn.hutool.core.util.ObjectUtil;
-import cn.hutool.core.util.StrUtil;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
@@ -47,7 +46,7 @@ public class BudgetDisbursementServiceImpl implements BudgetDisbursementService 
     if (id == null) {
       return Optional.empty();
     }
-    return repo.findByIdIncludingDeleted(id);
+    return repo.findByIdIncludingDeletedByAppCode(id, BudgetQueryHelper.resolveCurrentAppCode());
   }
 
   @Override
@@ -74,18 +73,17 @@ public class BudgetDisbursementServiceImpl implements BudgetDisbursementService 
         ObjectUtil.defaultIfNull(searchCriteria, new BudgetDisbursementSearchCriteria());
     Specification<BudgetDisbursement> spec = BudgetDisbursementSpecifications.quickSearch(criteria);
     if (pageable == null || pageable.isUnpaged()) {
-      Sort sort = Sort.unsorted();
-      if (StrUtil.isNotEmpty(criteria.getSortBy())) {
-        Sort.Direction direction =
-            "ASC".equalsIgnoreCase(criteria.getSortDir())
-                ? Sort.Direction.ASC
-                : Sort.Direction.DESC;
-        sort = Sort.by(direction, criteria.getSortBy());
-      }
+      Sort sort =
+          BudgetQueryHelper.buildSafeSort(
+              criteria.getSortBy(),
+              criteria.getSortDir(),
+              BudgetQueryHelper.DISBURSEMENT_SORT_FIELDS);
       List<BudgetDisbursement> list = repo.findAll(spec, sort);
       return new PageImpl<>(list, Pageable.unpaged(), list.size());
     }
-    return repo.findAll(spec, pageable);
+    return repo.findAll(
+        spec,
+        BudgetQueryHelper.sanitizePageable(pageable, BudgetQueryHelper.DISBURSEMENT_SORT_FIELDS));
   }
 
   @Override

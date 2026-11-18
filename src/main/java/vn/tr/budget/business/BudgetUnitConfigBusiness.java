@@ -18,6 +18,7 @@ import vn.tr.budget.data.dto.BudgetUnitConfigData;
 import vn.tr.budget.data.mapper.BudgetUnitConfigMapper;
 import vn.tr.budget.data.validator.BudgetUnitConfigValidator;
 import vn.tr.common.core.domain.data.PagedData;
+import vn.tr.common.core.domain.data.RefData;
 import vn.tr.common.core.enums.LifecycleStatus;
 import vn.tr.common.core.exception.base.EntityNotFoundException;
 import vn.tr.common.jpa.audit.AuditRollbackHelper;
@@ -254,6 +255,27 @@ public class BudgetUnitConfigBusiness {
   public Map<String, Object> checkAutonomy(
       Long nodeId, String categoryCode, BigDecimal proposedAmount) {
     return workflowEngineHelper.checkUnitAutonomy(nodeId, categoryCode, proposedAmount);
+  }
+
+  /**
+   * Lấy danh sách rút gọn (Lookup Options) Đơn vị Sử dụng Ngân sách — ẩn toàn bộ thông tin tài
+   * khoản ngân hàng và mã số thuế nhạy cảm.
+   */
+  @Transactional(readOnly = true)
+  public PagedData<RefData<Long>> getOptions(BudgetUnitConfigSearchCriteria criteria) {
+    Pageable pageable = CoreUtils.getPageRequest(criteria);
+    Page<BudgetUnitConfig> page = budgetUnitConfigService.findAll(criteria, pageable);
+    return PagedData.from(
+        page,
+        e ->
+            RefData.of(
+                    e.getId(),
+                    e.getCode(),
+                    e.getName(),
+                    e.getStatus() != null ? e.getStatus().name() : null)
+                .addExtra("nodeId", e.getNodeId())
+                .addExtra("nodeCode", e.getNodeCode())
+                .addExtra("nodeName", e.getNodeName()));
   }
 
 }

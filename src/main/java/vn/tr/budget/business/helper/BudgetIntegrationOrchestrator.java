@@ -23,9 +23,12 @@ import vn.tr.budget.dao.model.BudgetAllocation;
 import vn.tr.budget.dao.model.BudgetDisbursement;
 import vn.tr.budget.dao.model.BudgetTransaction;
 import vn.tr.budget.dao.service.BudgetDisbursementRepo;
+import vn.tr.common.core.constant.NotifEventTypes;
 import vn.tr.common.core.domain.R;
 import vn.tr.common.core.event.notification.NotificationRequestData;
 import vn.tr.common.core.event.notification.NotificationRequestData.ActionConfigData;
+import vn.tr.common.feign.directory.bean.DirectoryPersonBean;
+import vn.tr.common.feign.directory.service.DirectoryPersonClient;
 import vn.tr.common.feign.identity.UnifiedIdentityResolver;
 import vn.tr.common.feign.identity.UserPersonContextData;
 import vn.tr.common.feign.notification.service.NotificationInternalClient;
@@ -62,9 +65,9 @@ import vn.tr.common.feign.workflow.dto.WfStartRequest;
 @Slf4j
 public class BudgetIntegrationOrchestrator {
 
-  public static final String WF_PROCESS_ALLOCATION = "WF_BUDGET_ALLOCATION_APPROVAL";
-  public static final String WF_PROCESS_TRANSACTION = "WF_BUDGET_TRANSACTION_APPROVAL";
-  public static final String WF_PROCESS_DISBURSEMENT = "WF_BUDGET_DISBURSEMENT_APPROVAL";
+  public static final String WF_PROCESS_ALLOCATION = "budget_allocation_approval";
+  public static final String WF_PROCESS_TRANSACTION = "budget_allocation_approval";
+  public static final String WF_PROCESS_DISBURSEMENT = "budget_disbursement_approval";
 
   private static final long CIRCUIT_BACKOFF_MS = 60_000L;
 
@@ -84,6 +87,9 @@ public class BudgetIntegrationOrchestrator {
 
   @Autowired(required = false)
   private ObjectProvider<PaymentInternalClient> paymentClientProvider;
+
+  @Autowired(required = false)
+  private ObjectProvider<DirectoryPersonClient> directoryPersonClientProvider;
 
   public BudgetIntegrationOrchestrator(
       ObjectProvider<WorkflowFeignClient> workflowClientProvider,
@@ -143,7 +149,6 @@ public class BudgetIntegrationOrchestrator {
             return ctx.getUsername();
           }
         }
-        identityBackoffUntil = System.currentTimeMillis() + CIRCUIT_BACKOFF_MS;
       } catch (Exception e) {
         identityBackoffUntil = System.currentTimeMillis() + CIRCUIT_BACKOFF_MS;
         log.debug("[BudgetIdentity] Fallback current user actor resolution: {}", e.getMessage());
@@ -179,11 +184,36 @@ public class BudgetIntegrationOrchestrator {
         if (ctxOpt.isPresent() && ctxOpt.get().getPersonId() != null) {
           return ctxOpt.get().getPersonId();
         }
-        identityBackoffUntil = System.currentTimeMillis() + CIRCUIT_BACKOFF_MS;
       } catch (Exception e) {
         identityBackoffUntil = System.currentTimeMillis() + CIRCUIT_BACKOFF_MS;
         log.debug("[BudgetIdentity] Fallback current personId resolution: {}", e.getMessage());
       }
+    }
+    return null;
+  }
+
+  /**
+   * Truy vấn số lượng nhân sự đang hoạt động thuộc Đơn vị ({@code dir_node.id}) qua {@link
+   * DirectoryPersonClient#findByContext}. Trả về {@code null} nếu dịch vụ danh bạ không khả dụng.
+   */
+  public Integer resolveActiveStaffCount(Long nodeId) {
+    if (nodeId == null || System.currentTimeMillis() < identityBackoffUntil) {
+      return null;
+    }
+    DirectoryPersonClient dirClient =
+        directoryPersonClientProvider != null ? directoryPersonClientProvider.getIfAvailable() : null;
+    if (dirClient == null) {
+      return null;
+    }
+    try {
+      R<List<DirectoryPersonBean>> res =
+          dirClient.findByContext(null, null, nodeId, false, null, null);
+      if (res != null && res.getData() != null) {
+        return res.getData().size();
+      }
+    } catch (Exception e) {
+      identityBackoffUntil = System.currentTimeMillis() + CIRCUIT_BACKOFF_MS;
+      log.warn("[BudgetDirectory] Degraded mode resolving active staff for nodeId={}: {}", nodeId, e.getMessage());
     }
     return null;
   }
@@ -606,8 +636,15 @@ public class BudgetIntegrationOrchestrator {
             alloc.getWorkflowStatus(),
             StrUtil.blankToDefault(actorName, "Hệ thống"),
             StrUtil.isNotBlank(comment) ? " Ghi chú: " + comment : "");
+    String notifEventType =
+        switch (StrUtil.nullToEmpty(eventType).toUpperCase()) {
+          case "SUBMITTED" -> NotifEventTypes.BUDGET_ALLOCATION_SUBMITTED;
+          case "APPROVED", "SELF_APPROVED" -> NotifEventTypes.BUDGET_ALLOCATION_APPROVED;
+          case "REJECTED" -> NotifEventTypes.BUDGET_ALLOCATION_REJECTED;
+          default -> NotifEventTypes.BUDGET_ALLOCATION_SUBMITTED;
+        };
     sendNotification(
-        "budget.allocation." + StrUtil.nullToEmpty(eventType).toLowerCase(),
+        notifEventType,
         recipients,
         List.of("ACCOUNTANT", "FINANCE_HEAD", "DIRECTORATE"),
         "NORMAL",
@@ -657,8 +694,12 @@ public class BudgetIntegrationOrchestrator {
             disb.getAmount() != null ? disb.getAmount().toPlainString() : "0",
             StrUtil.blankToDefault(disb.getBeneficiaryName(), "Đơn vị thụ hưởng"),
             disb.getApprovalStatus());
+    String notifEventType =
+        "SETTLED".equalsIgnoreCase(eventType)
+            ? NotifEventTypes.BUDGET_DISBURSEMENT_SETTLED
+            : NotifEventTypes.BUDGET_DISBURSEMENT_APPROVED;
     sendNotification(
-        "budget.disbursement." + StrUtil.nullToEmpty(eventType).toLowerCase(),
+        notifEventType,
         recipients,
         List.of("ACCOUNTANT", "FINANCE_HEAD"),
         "HIGH",
@@ -744,7 +785,7 @@ public class BudgetIntegrationOrchestrator {
     }
     String priority = "SLA_OVERDUE".equalsIgnoreCase(alertType) ? "URGENT" : "HIGH";
     sendNotification(
-        "budget.disbursement." + StrUtil.nullToEmpty(alertType).toLowerCase(),
+        NotifEventTypes.BUDGET_SLA_OVERDUE_WARNING,
         recipients,
         List.of("ACCOUNTANT", "FINANCE_HEAD"),
         priority,
@@ -791,8 +832,6 @@ public class BudgetIntegrationOrchestrator {
         List<Long> uids = resolver.resolveRecipientUserIdsForNode(nodeCode, false);
         if (uids != null && !uids.isEmpty()) {
           uids.forEach(uid -> result.add(String.valueOf(uid)));
-        } else {
-          identityBackoffUntil = System.currentTimeMillis() + CIRCUIT_BACKOFF_MS;
         }
       } else if (nodeId != null) {
         var users = resolver.resolveUsersByNodeId(nodeId, false);
@@ -803,8 +842,6 @@ public class BudgetIntegrationOrchestrator {
                   result.add(String.valueOf(ctx.getUserId()));
                 }
               });
-        } else {
-          identityBackoffUntil = System.currentTimeMillis() + CIRCUIT_BACKOFF_MS;
         }
       }
     } catch (Exception e) {

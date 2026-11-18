@@ -1,14 +1,11 @@
 package vn.tr.budget.controller;
 
 import cn.dev33.satoken.annotation.SaCheckPermission;
+import cn.dev33.satoken.annotation.SaMode;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
-import java.io.IOException;
-import java.io.InputStream;
-import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import lombok.RequiredArgsConstructor;
@@ -22,18 +19,16 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
+import vn.tr.budget.business.BudgetBatchEntryBusiness;
 import vn.tr.budget.business.BudgetTransactionBusiness;
 import vn.tr.budget.data.criteria.BudgetTransactionSearchCriteria;
 import vn.tr.budget.data.dto.BudgetTransactionData;
-import vn.tr.budget.data.dto.BudgetTransactionImportData;
 import vn.tr.budget.data.mapper.BudgetTransactionMapper;
+import vn.tr.budget.excel.BudgetExcelControllerHelper;
 import vn.tr.budget.excel.BudgetTransactionExcelService;
 import vn.tr.common.core.domain.R;
 import vn.tr.common.core.domain.data.PagedData;
-import vn.tr.common.core.exception.base.BaseException;
-import vn.tr.common.core.utils.MessageUtils;
-import vn.tr.common.excel.core.ImportBatchResult;
-import vn.tr.common.excel.core.ImportRowResult;
+import vn.tr.common.core.domain.data.RefData;
 import vn.tr.common.log.annotation.Log;
 import vn.tr.common.log.enums.BusinessType;
 import vn.tr.common.web.core.BaseController;
@@ -49,13 +44,16 @@ import vn.tr.common.web.data.dto.DeleteData;
 @RestController
 @RequestMapping("/transactions")
 @RequiredArgsConstructor
-@Tag(name = "Sổ cái Biến động Nguồn Kinh phí Bút toán kép", description = "API quản lý Sổ cái Biến động Nguồn Kinh phí: Giao đầu năm, Bổ sung nguồn, Chuyển nguồn liên năm (N -> N+1), Điều chuyển nội bộ và Thu hồi dự toán")
+@Tag(
+    name = "Sổ cái Biến động Nguồn Kinh phí Bút toán kép",
+    description =
+        "API quản lý Sổ cái Biến động Nguồn Kinh phí: Giao đầu năm, Bổ sung nguồn, Chuyển nguồn liên năm (N -> N+1), Điều chuyển nội bộ và Thu hồi dự toán")
 public class BudgetTransactionController extends BaseController {
 
   private final BudgetTransactionBusiness budgetTransactionBusiness;
+  private final BudgetBatchEntryBusiness budgetBatchEntryBusiness;
   private final BudgetTransactionExcelService budgetTransactionExcelService;
   private final BudgetTransactionMapper budgetTransactionMapper;
-  private final HttpServletResponse response;
 
   @SaCheckPermission("BudgetTransactionCreate")
   @PostMapping
@@ -69,7 +67,8 @@ public class BudgetTransactionController extends BaseController {
   @PutMapping("/{id}")
   @Operation(summary = "Cập nhật Sổ cái Biến động Nguồn Kinh phí Bút toán kép")
   @Log(title = "[BudgetTransaction] Update", businessType = BusinessType.UPDATE)
-  public R<BudgetTransactionData> update(@PathVariable Long id, @Valid @RequestBody BudgetTransactionData data) {
+  public R<BudgetTransactionData> update(
+      @PathVariable Long id, @Valid @RequestBody BudgetTransactionData data) {
     return success(budgetTransactionBusiness.update(id, data));
   }
 
@@ -97,6 +96,15 @@ public class BudgetTransactionController extends BaseController {
     return success(budgetTransactionBusiness.findAll(criteria));
   }
 
+  @SaCheckPermission(
+      value = {"BudgetTransactionList", "BudgetAllocationList", "BudgetReportList"},
+      mode = SaMode.OR)
+  @GetMapping("/options")
+  @Operation(summary = "Lấy danh sách rút gọn (Lookup Options) Giao dịch Sổ cái Ngân sách")
+  public R<PagedData<RefData<Long>>> getOptions(BudgetTransactionSearchCriteria criteria) {
+    return success(budgetTransactionBusiness.getOptions(criteria));
+  }
+
   @SaCheckPermission("BudgetTransactionDetail")
   @GetMapping("/{id}")
   @Operation(summary = "Lấy chi tiết Sổ cái Biến động Nguồn Kinh phí Bút toán kép")
@@ -105,7 +113,7 @@ public class BudgetTransactionController extends BaseController {
   }
 
   @SaCheckPermission("BudgetTransactionClone")
-  @GetMapping("/{id}/clone")
+  @PostMapping("/{id}/clone")
   @Operation(summary = "Sao chép Sổ cái Biến động Nguồn Kinh phí Bút toán kép")
   @Log(title = "[BudgetTransaction] Clone", businessType = BusinessType.INSERT)
   public R<BudgetTransactionData> cloneById(@PathVariable Long id) {
@@ -136,7 +144,7 @@ public class BudgetTransactionController extends BaseController {
       title = "[BudgetTransaction] Export Excel",
       businessType = BusinessType.EXPORT,
       isSaveRequestData = false)
-  public void export(BudgetTransactionSearchCriteria criteria) {
+  public void export(BudgetTransactionSearchCriteria criteria, HttpServletResponse response) {
     budgetTransactionExcelService.export(criteria, response);
   }
 
@@ -147,7 +155,7 @@ public class BudgetTransactionController extends BaseController {
       title = "[BudgetTransaction] Download Template",
       businessType = BusinessType.IMPORT,
       isSaveRequestData = false)
-  public void downloadTemplate() {
+  public void downloadTemplate(HttpServletResponse response) {
     budgetTransactionExcelService.importTemplate(response);
   }
 
@@ -155,105 +163,47 @@ public class BudgetTransactionController extends BaseController {
   @PostMapping("/import/validate")
   @Operation(summary = "Validate file Excel Import")
   public R<Map<String, Object>> validateImport(@RequestParam("file") MultipartFile file) {
-    try (InputStream is = file.getInputStream()) {
-      ImportBatchResult<BudgetTransactionImportData> batchResult =
-          budgetTransactionExcelService.validateExcel(is, file.getOriginalFilename(), true);
-
-      List<BudgetTransactionData> dataList = new ArrayList<>();
-      List<Map<String, Object>> errorsList = new ArrayList<>();
-
-      for (ImportRowResult<BudgetTransactionImportData> rowResult : batchResult.getRowResults()) {
-        BudgetTransactionData data = budgetTransactionMapper.toImportData(rowResult.getOriginalData());
-        dataList.add(data);
-
-        if (rowResult.hasErrors()) {
-          for (String err : rowResult.getValidationErrors()) {
-            Map<String, Object> errMap = new HashMap<>();
-            errMap.put("row", rowResult.getRowNumber());
-            errMap.put("field", "");
-            errMap.put("message", err);
-            errorsList.add(errMap);
-          }
-        }
-      }
-
-      Map<String, Object> summary = new HashMap<>();
-      summary.put("total", batchResult.getTotalRows());
-      summary.put("valid", batchResult.getTotalRows() - batchResult.getErrorCount());
-      summary.put("invalid", batchResult.getErrorCount());
-
-      Map<String, Object> result = new HashMap<>();
-      result.put("data", dataList);
-      result.put("errors", errorsList);
-      result.put("summary", summary);
-      result.put("valid", batchResult.getErrorCount() == 0);
-
-      return success(result);
-    } catch (IOException e) {
-      throw new BaseException(MessageUtils.message("error.excel.read", e.getMessage()));
-    }
+    return success(
+        BudgetExcelControllerHelper.validateImport(
+            file, budgetTransactionExcelService, budgetTransactionMapper));
   }
 
   @SaCheckPermission("BudgetTransactionImport")
   @PostMapping("/import")
   @Operation(summary = "Import dữ liệu Sổ cái Biến động Nguồn Kinh phí Bút toán kép từ JSON")
   @Log(title = "[BudgetTransaction] Import Commit", businessType = BusinessType.IMPORT)
-  public R<Map<String, Object>> importData(@RequestBody Map<String, List<BudgetTransactionData>> body) {
-    List<BudgetTransactionData> dataList = body.get("data");
-    if (dataList == null || dataList.isEmpty()) {
-      throw new BaseException("Dữ liệu import trống");
-    }
-
-    int created = 0;
-    int updated = 0;
-    List<Map<String, Object>> errors = new ArrayList<>();
-
-    for (int i = 0; i < dataList.size(); i++) {
-      BudgetTransactionData data = dataList.get(i);
-      try {
-        if (data.getId() != null
-            && data.getId() > 0
-            && budgetTransactionBusiness.getInjectedRepo().existsById(data.getId())) {
-          budgetTransactionBusiness.update(data.getId(), data);
-          updated++;
-        } else {
-          budgetTransactionBusiness.create(data);
-          created++;
-        }
-      } catch (Exception e) {
-        Map<String, Object> errMap = new HashMap<>();
-        errMap.put("row", i + 1);
-        errMap.put("message", e.getMessage());
-        errors.add(errMap);
-      }
-    }
-
-    Map<String, Object> result = new HashMap<>();
-    result.put("created", created);
-    result.put("updated", updated);
-    result.put("errors", errors);
-    return success(result);
+  public R<Map<String, Object>> importData(
+      @RequestBody Map<String, List<BudgetTransactionData>> body) {
+    return success(
+        BudgetExcelControllerHelper.importData(
+            body.get("data"),
+            BudgetTransactionData::getId,
+            id -> budgetTransactionBusiness.getInjectedRepo().existsById(id),
+            budgetTransactionBusiness::create,
+            budgetTransactionBusiness::update));
   }
 
-  @SaCheckPermission("BudgetTransactionEdit")
+  @SaCheckPermission("BudgetTransactionApprove")
   @PostMapping("/{id}/approve")
   @Operation(
       summary =
           "Phê duyệt bút toán Bổ sung nguồn / Chuyển nguồn liên năm (N -> N+1) / Điều chuyển nội bộ và cập nhật Sổ cái Bút toán kép")
+  @Log(title = "[BudgetTransaction] Approve", businessType = BusinessType.UPDATE)
   public R<BudgetTransactionData> approveTransaction(
       @PathVariable("id") Long id, @RequestBody(required = false) Map<String, Object> body) {
     return success(budgetTransactionBusiness.approveTransaction(id, body));
   }
 
-  @SaCheckPermission("BudgetTransactionEdit")
+  @SaCheckPermission("BudgetTransactionReject")
   @PostMapping("/{id}/reject")
   @Operation(summary = "Từ chối giao dịch biến động nguồn kinh phí")
+  @Log(title = "[BudgetTransaction] Reject", businessType = BusinessType.UPDATE)
   public R<BudgetTransactionData> rejectTransaction(
       @PathVariable("id") Long id, @RequestBody(required = false) Map<String, Object> body) {
     return success(budgetTransactionBusiness.rejectTransaction(id, body));
   }
 
-  @SaCheckPermission("BudgetTransactionCreate")
+  @SaCheckPermission("BudgetTransactionSubmit")
   @PostMapping("/execute-reallocation")
   @Operation(
       summary =
@@ -264,7 +214,7 @@ public class BudgetTransactionController extends BaseController {
     return success(budgetTransactionBusiness.executeSmartReallocation(body));
   }
 
-  @SaCheckPermission("BudgetTransactionCreate")
+  @SaCheckPermission("BudgetTransactionSubmit")
   @PostMapping("/supplement-content")
   @Operation(
       summary =
@@ -275,7 +225,7 @@ public class BudgetTransactionController extends BaseController {
     return success(budgetTransactionBusiness.supplementBudgetContent(body));
   }
 
-  @SaCheckPermission("BudgetTransactionCreate")
+  @SaCheckPermission("BudgetTransactionSubmit")
   @PostMapping("/carry-over-year")
   @Operation(
       summary =
@@ -286,7 +236,7 @@ public class BudgetTransactionController extends BaseController {
     return success(budgetTransactionBusiness.executeYearCarryOver(body));
   }
 
-  @SaCheckPermission("BudgetTransactionCreate")
+  @SaCheckPermission("BudgetTransactionSubmit")
   @PostMapping("/cross-domain-transfer")
   @Operation(
       summary =
@@ -297,7 +247,7 @@ public class BudgetTransactionController extends BaseController {
     return success(budgetTransactionBusiness.executeCrossDomainTransfer(body));
   }
 
-  @SaCheckPermission("BudgetTransactionCreate")
+  @SaCheckPermission("BudgetTransactionSubmit")
   @PostMapping("/saving-reduction")
   @Operation(
       summary =
@@ -308,7 +258,7 @@ public class BudgetTransactionController extends BaseController {
     return success(budgetTransactionBusiness.executeSavingAndReduction(body));
   }
 
-  @SaCheckPermission("BudgetTransactionCreate")
+  @SaCheckPermission("BudgetTransactionSubmit")
   @PostMapping("/cancel-expired")
   @Operation(
       summary =
@@ -328,7 +278,7 @@ public class BudgetTransactionController extends BaseController {
     return success(budgetTransactionBusiness.getOperationRoleMatrix());
   }
 
-  @SaCheckPermission("BudgetTransactionCreate")
+  @SaCheckPermission("BudgetTransactionSubmit")
   @PostMapping("/earmark-hold")
   @Operation(
       summary =
@@ -339,7 +289,7 @@ public class BudgetTransactionController extends BaseController {
     return success(budgetTransactionBusiness.executeEarmarkHold(body));
   }
 
-  @SaCheckPermission("BudgetTransactionCreate")
+  @SaCheckPermission("BudgetTransactionApprove")
   @PostMapping("/tranche-release")
   @Operation(
       summary =
@@ -350,7 +300,7 @@ public class BudgetTransactionController extends BaseController {
     return success(budgetTransactionBusiness.executeTrancheRelease(body));
   }
 
-  @SaCheckPermission("BudgetTransactionCreate")
+  @SaCheckPermission("BudgetTransactionApprove")
   @PostMapping("/batch-payroll-indexation")
   @Operation(
       summary =
@@ -362,6 +312,14 @@ public class BudgetTransactionController extends BaseController {
   }
 
   @SaCheckPermission("BudgetTransactionCreate")
+  @PostMapping("/batch")
+  @Operation(summary = "Nhập hàng loạt Bút toán Sổ cái từ lưới Spreadsheet / Paste Excel")
+  @Log(title = "[BudgetTransaction] Batch Create", businessType = BusinessType.INSERT)
+  public R<Map<String, Object>> batchCreate(@RequestBody List<BudgetTransactionData> items) {
+    return success(budgetBatchEntryBusiness.batchSaveTransactions(items));
+  }
+
+  @SaCheckPermission("BudgetTransactionApprove")
   @PostMapping("/autonomy-fund-distribution")
   @Operation(
       summary =
@@ -371,5 +329,4 @@ public class BudgetTransactionController extends BaseController {
       @RequestBody Map<String, Object> body) {
     return success(budgetTransactionBusiness.executeAutonomyFundDistribution(body));
   }
-
 }

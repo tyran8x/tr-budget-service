@@ -1,17 +1,26 @@
 package vn.tr.budget.business;
 
 import cn.hutool.core.util.StrUtil;
+import java.math.BigDecimal;
+import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Comparator;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.Set;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.beans.factory.annotation.Autowired;
 import vn.tr.budget.dao.model.BudgetCategory;
 import vn.tr.budget.dao.model.BudgetEstimateItem;
 import vn.tr.budget.dao.service.BudgetCategoryRepo;
@@ -21,6 +30,7 @@ import vn.tr.budget.data.dto.BudgetEstimateItemData;
 import vn.tr.budget.data.mapper.BudgetEstimateItemMapper;
 import vn.tr.budget.data.validator.BudgetEstimateItemValidator;
 import vn.tr.common.core.domain.data.PagedData;
+import vn.tr.common.core.domain.data.RefData;
 import vn.tr.common.core.enums.LifecycleStatus;
 import vn.tr.common.core.exception.base.EntityNotFoundException;
 import vn.tr.common.jpa.audit.AuditRollbackHelper;
@@ -29,9 +39,7 @@ import vn.tr.common.web.data.dto.BulkOperationResult;
 import vn.tr.common.web.data.dto.BulkSortOrderData;
 import vn.tr.common.web.utils.BusinessLogicHelper;
 import vn.tr.common.web.utils.CoreUtils;
-import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.LinkedHashMap;
+import vn.tr.common.core.utils.ServiceUtils;
 
 /**
  * Lớp điều phối nghiệp vụ cho BudgetEstimateItem.
@@ -84,12 +92,22 @@ public class BudgetEstimateItemBusiness {
     BudgetEstimateItem entity =
         genericUpsertHelper.upsert(
             data,
-            () -> budgetEstimateItemService.findByCodeIgnoreCaseIncludingDeleted(data.getCode()),
+            () ->
+                data.getBudgetYear() != null
+                    ? resolveExistingInYear(data.getCode(), data.getBudgetYear())
+                    : budgetEstimateItemService.findByCodeIgnoreCaseIncludingDeleted(data.getCode()),
             () -> budgetEstimateItemMapper.toEntity(data),
             budgetEstimateItemMapper::updateEntityFromData,
             budgetEstimateItemService.getRepository());
 
     return budgetEstimateItemMapper.toData(entity);
+  }
+
+  private Optional<BudgetEstimateItem> resolveExistingInYear(String code, Integer budgetYear) {
+    List<BudgetEstimateItem> results =
+        budgetEstimateItemService.getRepo().findByCodeInYearSorted(code, budgetYear);
+    return ServiceUtils.checkDuplicateAndReturnFirst(
+        log, "BudgetEstimateItem", code, results, BudgetEstimateItem::getId);
   }
 
   /** Cập nhật BudgetEstimateItem. */
@@ -269,9 +287,9 @@ public class BudgetEstimateItemBusiness {
   public List<Map<String, Object>> getTree(Integer budgetYear, String itemType) {
     List<BudgetEstimateItem> fetched =
         StrUtil.isNotBlank(itemType)
-            ? budgetEstimateItemService.getRepo().findByItemTypeOrderByIdAsc(itemType.toUpperCase())
+            ? budgetEstimateItemService.getRepo().findByItemTypeOrderByIdAsc(itemType.toUpperCase(Locale.ROOT))
             : budgetEstimateItemService.getRepo().findAll();
-    List<BudgetEstimateItem> all = new ArrayList<>(fetched);
+    List<BudgetEstimateItem> all = filterItemsForYear(fetched, budgetYear);
     all.sort(
         Comparator.comparing(
                 BudgetEstimateItem::getSortOrder, Comparator.nullsLast(Comparator.naturalOrder()))
@@ -292,11 +310,14 @@ public class BudgetEstimateItemBusiness {
       row.put("id", item.getId());
       row.put("code", item.getCode());
       row.put("name", item.getName());
+      row.put("description", item.getDescription());
       row.put("parentId", item.getParentId());
       row.put("parentCode", item.getParentCode());
       row.put("parentName", item.getParentName());
       row.put("itemType", item.getItemType());
       row.put("numberingStyle", item.getNumberingStyle());
+      row.put("displayIndex", item.getDisplayIndex());
+      row.put("treePath", item.getTreePath());
       row.put("levelDepth", item.getLevelDepth());
       row.put("isHeader", item.getIsHeader());
       row.put("formula", item.getFormula());
@@ -308,11 +329,11 @@ public class BudgetEstimateItemBusiness {
       row.put("autonomyType", item.getAutonomyType());
       row.put("unitOfMeasure", item.getUnitOfMeasure());
       row.put("normStandardAmount", item.getNormStandardAmount());
+      row.put("maxCeilingAmount", item.getMaxCeilingAmount());
+      row.put("legalBasisRef", item.getLegalBasisRef());
       row.put("requireVoucher", item.getRequireVoucher());
       row.put("sortOrder", item.getSortOrder());
-      if (budgetYear != null) {
-        row.put("budgetYear", budgetYear);
-      }
+      row.put("budgetYear", budgetYear != null ? budgetYear : item.getBudgetYear());
       row.put("children", new ArrayList<Map<String, Object>>());
       if (item.getId() != null) {
         nodeById.put(item.getId(), row);
@@ -335,7 +356,68 @@ public class BudgetEstimateItemBusiness {
         roots.add(row);
       }
     }
+    for (Map<String, Object> root : roots) {
+      rollupNormAmount(root, new HashSet<>());
+    }
     return roots;
+  }
+
+  private List<BudgetEstimateItem> filterItemsForYear(
+      List<BudgetEstimateItem> fetched, Integer budgetYear) {
+    if (budgetYear == null) {
+      return new ArrayList<>(fetched);
+    }
+    Map<String, BudgetEstimateItem> resolved = new LinkedHashMap<>();
+    for (BudgetEstimateItem item : fetched) {
+      if (item.getBudgetYear() != null && !Objects.equals(budgetYear, item.getBudgetYear())) {
+        continue;
+      }
+      String key =
+          item.getCode() != null ? item.getCode().toUpperCase(Locale.ROOT) : "#" + item.getId();
+      BudgetEstimateItem prev = resolved.get(key);
+      if (prev == null || (prev.getBudgetYear() == null && item.getBudgetYear() != null)) {
+        resolved.put(key, item);
+      }
+    }
+    return new ArrayList<>(resolved.values());
+  }
+
+  @SuppressWarnings("unchecked")
+  private BigDecimal rollupNormAmount(Map<String, Object> node, Set<Object> visited) {
+    Object id = node.get("id");
+    if (id != null && !visited.add(id)) {
+      return BigDecimal.ZERO;
+    }
+    List<Map<String, Object>> children = (List<Map<String, Object>>) node.get("children");
+    BigDecimal own =
+        node.get("normStandardAmount") instanceof BigDecimal bd
+            ? bd
+            : BigDecimal.ZERO;
+    if (children == null || children.isEmpty()) {
+      node.put("rolledUpNormAmount", own);
+      return own;
+    }
+    BigDecimal sum = BigDecimal.ZERO;
+    for (Map<String, Object> child : children) {
+      sum = sum.add(rollupNormAmount(child, visited));
+    }
+    node.put("rolledUpNormAmount", sum);
+    return sum;
+  }
+
+  /** Lấy danh sách rút gọn (Lookup Options) của Mục Dự toán Thu - Chi. */
+  @Transactional(readOnly = true)
+  public PagedData<RefData<Long>> getOptions(BudgetEstimateItemSearchCriteria criteria) {
+    Pageable pageable = CoreUtils.getPageRequest(criteria);
+    Page<BudgetEstimateItem> page = budgetEstimateItemService.findAll(criteria, pageable);
+    return PagedData.from(
+        page,
+        e ->
+            RefData.of(
+                e.getId(),
+                e.getCode(),
+                e.getName(),
+                e.getStatus() != null ? e.getStatus().name() : null));
   }
 
 }

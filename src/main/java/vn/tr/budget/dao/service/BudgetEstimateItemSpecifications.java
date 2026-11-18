@@ -33,6 +33,8 @@ public final class BudgetEstimateItemSpecifications {
       Predicate categoryIdCondition = CriteriaBuilderHelper.createEquals(cb, root, "categoryId", criteria.getCategoryId());
       Predicate categoryCodeCondition = CriteriaBuilderHelper.createEquals(cb, root, "categoryCode", criteria.getCategoryCode());
       Predicate isHeaderCondition = CriteriaBuilderHelper.createEquals(cb, root, "isHeader", criteria.getIsHeader());
+      Predicate budgetYearCondition =
+          CriteriaBuilderHelper.createEquals(cb, root, "budgetYear", criteria.getBudgetYear());
       return CriteriaBuilderHelper.and(
           cb,
           textSearchCondition,
@@ -43,7 +45,8 @@ public final class BudgetEstimateItemSpecifications {
           itemTypeCondition,
           categoryIdCondition,
           categoryCodeCondition,
-          isHeaderCondition);
+          isHeaderCondition,
+          budgetYearCondition);
     };
   }
 }

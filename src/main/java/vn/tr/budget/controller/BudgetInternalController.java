@@ -1,5 +1,6 @@
 package vn.tr.budget.controller;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.swagger.v3.oas.annotations.Hidden;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -15,7 +16,11 @@ import org.springframework.web.bind.annotation.RestController;
 import vn.tr.budget.business.BudgetAllocationBusiness;
 import vn.tr.budget.business.BudgetDashboardBusiness;
 import vn.tr.budget.business.BudgetDisbursementBusiness;
+import vn.tr.budget.business.BudgetTransactionBusiness;
 import vn.tr.common.core.domain.R;
+import vn.tr.common.feign.budget.data.BudgetCommitmentReserveData;
+import vn.tr.common.feign.budget.data.BudgetLedgerTransactionData;
+import vn.tr.common.feign.budget.data.BudgetPaymentSettleData;
 import vn.tr.common.feign.budget.data.BudgetPlanSyncRequestData;
 import vn.tr.common.feign.budget.data.BudgetPlanSyncResultData;
 import vn.tr.common.web.core.BaseController;
@@ -27,6 +32,10 @@ import vn.tr.common.web.core.BaseController;
  *
  * <p>Bảo vệ bằng {@code SaSameUtil.checkCurrentRequestToken()} trên toàn bộ đường dẫn {@code
  * /internal/**} để cho phép gọi nội bộ không phụ thuộc phiên đăng nhập người dùng.
+ *
+ * <p>Nhận typed DTOs từ Feign Client, chuyển đổi sang {@code Map<String, Object>} qua Jackson
+ * {@link ObjectMapper#convertValue} để tương thích ngược với Business layer hiện tại. Khi Business
+ * layer được refactor sang typed DTOs, loại bỏ bước chuyển đổi này.
  *
  * @author tyran8x
  */
@@ -41,7 +50,9 @@ public class BudgetInternalController extends BaseController {
 
   private final BudgetAllocationBusiness budgetAllocationBusiness;
   private final BudgetDisbursementBusiness budgetDisbursementBusiness;
+  private final BudgetTransactionBusiness budgetTransactionBusiness;
   private final BudgetDashboardBusiness budgetDashboardBusiness;
+  private final ObjectMapper objectMapper;
 
   @PostMapping("/allocations/sync-from-plan")
   @Operation(summary = "Đồng bộ Phương án Phân bổ Kinh phí từ Kế hoạch công tác (S2S)")
@@ -57,10 +68,22 @@ public class BudgetInternalController extends BaseController {
     return success(budgetAllocationBusiness.getBudgetSnapshotByPlanCode(planCode));
   }
 
+  @PostMapping("/transactions/record")
+  @Operation(summary = "Ghi nhận giao dịch biến động sổ cái kinh phí từ Kế hoạch công tác (S2S)")
+  public R<Map<String, Object>> recordPlanLedgerTransaction(
+      @RequestBody BudgetLedgerTransactionData request) {
+    @SuppressWarnings("unchecked")
+    Map<String, Object> body = objectMapper.convertValue(request, Map.class);
+    return success(budgetTransactionBusiness.recordFromPlan(body));
+  }
+
   @PostMapping("/disbursements/reserve-commitment")
   @Operation(summary = "Khởi tạo nhanh hồ sơ Cam kết chi (COMMITMENT) liên thông S2S")
-  public R<Map<String, Object>> reserveCommitment(@RequestBody Map<String, Object> request) {
-    return success(budgetDisbursementBusiness.reserveCommitment(request));
+  public R<Map<String, Object>> reserveCommitment(
+      @RequestBody BudgetCommitmentReserveData request) {
+    @SuppressWarnings("unchecked")
+    Map<String, Object> body = objectMapper.convertValue(request, Map.class);
+    return success(budgetDisbursementBusiness.reserveCommitment(body));
   }
 
   @PostMapping("/disbursements/{id}/payment-webhook-settle")
@@ -68,8 +91,12 @@ public class BudgetInternalController extends BaseController {
       summary =
           "Tự động đối soát và nghiệm thu quyết toán hồ sơ giải ngân từ Webhook Thanh toán (S2S)")
   public R<Map<String, Object>> settleDisbursementFromPaymentWebhook(
-      @PathVariable("id") Long id, @RequestBody(required = false) Map<String, Object> request) {
-    return success(budgetDisbursementBusiness.settleFromPaymentWebhook(id, request));
+      @PathVariable("id") Long id,
+      @RequestBody(required = false) BudgetPaymentSettleData request) {
+    @SuppressWarnings("unchecked")
+    Map<String, Object> body =
+        request != null ? objectMapper.convertValue(request, Map.class) : null;
+    return success(budgetDisbursementBusiness.settleFromPaymentWebhook(id, body));
   }
 
   @GetMapping("/dashboard/overview")

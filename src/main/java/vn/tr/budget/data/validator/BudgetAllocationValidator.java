@@ -8,6 +8,9 @@ import org.springframework.stereotype.Component;
 import org.springframework.validation.Errors;
 import vn.tr.budget.dao.service.BudgetAllocationService;
 import vn.tr.budget.data.dto.BudgetAllocationData;
+import vn.tr.budget.data.enums.BudgetApprovalScope;
+import vn.tr.budget.data.enums.BudgetPeriodType;
+import vn.tr.budget.data.enums.BudgetWorkflowStatus;
 import vn.tr.common.core.exception.base.BaseException;
 import vn.tr.common.core.utils.MessageUtils;
 import vn.tr.common.feign.identity.TemporalTargetScopeHelper;
@@ -35,6 +38,10 @@ public class BudgetAllocationValidator extends BaseValidator {
       if (temporalScopeHelper != null && temporalScopeHelper.getIdentityResolver() == null && unifiedIdentityResolver != null) {
           temporalScopeHelper.setIdentityResolver(unifiedIdentityResolver);
       }
+  }
+
+  void setTemporalScopeHelper(TemporalTargetScopeHelper temporalScopeHelper) {
+    this.temporalScopeHelper = temporalScopeHelper;
   }
 
   @Override
@@ -77,6 +84,39 @@ public class BudgetAllocationValidator extends BaseValidator {
               "budget.error.year.invalid",
               "Năm ngân sách phải nằm trong khoảng từ 2000 đến " + maxYear,
               maxYear));
+    }
+
+    if (data.getPeriodType() != null
+        && !data.getPeriodType().isBlank()
+        && !BudgetPeriodType.isValid(data.getPeriodType())) {
+      errors.rejectValue(
+          "periodType",
+          "budget.error.period.invalid",
+          MessageUtils.messageOrDefault(
+              "budget.error.period.invalid",
+              "Kỳ phân bổ '" + data.getPeriodType() + "' không hợp lệ"));
+    }
+
+    if (data.getWorkflowStatus() != null
+        && !data.getWorkflowStatus().isBlank()
+        && !BudgetWorkflowStatus.isValid(data.getWorkflowStatus())) {
+      errors.rejectValue(
+          "workflowStatus",
+          "budget.error.status.invalid",
+          MessageUtils.messageOrDefault(
+              "budget.error.status.invalid",
+              "Trạng thái phê duyệt '" + data.getWorkflowStatus() + "' không hợp lệ"));
+    }
+
+    if (data.getApprovalScope() != null
+        && !data.getApprovalScope().isBlank()
+        && !BudgetApprovalScope.isValid(data.getApprovalScope())) {
+      errors.rejectValue(
+          "approvalScope",
+          "budget.error.approvalScope.invalid",
+          MessageUtils.messageOrDefault(
+              "budget.error.approvalScope.invalid",
+              "Phạm vi phê duyệt '" + data.getApprovalScope() + "' không hợp lệ"));
     }
 
     if (data.getInitialAmount() != null

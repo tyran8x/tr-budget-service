@@ -34,4 +34,6 @@ public class BudgetEstimateItemSearchCriteria extends BaseSearchCriteria {
   private String categoryCode;
 
   private Boolean isHeader;
+
+  private Integer budgetYear;
 }

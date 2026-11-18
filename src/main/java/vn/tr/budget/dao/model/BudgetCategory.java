@@ -134,6 +134,12 @@ public class BudgetCategory extends BaseCommonEntity implements AppIsolated {
   @Column(name = "sla_disbursement_warning_days")
   private Integer slaDisbursementWarningDays;
 
+  @Column(name = "tree_path", length = 500)
+  private String treePath;
+
+  @Column(name = "source_code", length = 50)
+  private String sourceCode;
+
   public Boolean getAllowCarryOver() {
     return this.isAllowCarryOver;
   }

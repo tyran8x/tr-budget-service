@@ -15,4 +15,10 @@ public interface BudgetEstimateItemService extends GlobalCatalogService<BudgetEs
   JpaRepository<BudgetEstimateItem, Long> getRepository();
 
   BudgetEstimateItemRepo getRepo();
+
+  default boolean existsDuplicateCodeInYear(String code, Integer budgetYear, Long excludeId) {
+    return excludeId != null
+        ? existsByIdNotAndCodeIgnoreCase(excludeId, code)
+        : existsByCodeIgnoreCase(code);
+  }
 }

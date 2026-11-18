@@ -30,4 +30,14 @@ public enum BudgetDisbursementType {
     }
     return null;
   }
+
+  public static BudgetDisbursementType fromCodeOrDefault(
+      String code, BudgetDisbursementType fallback) {
+    BudgetDisbursementType resolved = fromCode(code);
+    return resolved != null ? resolved : fallback;
+  }
+
+  public static boolean isValid(String code) {
+    return fromCode(code) != null;
+  }
 }

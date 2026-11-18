@@ -10,6 +10,7 @@ import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
@@ -24,6 +25,7 @@ import vn.tr.budget.data.dto.BudgetTransactionData;
 import vn.tr.budget.data.mapper.BudgetTransactionMapper;
 import vn.tr.budget.data.validator.BudgetTransactionValidator;
 import vn.tr.common.core.domain.data.PagedData;
+import vn.tr.common.core.domain.data.RefData;
 import vn.tr.common.core.enums.LifecycleStatus;
 import vn.tr.common.core.exception.base.EntityNotFoundException;
 import vn.tr.common.jpa.audit.AuditRollbackHelper;
@@ -32,10 +34,14 @@ import vn.tr.common.web.data.dto.BulkOperationResult;
 import vn.tr.common.web.data.dto.BulkSortOrderData;
 import vn.tr.common.web.utils.BusinessLogicHelper;
 import vn.tr.common.web.utils.CoreUtils;
+import vn.tr.common.web.workflow.WorkflowBusinessSupport;
+import vn.tr.common.web.workflow.WorkflowCallbackPayload;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.LinkedHashSet;
+import java.util.Set;
 import org.springframework.beans.factory.annotation.Autowired;
 import vn.tr.budget.business.helper.BudgetIntegrationOrchestrator;
 import vn.tr.budget.business.helper.BudgetWorkflowEngineHelper;
@@ -45,7 +51,9 @@ import vn.tr.budget.dao.model.BudgetEstimateItem;
 import vn.tr.budget.dao.service.BudgetAllocationRepo;
 import vn.tr.budget.dao.service.BudgetCategoryRepo;
 import vn.tr.budget.dao.service.BudgetEstimateItemRepo;
+import vn.tr.budget.dao.service.BudgetTransactionRepo;
 import vn.tr.common.core.exception.base.BaseException;
+import vn.tr.common.satoken.utils.LoginHelper;
 
 /**
  * Lớp điều phối nghiệp vụ cho BudgetTransaction.
@@ -56,7 +64,7 @@ import vn.tr.common.core.exception.base.BaseException;
 @RequiredArgsConstructor
 @Transactional
 @Slf4j
-public class BudgetTransactionBusiness {
+public class BudgetTransactionBusiness implements WorkflowBusinessSupport<BudgetTransaction> {
 
   private final BudgetTransactionService budgetTransactionService;
   private final BudgetTransactionMapper budgetTransactionMapper;
@@ -75,6 +83,17 @@ public class BudgetTransactionBusiness {
 
   @Autowired(required = false)
   private BudgetIntegrationOrchestrator integrationOrchestrator;
+
+  @Autowired(required = false)
+  private BudgetTransactionRepo budgetTransactionRepo;
+
+  public void setBudgetTransactionRepo(BudgetTransactionRepo budgetTransactionRepo) {
+    this.budgetTransactionRepo = budgetTransactionRepo;
+  }
+
+  public void setIntegrationOrchestrator(BudgetIntegrationOrchestrator integrationOrchestrator) {
+    this.integrationOrchestrator = integrationOrchestrator;
+  }
 
   public JpaRepository<BudgetTransaction, Long> getInjectedRepo() {
     return budgetTransactionService.getRepository();
@@ -97,7 +116,7 @@ public class BudgetTransactionBusiness {
       data.setTxType("SUPPLEMENT");
     }
     if (StrUtil.isBlank(data.getApprovalStatus())) {
-      data.setApprovalStatus("APPROVED");
+      data.setApprovalStatus("DRAFT");
     }
     syncTransactionSnapshots(data);
     validateLedgerBalanceBeforeTransfer(data);
@@ -131,8 +150,13 @@ public class BudgetTransactionBusiness {
     syncTransactionSnapshots(data);
     budgetTransactionMapper.updateEntityFromData(data, existing);
     BudgetTransaction saved = budgetTransactionService.save(existing);
-    recalculateAffectedAllocations(oldAllocId, oldCounterpartId);
-    recalculateAffectedAllocations(saved.getAllocationId(), saved.getCounterpartAllocationId());
+    Set<Long> affectedIds = new LinkedHashSet<>();
+    if (oldAllocId != null) affectedIds.add(oldAllocId);
+    if (oldCounterpartId != null) affectedIds.add(oldCounterpartId);
+    if (saved.getAllocationId() != null) affectedIds.add(saved.getAllocationId());
+    if (saved.getCounterpartAllocationId() != null) affectedIds.add(saved.getCounterpartAllocationId());
+    affectedIds.addAll(syncCounterpartTransactions(saved, false, false, null));
+    recalculateAllocationIds(affectedIds);
     return enrichData(budgetTransactionMapper.toData(saved));
   }
 
@@ -142,10 +166,14 @@ public class BudgetTransactionBusiness {
         budgetTransactionService
             .findById(id)
             .orElseThrow(() -> new EntityNotFoundException(BudgetTransaction.class, id));
-    Long allocId = existing.getAllocationId();
-    Long counterpartId = existing.getCounterpartAllocationId();
+    Set<Long> affectedIds = new LinkedHashSet<>();
+    if (existing.getAllocationId() != null) affectedIds.add(existing.getAllocationId());
+    if (existing.getCounterpartAllocationId() != null) {
+      affectedIds.add(existing.getCounterpartAllocationId());
+    }
     budgetTransactionService.delete(id);
-    recalculateAffectedAllocations(allocId, counterpartId);
+    affectedIds.addAll(syncCounterpartTransactions(existing, true, false, null));
+    recalculateAllocationIds(affectedIds);
   }
 
   /** Xoá mềm hàng loạt BudgetTransaction. */
@@ -161,10 +189,78 @@ public class BudgetTransactionBusiness {
             null,
             budgetTransactionService::deleteByIds,
             "budget.budgetTransaction.not.found");
+    Set<Long> affectedIds = new LinkedHashSet<>();
     for (BudgetTransaction tx : toDelete) {
-      recalculateAffectedAllocations(tx.getAllocationId(), tx.getCounterpartAllocationId());
+      if (tx.getAllocationId() != null) affectedIds.add(tx.getAllocationId());
+      if (tx.getCounterpartAllocationId() != null) affectedIds.add(tx.getCounterpartAllocationId());
+      affectedIds.addAll(syncCounterpartTransactions(tx, true, false, null));
     }
+    recalculateAllocationIds(affectedIds);
     return result;
+  }
+
+  private void recalculateAllocationIds(Set<Long> ids) {
+    if (ids == null || ids.isEmpty()) {
+      return;
+    }
+    for (Long id : ids) {
+      if (id != null) {
+        workflowEngineHelper.recalculateAllocationMetrics(id);
+      }
+    }
+  }
+
+  private Set<Long> syncCounterpartTransactions(
+      BudgetTransaction source, boolean deleteMode, boolean rejectMode, String rejectReason) {
+    Set<Long> affectedIds = new LinkedHashSet<>();
+    if (source == null || source.getId() == null) {
+      return affectedIds;
+    }
+    Set<BudgetTransaction> counterparts = new LinkedHashSet<>();
+    if (source.getCounterpartTxId() != null && !source.getCounterpartTxId().equals(source.getId())) {
+      budgetTransactionService.findById(source.getCounterpartTxId()).ifPresent(counterparts::add);
+    }
+    BudgetTransactionRepo repo = resolveTransactionRepo();
+    if (repo != null) {
+      for (BudgetTransaction found : repo.findByCounterpartTxId(source.getId())) {
+        if (found != null && found.getId() != null && !found.getId().equals(source.getId())) {
+          counterparts.add(found);
+        }
+      }
+    }
+    for (BudgetTransaction cp : counterparts) {
+      if (cp.getAllocationId() != null) affectedIds.add(cp.getAllocationId());
+      if (cp.getCounterpartAllocationId() != null) affectedIds.add(cp.getCounterpartAllocationId());
+      if (deleteMode) {
+        budgetTransactionService.delete(cp.getId());
+      } else if (rejectMode) {
+        cp.setApprovalStatus("REJECTED");
+        if (StrUtil.isNotBlank(rejectReason)) {
+          cp.setRejectReason(rejectReason);
+        }
+        budgetTransactionService.save(cp);
+      } else {
+        if (source.getAmount() != null) {
+          cp.setAmount(source.getAmount().abs());
+        }
+        cp.setDecisionNo(source.getDecisionNo());
+        cp.setDecisionDate(source.getDecisionDate());
+        cp.setTxDate(source.getTxDate());
+        cp.setReason(source.getReason());
+        budgetTransactionService.save(cp);
+      }
+    }
+    return affectedIds;
+  }
+
+  private BudgetTransactionRepo resolveTransactionRepo() {
+    if (budgetTransactionRepo != null) {
+      return budgetTransactionRepo;
+    }
+    if (budgetTransactionService.getRepository() instanceof BudgetTransactionRepo repo) {
+      return repo;
+    }
+    return null;
   }
 
   private void recalculateAffectedAllocations(Long allocId, Long counterpartId) {
@@ -403,6 +499,7 @@ public class BudgetTransactionBusiness {
     String type = StrUtil.nullToEmpty(data.getTxType()).toUpperCase();
     if ("CARRY_OVER_OUT".equals(type)
         || "INTERNAL_TRANSFER".equals(type)
+        || "TRANSFER_OUT".equals(type)
         || "REDUCTION".equals(type)) {
       BudgetAllocation alloc =
           budgetAllocationRepo.findById(data.getAllocationId()).orElse(null);
@@ -509,7 +606,20 @@ public class BudgetTransactionBusiness {
       }
     }
     BudgetTransaction saved = budgetTransactionService.save(tx);
-    recalculateAffectedAllocations(saved.getAllocationId(), saved.getCounterpartAllocationId());
+    Set<Long> affectedIds = new LinkedHashSet<>();
+    if (saved.getAllocationId() != null) affectedIds.add(saved.getAllocationId());
+    if (saved.getCounterpartAllocationId() != null) {
+      affectedIds.add(saved.getCounterpartAllocationId());
+    }
+    affectedIds.addAll(
+        syncCounterpartTransactions(
+            saved,
+            false,
+            true,
+            body != null && body.get("reason") != null
+                ? String.valueOf(body.get("reason")).trim()
+                : null));
+    recalculateAllocationIds(affectedIds);
     if (integrationOrchestrator != null) {
       integrationOrchestrator.notifyTransactionEvent(saved, "REJECTED");
     }
@@ -614,6 +724,14 @@ public class BudgetTransactionBusiness {
               + "] không đủ để điều chuyển.");
     }
 
+    Map<String, Object> autonomy =
+        workflowEngineHelper.checkUnitAutonomy(
+            sourceAlloc.getNodeId(), sourceAlloc.getCategoryCode(), transferAmount);
+    if (Boolean.FALSE.equals(autonomy.get("canSelfTransfer")) && !hasTransactionApproveOverride()) {
+      throw new BaseException(
+          "Đơn vị không đủ thẩm quyền tự điều chuyển nội bộ hoặc vượt hạn mức tự chủ — bắt buộc cấp có quyền BudgetTransactionApprove.");
+    }
+
     String txCode = "TX-SMART-" + year + "-" + (System.currentTimeMillis() % 100000);
     String reason =
         body != null && body.get("reason") != null
@@ -634,8 +752,9 @@ public class BudgetTransactionBusiness {
             .nodeName(sourceAlloc.getNodeName())
             .budgetYear(year)
             .txType("INTERNAL_TRANSFER")
+            .entryDirection("DEBIT")
             .txDate(LocalDate.now())
-            .amount(transferAmount)
+            .amount(transferAmount.abs().negate())
             .decisionNo("QĐ-ĐCNB-" + year + "/STC")
             .decisionDate(LocalDate.now())
             .approvalStatus("APPROVED")
@@ -689,13 +808,11 @@ public class BudgetTransactionBusiness {
         extractString(body, "domainGroupName", "groupName", "Nhóm Đổi mới sáng tạo & Chuyển đổi số");
 
     BigDecimal rawAmount = parseBigDecimalOrDefault(body, "amount", BigDecimal.ZERO);
-    BigDecimal rawDisbursed = parseBigDecimalOrDefault(body, "disbursedAmount", BigDecimal.ZERO);
     String dynamicBreakdownJson = extractString(body, "dynamicBreakdownJson", null, "");
 
     if (body != null && body.get("domainBreakdowns") instanceof List<?> rawList && !rawList.isEmpty()) {
       JSONArray arr = new JSONArray();
       BigDecimal sumAlloc = BigDecimal.ZERO;
-      BigDecimal sumDisb = BigDecimal.ZERO;
       for (Object item : rawList) {
         if (item instanceof Map<?, ?> m) {
           String c = m.get("code") != null ? String.valueOf(m.get("code")).trim() : domainCode;
@@ -703,10 +820,6 @@ public class BudgetTransactionBusiness {
           BigDecimal aVal =
               m.get("allocatedAmount") != null
                   ? new BigDecimal(String.valueOf(m.get("allocatedAmount")))
-                  : BigDecimal.ZERO;
-          BigDecimal dVal =
-              m.get("disbursedAmount") != null
-                  ? new BigDecimal(String.valueOf(m.get("disbursedAmount")))
                   : BigDecimal.ZERO;
           JSONObject obj = new JSONObject();
           obj.set("code", c);
@@ -718,18 +831,13 @@ public class BudgetTransactionBusiness {
               "groupName",
               m.get("groupName") != null ? String.valueOf(m.get("groupName")) : domainGroupName);
           obj.set("allocatedAmount", aVal);
-          obj.set("disbursedAmount", dVal);
           arr.add(obj);
           sumAlloc = sumAlloc.add(aVal);
-          sumDisb = sumDisb.add(dVal);
         }
       }
       dynamicBreakdownJson = arr.toString();
       if (rawAmount.compareTo(BigDecimal.ZERO) == 0) {
         rawAmount = sumAlloc;
-      }
-      if (rawDisbursed.compareTo(BigDecimal.ZERO) == 0) {
-        rawDisbursed = sumDisb;
       }
     }
 
@@ -745,21 +853,22 @@ public class BudgetTransactionBusiness {
             null,
             "TX-SUPP-" + year + "-" + (System.currentTimeMillis() % 100000));
 
+    Map<String, Object> roleMeta = evaluateOperationRoleGate("NV-01", body, rawAmount);
     BudgetTransactionData txData =
         BudgetTransactionData.builder()
             .code(txCode)
             .name(contentTitle)
             .allocationId(targetAlloc != null ? targetAlloc.getId() : null)
             .allocationCode(targetAlloc != null ? targetAlloc.getCode() : null)
-            .nodeId(targetAlloc != null ? targetAlloc.getNodeId() : parseLongOrNull(body, "nodeId"))
+            .nodeId(targetAlloc != null ? targetAlloc.getNodeId() : resolveRequiredNodeId(body))
             .nodeCode(
                 targetAlloc != null
                     ? targetAlloc.getNodeCode()
-                    : extractString(body, "nodeCode", "unitNodeCode", "VAN_PHONG_SO"))
+                    : extractString(body, "nodeCode", "unitNodeCode", null))
             .nodeName(
                 targetAlloc != null
                     ? targetAlloc.getNodeName()
-                    : extractString(body, "nodeName", "unitNodeName", "Văn phòng Sở"))
+                    : extractString(body, "nodeName", "unitNodeName", null))
             .domainCode(domainCode)
             .domainName(domainName)
             .domainGroupCode(domainGroupCode)
@@ -767,17 +876,14 @@ public class BudgetTransactionBusiness {
             .dynamicBreakdownJson(StrUtil.isNotBlank(dynamicBreakdownJson) ? dynamicBreakdownJson : null)
             .budgetYear(year)
             .txType("SUPPLEMENT")
+            .entryDirection("CREDIT")
             .txDate(txDate)
             .amount(rawAmount)
-            .disbursedAmount(rawDisbursed)
             .decisionNo(decisionNo)
             .decisionDate(txDate)
             .reason(reason)
             .description(contentTitle + " (" + decisionNo + ")")
-            .approvalStatus(
-                String.valueOf(
-                    evaluateOperationRoleGate("NV-01", body, rawAmount)
-                        .get("effectiveApprovalStatus")))
+            .approvalStatus(String.valueOf(roleMeta.get("effectiveApprovalStatus")))
             .status(LifecycleStatus.ACTIVE)
             .build();
 
@@ -787,13 +893,11 @@ public class BudgetTransactionBusiness {
             ? budgetAllocationRepo.findById(targetAlloc.getId()).orElse(targetAlloc)
             : targetAlloc;
 
-    Map<String, Object> roleMeta = evaluateOperationRoleGate("NV-01", body, rawAmount);
     Map<String, Object> res = new LinkedHashMap<>();
     res.put("supplemented", true);
     res.put("operationType", "SUPPLEMENT_CONTENT");
     res.put("contentTitle", contentTitle);
     res.put("supplementedAmount", rawAmount);
-    res.put("disbursedAmount", rawDisbursed);
     res.put("allocationCode", refreshed != null ? refreshed.getCode() : "N/A");
     res.put(
         "effectiveAmountAfter",
@@ -882,12 +986,11 @@ public class BudgetTransactionBusiness {
       carryAmount = workflowEngineHelper.safe(sourceAlloc.getAvailableAmount());
     }
     if (carryAmount.compareTo(BigDecimal.ZERO) <= 0) {
-      carryAmount = new BigDecimal("1512000000");
+      throw new BaseException("Số tiền chuyển nguồn liên năm (amount) phải lớn hơn 0.");
     }
-    BigDecimal disbursedOnCarry = parseBigDecimalOrDefault(body, "disbursedAmount", BigDecimal.ZERO);
 
     if (sourceAlloc == null) {
-      // Nếu năm nguồn (ví dụ 2025) chưa có bản ghi phân bổ trong DB, tự động khởi tạo bản ghi nguồn để đảm bảo bút toán kép đầy đủ
+      Long resolvedSrcNodeId = resolveRequiredNodeId(body);
       String srcAllocCode = "PB-" + fromYear + "-CN-" + (System.currentTimeMillis() % 10000);
       sourceAlloc =
           budgetAllocationRepo.save(
@@ -896,14 +999,9 @@ public class BudgetTransactionBusiness {
                   .name("Dự toán năm " + fromYear + " chuyển nguồn sang năm " + toYear)
                   .budgetYear(fromYear)
                   .periodType("ANNUAL")
-                  .nodeId(parseLongOrNull(body, "nodeId") != null ? parseLongOrNull(body, "nodeId") : 103L)
-                  .nodeCode(extractString(body, "nodeCode", "unitNodeCode", "TT_UDKHCN"))
-                  .nodeName(
-                      extractString(
-                          body,
-                          "nodeName",
-                          "unitNodeName",
-                          "Trung tâm Ứng dụng KHCN và Tiêu chuẩn Đo lường Chất lượng Đà Nẵng"))
+                  .nodeId(resolvedSrcNodeId)
+                  .nodeCode(extractString(body, "nodeCode", "unitNodeCode", null))
+                  .nodeName(extractString(body, "nodeName", "unitNodeName", null))
                   .itemType("EXPENDITURE")
                   .categoryCode("281")
                   .categoryName("Chi sự nghiệp KHCN")
@@ -941,6 +1039,7 @@ public class BudgetTransactionBusiness {
             null,
             "TX-CO-" + fromYear + "-" + toYear + "-" + (System.currentTimeMillis() % 100000));
 
+    Map<String, Object> roleMeta = evaluateOperationRoleGate("NV-02", body, carryAmount);
     BudgetTransactionData txData =
         BudgetTransactionData.builder()
             .code(txCode)
@@ -957,22 +1056,18 @@ public class BudgetTransactionBusiness {
             .budgetYear(fromYear)
             .targetBudgetYear(toYear)
             .txType("CARRY_OVER_OUT")
+            .entryDirection("DEBIT")
             .txDate(txDate)
             .amount(carryAmount)
-            .disbursedAmount(disbursedOnCarry)
             .decisionNo(decisionNo)
             .decisionDate(txDate)
             .reason(reason)
             .description(reason)
-            .approvalStatus(
-                String.valueOf(
-                    evaluateOperationRoleGate("NV-02", body, carryAmount)
-                        .get("effectiveApprovalStatus")))
+            .approvalStatus(String.valueOf(roleMeta.get("effectiveApprovalStatus")))
             .status(LifecycleStatus.ACTIVE)
             .build();
 
     BudgetTransactionData createdTx = create(txData);
-    Map<String, Object> roleMeta = evaluateOperationRoleGate("NV-02", body, carryAmount);
 
     Map<String, Object> res = new LinkedHashMap<>();
     res.put("carriedOver", true);
@@ -1064,9 +1159,15 @@ public class BudgetTransactionBusiness {
             .name("Điều chuyển nội bộ giữa các lĩnh vực (" + fromDomainCode + " -> " + toDomainCode + ")")
             .allocationId(unitAlloc != null ? unitAlloc.getId() : null)
             .allocationCode(unitAlloc != null ? unitAlloc.getCode() : null)
-            .nodeId(unitAlloc != null ? unitAlloc.getNodeId() : 101L)
-            .nodeCode(unitAlloc != null ? unitAlloc.getNodeCode() : "VAN_PHONG_SO")
-            .nodeName(unitAlloc != null ? unitAlloc.getNodeName() : "Văn phòng Sở")
+            .nodeId(unitAlloc != null ? unitAlloc.getNodeId() : resolveRequiredNodeId(body))
+            .nodeCode(
+                unitAlloc != null
+                    ? unitAlloc.getNodeCode()
+                    : extractString(body, "nodeCode", "unitNodeCode", null))
+            .nodeName(
+                unitAlloc != null
+                    ? unitAlloc.getNodeName()
+                    : extractString(body, "nodeName", "unitNodeName", null))
             .domainCode(toDomainCode)
             .domainName(toDomainName)
             .dynamicBreakdownJson(breakdownArr.toString())
@@ -1074,7 +1175,6 @@ public class BudgetTransactionBusiness {
             .txType("INTERNAL_TRANSFER")
             .txDate(txDate)
             .amount(BigDecimal.ZERO)
-            .disbursedAmount(BigDecimal.ZERO)
             .decisionNo(decisionNo)
             .decisionDate(txDate)
             .reason(reason)
@@ -1185,9 +1285,15 @@ public class BudgetTransactionBusiness {
             .name(title)
             .allocationId(targetAlloc != null ? targetAlloc.getId() : null)
             .allocationCode(targetAlloc != null ? targetAlloc.getCode() : null)
-            .nodeId(targetAlloc != null ? targetAlloc.getNodeId() : 101L)
-            .nodeCode(targetAlloc != null ? targetAlloc.getNodeCode() : "VAN_PHONG_SO")
-            .nodeName(targetAlloc != null ? targetAlloc.getNodeName() : "Văn phòng Sở")
+            .nodeId(targetAlloc != null ? targetAlloc.getNodeId() : resolveRequiredNodeId(body))
+            .nodeCode(
+                targetAlloc != null
+                    ? targetAlloc.getNodeCode()
+                    : extractString(body, "nodeCode", "unitNodeCode", null))
+            .nodeName(
+                targetAlloc != null
+                    ? targetAlloc.getNodeName()
+                    : extractString(body, "nodeName", "unitNodeName", null))
             .domainCode(domainCode)
             .domainName(domainName)
             .dynamicBreakdownJson(dynamicBreakdownJson)
@@ -1195,7 +1301,6 @@ public class BudgetTransactionBusiness {
             .txType("ADJUSTMENT")
             .txDate(txDate)
             .amount(rawAmount.negate())
-            .disbursedAmount(BigDecimal.ZERO)
             .decisionNo(decisionNo)
             .decisionDate(txDate)
             .reason(reason)
@@ -1287,9 +1392,15 @@ public class BudgetTransactionBusiness {
             .name("Hủy / Thu hồi dự toán hết niên độ năm " + year)
             .allocationId(targetAlloc != null ? targetAlloc.getId() : null)
             .allocationCode(targetAlloc != null ? targetAlloc.getCode() : null)
-            .nodeId(targetAlloc != null ? targetAlloc.getNodeId() : 101L)
-            .nodeCode(targetAlloc != null ? targetAlloc.getNodeCode() : "VAN_PHONG_SO")
-            .nodeName(targetAlloc != null ? targetAlloc.getNodeName() : "Văn phòng Sở")
+            .nodeId(targetAlloc != null ? targetAlloc.getNodeId() : resolveRequiredNodeId(body))
+            .nodeCode(
+                targetAlloc != null
+                    ? targetAlloc.getNodeCode()
+                    : extractString(body, "nodeCode", "unitNodeCode", null))
+            .nodeName(
+                targetAlloc != null
+                    ? targetAlloc.getNodeName()
+                    : extractString(body, "nodeName", "unitNodeName", null))
             .budgetYear(year)
             .txType("WITHDRAWAL")
             .txDate(txDate)
@@ -1380,9 +1491,15 @@ public class BudgetTransactionBusiness {
             .name((isRelease ? "Giải tỏa phong tỏa: " : "Tạm giữ / Phong tỏa: ") + reason)
             .allocationId(targetAlloc != null ? targetAlloc.getId() : null)
             .allocationCode(targetAlloc != null ? targetAlloc.getCode() : null)
-            .nodeId(targetAlloc != null ? targetAlloc.getNodeId() : 101L)
-            .nodeCode(targetAlloc != null ? targetAlloc.getNodeCode() : "VAN_PHONG_SO")
-            .nodeName(targetAlloc != null ? targetAlloc.getNodeName() : "Văn phòng Sở")
+            .nodeId(targetAlloc != null ? targetAlloc.getNodeId() : resolveRequiredNodeId(body))
+            .nodeCode(
+                targetAlloc != null
+                    ? targetAlloc.getNodeCode()
+                    : extractString(body, "nodeCode", "unitNodeCode", null))
+            .nodeName(
+                targetAlloc != null
+                    ? targetAlloc.getNodeName()
+                    : extractString(body, "nodeName", "unitNodeName", null))
             .domainCode(targetAlloc != null ? targetAlloc.getDomainCode() : "CDS")
             .domainName(targetAlloc != null ? targetAlloc.getDomainName() : "Chuyển đổi số")
             .budgetYear(year)
@@ -1460,7 +1577,7 @@ public class BudgetTransactionBusiness {
       BigDecimal base =
           workflowEngineHelper.safe(targetAlloc.getInitialAmount()).compareTo(BigDecimal.ZERO) > 0
               ? targetAlloc.getInitialAmount()
-              : new BigDecimal("2000000000");
+              : workflowEngineHelper.safe(targetAlloc.getEffectiveAmount());
       releaseAmount =
           base.multiply(releaseRatePercent).divide(new BigDecimal("100"), 2, RoundingMode.HALF_UP);
     }
@@ -1496,9 +1613,15 @@ public class BudgetTransactionBusiness {
             .name("Giải tỏa dự toán " + trancheName)
             .allocationId(targetAlloc != null ? targetAlloc.getId() : null)
             .allocationCode(targetAlloc != null ? targetAlloc.getCode() : null)
-            .nodeId(targetAlloc != null ? targetAlloc.getNodeId() : 101L)
-            .nodeCode(targetAlloc != null ? targetAlloc.getNodeCode() : "VAN_PHONG_SO")
-            .nodeName(targetAlloc != null ? targetAlloc.getNodeName() : "Văn phòng Sở")
+            .nodeId(targetAlloc != null ? targetAlloc.getNodeId() : resolveRequiredNodeId(body))
+            .nodeCode(
+                targetAlloc != null
+                    ? targetAlloc.getNodeCode()
+                    : extractString(body, "nodeCode", "unitNodeCode", null))
+            .nodeName(
+                targetAlloc != null
+                    ? targetAlloc.getNodeName()
+                    : extractString(body, "nodeName", "unitNodeName", null))
             .domainCode(targetAlloc != null ? targetAlloc.getDomainCode() : "KHCN")
             .domainName(targetAlloc != null ? targetAlloc.getDomainName() : "Khoa học công nghệ")
             .budgetYear(year)
@@ -1552,39 +1675,11 @@ public class BudgetTransactionBusiness {
         parseBigDecimalOrDefault(body, "oldBaseSalary", new BigDecimal("1800000"));
     BigDecimal newBaseSalary =
         parseBigDecimalOrDefault(body, "newBaseSalary", new BigDecimal("2340000"));
-    int staffChangeCount = parseIntOrDefault(body, "staffChangeCount", 2);
-    int baseStaffCount = parseIntOrDefault(body, "baseStaffCount", 35);
+    int staffChangeCount = parseIntOrDefault(body, "staffChangeCount", 0);
     int monthsRemaining = parseIntOrDefault(body, "monthsRemaining", 6);
     BigDecimal avgCoefficient =
         parseBigDecimalOrDefault(body, "averageSalaryCoefficient", new BigDecimal("3.65"));
     BigDecimal insuranceContributionFactor = new BigDecimal("1.235"); // 23.5% các khoản đóng góp theo lương
-
-    BigDecimal salaryDeltaPerPersonMonth =
-        newBaseSalary
-            .subtract(oldBaseSalary)
-            .multiply(avgCoefficient)
-            .multiply(insuranceContributionFactor);
-    BigDecimal indexationFromBaseSalary =
-        salaryDeltaPerPersonMonth
-            .multiply(BigDecimal.valueOf(baseStaffCount))
-            .multiply(BigDecimal.valueOf(monthsRemaining))
-            .setScale(0, RoundingMode.HALF_UP);
-    BigDecimal indexationFromStaffChange =
-        newBaseSalary
-            .multiply(avgCoefficient)
-            .multiply(insuranceContributionFactor)
-            .multiply(BigDecimal.valueOf(staffChangeCount))
-            .multiply(BigDecimal.valueOf(monthsRemaining))
-            .setScale(0, RoundingMode.HALF_UP);
-
-    BigDecimal explicitAmount = parseBigDecimalOrDefault(body, "amount", BigDecimal.ZERO);
-    BigDecimal unitAdjustmentAmount =
-        explicitAmount.compareTo(BigDecimal.ZERO) != 0
-            ? explicitAmount
-            : indexationFromBaseSalary.add(indexationFromStaffChange);
-    if (unitAdjustmentAmount.compareTo(BigDecimal.ZERO) == 0) {
-      unitAdjustmentAmount = new BigDecimal("185000000");
-    }
 
     List<BudgetAllocation> targetAllocs = new ArrayList<>();
     BudgetAllocation explicitAlloc = resolveExistingAllocation(body, year);
@@ -1614,6 +1709,54 @@ public class BudgetTransactionBusiness {
       if (fallback != null) {
         targetAllocs.add(fallback);
       }
+    }
+
+    BigDecimal explicitAmount = parseBigDecimalOrDefault(body, "amount", BigDecimal.ZERO);
+    Integer baseStaffObj =
+        body != null && body.get("baseStaffCount") != null
+            ? parseIntOrDefault(body, "baseStaffCount", -1)
+            : null;
+    if ((baseStaffObj == null || baseStaffObj < 0)
+        && explicitAmount.compareTo(BigDecimal.ZERO) == 0) {
+      Long staffNodeId = parseLongOrNull(body, "nodeId");
+      if (staffNodeId == null && !targetAllocs.isEmpty()) {
+        staffNodeId = targetAllocs.getFirst().getNodeId();
+      }
+      if (staffNodeId != null && integrationOrchestrator != null) {
+        baseStaffObj = integrationOrchestrator.resolveActiveStaffCount(staffNodeId);
+      }
+    }
+    if (explicitAmount.compareTo(BigDecimal.ZERO) == 0
+        && (baseStaffObj == null || baseStaffObj <= 0)) {
+      throw new BaseException(
+          "Thiếu số lượng biên chế (baseStaffCount) hoặc số tiền điều chỉnh quỹ lương (amount) — không lấy được dữ liệu nhân sự từ Directory Service.");
+    }
+    int baseStaffCount = baseStaffObj != null ? Math.max(baseStaffObj, 0) : 0;
+
+    BigDecimal salaryDeltaPerPersonMonth =
+        newBaseSalary
+            .subtract(oldBaseSalary)
+            .multiply(avgCoefficient)
+            .multiply(insuranceContributionFactor);
+    BigDecimal indexationFromBaseSalary =
+        salaryDeltaPerPersonMonth
+            .multiply(BigDecimal.valueOf(baseStaffCount))
+            .multiply(BigDecimal.valueOf(monthsRemaining))
+            .setScale(0, RoundingMode.HALF_UP);
+    BigDecimal indexationFromStaffChange =
+        newBaseSalary
+            .multiply(avgCoefficient)
+            .multiply(insuranceContributionFactor)
+            .multiply(BigDecimal.valueOf(staffChangeCount))
+            .multiply(BigDecimal.valueOf(monthsRemaining))
+            .setScale(0, RoundingMode.HALF_UP);
+
+    BigDecimal unitAdjustmentAmount =
+        explicitAmount.compareTo(BigDecimal.ZERO) != 0
+            ? explicitAmount
+            : indexationFromBaseSalary.add(indexationFromStaffChange);
+    if (unitAdjustmentAmount.compareTo(BigDecimal.ZERO) == 0) {
+      throw new BaseException("Số tiền điều chỉnh dự toán quỹ lương phải khác 0.");
     }
 
     String decisionNo =
@@ -1716,7 +1859,7 @@ public class BudgetTransactionBusiness {
       surplusAmount = workflowEngineHelper.safe(targetAlloc.getAvailableAmount());
     }
     if (surplusAmount.compareTo(BigDecimal.ZERO) <= 0) {
-      surplusAmount = new BigDecimal("500000000");
+      throw new BaseException("Số dư trích lập Quỹ tự chủ tài chính (surplusAmount / amount) phải lớn hơn 0.");
     }
 
     // Tỷ lệ trích lập 4 Quỹ theo Điều 14, Điều 18 Nghị định 60/2021/NĐ-CP
@@ -1791,12 +1934,15 @@ public class BudgetTransactionBusiness {
             .name("Trích lập 4 Quỹ tự chủ tài chính cuối năm " + year + " (" + autonomyGroup + ")")
             .allocationId(targetAlloc != null ? targetAlloc.getId() : null)
             .allocationCode(targetAlloc != null ? targetAlloc.getCode() : null)
-            .nodeId(targetAlloc != null ? targetAlloc.getNodeId() : 103L)
-            .nodeCode(targetAlloc != null ? targetAlloc.getNodeCode() : "TT_UDKHCN")
+            .nodeId(targetAlloc != null ? targetAlloc.getNodeId() : resolveRequiredNodeId(body))
+            .nodeCode(
+                targetAlloc != null
+                    ? targetAlloc.getNodeCode()
+                    : extractString(body, "nodeCode", "unitNodeCode", null))
             .nodeName(
                 targetAlloc != null
                     ? targetAlloc.getNodeName()
-                    : "Trung tâm Ứng dụng KHCN và Tiêu chuẩn Đo lường Chất lượng Đà Nẵng")
+                    : extractString(body, "nodeName", "unitNodeName", null))
             .domainCode(targetAlloc != null ? targetAlloc.getDomainCode() : "KHCN")
             .domainName(targetAlloc != null ? targetAlloc.getDomainName() : "Khoa học công nghệ")
             .dynamicBreakdownJson(fundArr.toString())
@@ -2012,6 +2158,7 @@ public class BudgetTransactionBusiness {
               List.of(
                   "UNIT_ACCOUNTANT",
                   "UNIT_DIRECTOR",
+                  "SPECIALIST",
                   "PARENT_APPRAISER",
                   "STC_DIRECTOR",
                   "TREASURY_RECONCILER"),
@@ -2019,6 +2166,7 @@ public class BudgetTransactionBusiness {
               List.of(
                   "UNIT_ACCOUNTANT",
                   "UNIT_DIRECTOR",
+                  "SPECIALIST",
                   "PARENT_APPRAISER",
                   "STC_DIRECTOR",
                   "TREASURY_RECONCILER"),
@@ -2026,6 +2174,7 @@ public class BudgetTransactionBusiness {
               List.of(
                   "UNIT_ACCOUNTANT",
                   "UNIT_DIRECTOR",
+                  "SPECIALIST",
                   "PARENT_APPRAISER",
                   "STC_DIRECTOR",
                   "TREASURY_RECONCILER"),
@@ -2039,46 +2188,32 @@ public class BudgetTransactionBusiness {
 
   private Map<String, Object> evaluateOperationRoleGate(
       String operationCode, Map<String, Object> body, BigDecimal amount) {
-    String explicitRole = extractString(body, "actorRole", "roleCode", "");
     boolean authenticatedSession = false;
-    String sessionResolvedRole = "";
+    String actorRole = null;
     try {
-      if (StpUtil.isLogin()) {
+      if (LoginHelper.isSuperAdmin()) {
         authenticatedSession = true;
-        List<String> sessionRoles = StpUtil.getRoleList();
-        if (sessionRoles != null) {
-          for (String r : sessionRoles) {
-            if (r != null) {
-              String upper = r.trim().toUpperCase();
-              if (List.of(
-                      "STC_DIRECTOR",
-                      "TREASURY_RECONCILER",
-                      "PARENT_APPRAISER",
-                      "UNIT_DIRECTOR",
-                      "UNIT_ACCOUNTANT")
-                  .contains(upper)) {
-                sessionResolvedRole = upper;
-                break;
-              }
-            }
-          }
-        }
+        actorRole = "STC_DIRECTOR";
+      } else if (StpUtil.isLogin()) {
+        authenticatedSession = true;
+        actorRole = resolveBudgetPersonaRole(StpUtil.getRoleList(), StpUtil.getPermissionList());
       }
     } catch (Exception ignored) {
-      // Bỏ qua trong môi trường Unit Test không khởi tạo Sa-Token Context
+      authenticatedSession = false;
     }
 
-    String actorRole =
-        StrUtil.isNotBlank(explicitRole)
-            ? explicitRole.toUpperCase()
-            : (StrUtil.isNotBlank(sessionResolvedRole) ? sessionResolvedRole : "STC_DIRECTOR");
-    boolean strictRoleCheck =
-        body != null && Boolean.parseBoolean(String.valueOf(body.get("strictRoleCheck")));
+    if (!authenticatedSession || StrUtil.isBlank(actorRole)) {
+      throw new BaseException(
+          "Chưa xác thực phiên đăng nhập hợp lệ hoặc tài khoản chưa được gán vai trò nghiệp vụ Ngân sách để thực hiện ["
+              + operationCode
+              + "].");
+    }
 
     String actorRoleName =
         switch (actorRole) {
           case "UNIT_ACCOUNTANT" -> "Kế toán Đơn vị Dự toán Cấp dưới (Cấp III)";
           case "UNIT_DIRECTOR" -> "Thủ trưởng Đơn vị Sử dụng Ngân sách";
+          case "SPECIALIST" -> "Chuyên viên Tổng hợp Kế hoạch - Tài chính";
           case "PARENT_APPRAISER" -> "Chuyên viên Thẩm định Tài chính - Kế hoạch (Cấp I)";
           case "TREASURY_RECONCILER" -> "Kiểm soát viên Đối soát Kho bạc (KBNN)";
           case "STC_DIRECTOR" -> "Lãnh đạo Sở Chủ quản / Sở Tài chính (STC_DIRECTOR)";
@@ -2103,7 +2238,7 @@ public class BudgetTransactionBusiness {
         };
 
     boolean canInitiate = allowedInitiators.contains(actorRole);
-    if (!canInitiate && strictRoleCheck) {
+    if (!canInitiate) {
       throw new BaseException(
           "Vai trò ["
               + actorRoleName
@@ -2131,6 +2266,50 @@ public class BudgetTransactionBusiness {
     meta.put("allowedApproverRoles", allowedApprovers);
     meta.put("evaluatedAmount", amount);
     return meta;
+  }
+
+  private String resolveBudgetPersonaRole(List<String> sessionRoles, List<String> sessionPerms) {
+    if (sessionRoles != null) {
+      Set<String> normalized = new LinkedHashSet<>();
+      for (String r : sessionRoles) {
+        if (r != null) {
+          normalized.add(r.trim().toUpperCase());
+        }
+      }
+      if (normalized.contains("ROLE_BUDGET_DIRECTORATE") || normalized.contains("STC_DIRECTOR")) {
+        return "STC_DIRECTOR";
+      }
+      if (normalized.contains("TREASURY_RECONCILER")) {
+        return "TREASURY_RECONCILER";
+      }
+      if (normalized.contains("ROLE_BUDGET_FINANCE_APPRAISER")
+          || normalized.contains("PARENT_APPRAISER")) {
+        return "PARENT_APPRAISER";
+      }
+      if (normalized.contains("ROLE_BUDGET_UNIT_HEAD") || normalized.contains("UNIT_DIRECTOR")) {
+        return "UNIT_DIRECTOR";
+      }
+      if (normalized.contains("ROLE_BUDGET_UNIT_ACCOUNTANT")
+          || normalized.contains("UNIT_ACCOUNTANT")) {
+        return "UNIT_ACCOUNTANT";
+      }
+      if (normalized.contains("ROLE_BUDGET_SPECIALIST") || normalized.contains("SPECIALIST")) {
+        return "SPECIALIST";
+      }
+    }
+    if (sessionPerms != null && sessionPerms.contains("BudgetTransactionApprove")) {
+      return "PARENT_APPRAISER";
+    }
+    return null;
+  }
+
+  private boolean hasTransactionApproveOverride() {
+    try {
+      return LoginHelper.isSuperAdmin()
+          || (StpUtil.isLogin() && StpUtil.hasPermission("BudgetTransactionApprove"));
+    } catch (Exception ignored) {
+      return false;
+    }
   }
 
   private BudgetAllocation resolveExistingAllocation(Map<String, Object> body, int year) {
@@ -2196,11 +2375,11 @@ public class BudgetTransactionBusiness {
     if (budgetAllocationRepo == null) {
       return null;
     }
+    Long nodeId = resolveRequiredNodeId(body);
     String newCode =
         "PB-" + year + "-" + domainCode + "-" + (System.currentTimeMillis() % 100000);
-    Long nodeId = parseLongOrNull(body, "nodeId") != null ? parseLongOrNull(body, "nodeId") : 101L;
-    String nodeCode = extractString(body, "nodeCode", "unitNodeCode", "VAN_PHONG_SO");
-    String nodeName = extractString(body, "nodeName", "unitNodeName", "Văn phòng Sở");
+    String nodeCode = extractString(body, "nodeCode", "unitNodeCode", "NODE-" + nodeId);
+    String nodeName = extractString(body, "nodeName", "unitNodeName", "Đơn vị #" + nodeId);
     return budgetAllocationRepo.save(
         BudgetAllocation.builder()
             .code(newCode)
@@ -2289,6 +2468,180 @@ public class BudgetTransactionBusiness {
       }
     }
     return defaultVal;
+  }
+
+  private Long resolveRequiredNodeId(Map<String, Object> body) {
+    Long nodeId = parseLongOrNull(body, "nodeId");
+    if (nodeId != null) {
+      return nodeId;
+    }
+    throw new BaseException("Thiếu thông tin Đơn vị dự toán (nodeId) cho giao dịch.");
+  }
+
+  /**
+   * Ghi nhận giao dịch Sổ cái phát sinh từ Kế hoạch công tác ({@code tr-planning-service}) qua S2S
+   * {@link vn.tr.common.feign.budget.service.BudgetInternalClient#recordPlanLedgerTransaction}.
+   */
+  public Map<String, Object> recordFromPlan(Map<String, Object> body) {
+    if (body == null || body.isEmpty()) {
+      return Map.of("recorded", false, "reason", "EMPTY_REQUEST");
+    }
+    String planCode = extractString(body, "planCode", "linkedPlanCode", "");
+    String rawCode = extractString(body, "code", null, "");
+    String txCode =
+        StrUtil.isNotBlank(rawCode)
+            ? rawCode
+            : ("PLNTX-" + StrUtil.blankToDefault(planCode, "AUTO") + "-" + (System.currentTimeMillis() % 100000));
+    Optional<BudgetTransaction> existingOpt =
+        budgetTransactionService.findByCodeIgnoreCaseIncludingDeleted(txCode);
+    if (existingOpt != null && existingOpt.isPresent()) {
+      BudgetTransaction existing = existingOpt.get();
+      return Map.of(
+          "recorded", true,
+          "idempotent", true,
+          "transactionId", existing.getId(),
+          "transactionCode", existing.getCode(),
+          "allocationId", existing.getAllocationId() != null ? existing.getAllocationId() : 0L);
+    }
+
+    int year = parseIntOrDefault(body, "budgetYear", LocalDate.now().getYear());
+    BudgetAllocation targetAlloc = resolveExistingAllocation(body, year);
+    if (targetAlloc == null && StrUtil.isNotBlank(planCode) && budgetAllocationRepo != null) {
+      List<BudgetAllocation> byPlan =
+          budgetAllocationRepo.findByLinkedPlanCodeIgnoreCaseOrderByIdAsc(planCode);
+      if (!byPlan.isEmpty()) {
+        targetAlloc = byPlan.getFirst();
+      }
+    }
+
+    BigDecimal amount = parseBigDecimalOrDefault(body, "amount", BigDecimal.ZERO);
+    String txType = extractString(body, "txType", null, "SUPPLEMENT").toUpperCase();
+    String direction =
+        ("REDUCTION".equals(txType)
+                || "CARRY_OVER_OUT".equals(txType)
+                || "TRANSFER_OUT".equals(txType)
+                || "DISBURSEMENT".equals(txType)
+                || amount.compareTo(BigDecimal.ZERO) < 0)
+            ? "DEBIT"
+            : "CREDIT";
+
+    BudgetTransactionData txData =
+        BudgetTransactionData.builder()
+            .code(txCode)
+            .name(
+                extractString(
+                    body,
+                    "name",
+                    null,
+                    "Ghi nhận biến động kinh phí từ Kế hoạch [" + planCode + "]"))
+            .allocationId(targetAlloc != null ? targetAlloc.getId() : parseLongOrNull(body, "allocationId"))
+            .allocationCode(targetAlloc != null ? targetAlloc.getCode() : extractString(body, "allocationCode", null, null))
+            .nodeId(targetAlloc != null ? targetAlloc.getNodeId() : parseLongOrNull(body, "nodeId"))
+            .nodeCode(targetAlloc != null ? targetAlloc.getNodeCode() : extractString(body, "nodeCode", null, null))
+            .nodeName(targetAlloc != null ? targetAlloc.getNodeName() : extractString(body, "nodeName", null, null))
+            .budgetYear(year)
+            .txType("DISBURSEMENT".equals(txType) ? "ADJUSTMENT" : txType)
+            .entryDirection(direction)
+            .txDate(parseLocalDateOrDefault(body, "txDate", LocalDate.now()))
+            .amount("DISBURSEMENT".equals(txType) && amount.compareTo(BigDecimal.ZERO) > 0 ? amount.negate() : amount)
+            .decisionNo(extractString(body, "decisionNo", "planCode", planCode))
+            .reason(extractString(body, "reason", "description", "Đồng bộ từ tr-planning-service"))
+            .approvalStatus(extractString(body, "approvalStatus", null, "APPROVED"))
+            .status(LifecycleStatus.ACTIVE)
+            .build();
+
+    BudgetTransactionData created = create(txData);
+    return Map.of(
+        "recorded", true,
+        "idempotent", false,
+        "transactionId", created.getId() != null ? created.getId() : 0L,
+        "transactionCode", created.getCode(),
+        "allocationId", created.getAllocationId() != null ? created.getAllocationId() : 0L);
+  }
+
+  /** Lấy danh sách rút gọn (Lookup Options) Giao dịch Sổ cái Ngân sách. */
+  @Transactional(readOnly = true)
+  public PagedData<RefData<Long>> getOptions(BudgetTransactionSearchCriteria criteria) {
+    Pageable pageable = CoreUtils.getPageRequest(criteria);
+    Page<BudgetTransaction> page = budgetTransactionService.findAll(criteria, pageable);
+    return PagedData.from(
+        page,
+        e ->
+            RefData.of(
+                e.getId(),
+                e.getCode(),
+                e.getName(),
+                e.getStatus() != null ? e.getStatus().name() : null));
+  }
+
+  @Override
+  public String getAppCode() {
+    return "BudgetTransaction";
+  }
+
+  @Override
+  public String getConfigNamespace() {
+    return "budget";
+  }
+
+  @Override
+  public String getProcessCode() {
+    return BudgetIntegrationOrchestrator.WF_PROCESS_TRANSACTION;
+  }
+
+  @Override
+  public String getCallbackUrl() {
+    return "/api/v1/budget/transactions/workflow-callback";
+  }
+
+  @Override
+  public void submitWorkflow(Long id) {
+    BudgetTransaction tx =
+        budgetTransactionService
+            .findById(id)
+            .orElseThrow(() -> new EntityNotFoundException(BudgetTransaction.class, id));
+    tx.setApprovalStatus("PENDING");
+    budgetTransactionService.save(tx);
+  }
+
+  @Override
+  public void cancelWorkflow(Long id) {
+    BudgetTransaction tx =
+        budgetTransactionService
+            .findById(id)
+            .orElseThrow(() -> new EntityNotFoundException(BudgetTransaction.class, id));
+    tx.setApprovalStatus("DRAFT");
+    budgetTransactionService.save(tx);
+    recalculateAffectedAllocations(tx.getAllocationId(), tx.getCounterpartAllocationId());
+  }
+
+  @Override
+  public void onWorkflowCompleted(WorkflowCallbackPayload payload) {
+    if (payload == null || payload.getEntityId() == null) {
+      return;
+    }
+    String decision = StrUtil.blankToDefault(payload.getDecision(), "").toUpperCase();
+    if ("APPROVE".equals(decision) || "APPROVED".equals(decision)) {
+      approveTransaction(
+          payload.getEntityId(), Map.of("comment", StrUtil.nullToEmpty(payload.getComment())));
+    } else if ("REJECT".equals(decision) || "REJECTED".equals(decision)) {
+      rejectTransaction(
+          payload.getEntityId(), Map.of("reason", StrUtil.nullToEmpty(payload.getComment())));
+    }
+  }
+
+  @Override
+  public BudgetTransaction changeEntityStatus(
+      Long id, LifecycleStatus targetStatus, String comment) {
+    BudgetTransaction tx =
+        budgetTransactionService
+            .findById(id)
+            .orElseThrow(() -> new EntityNotFoundException(BudgetTransaction.class, id));
+    tx.setStatus(targetStatus);
+    if (StrUtil.isNotBlank(comment)) {
+      tx.setDescription(comment);
+    }
+    return budgetTransactionService.save(tx);
   }
 
 }

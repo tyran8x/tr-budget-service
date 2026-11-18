@@ -62,7 +62,7 @@ public class BudgetUnitConfigImportData {
 
   @ExcelProperty(value = "Tên Kho bạc giao dịch", index = 6)
   @ColumnWidth(30)
-  private String treasuryAgencyName;
+  private String treasuryBranchName;
 
   @ExcelProperty(value = "Hạn mức tự phê duyệt (VNĐ)", index = 7)
   @ColumnWidth(24)

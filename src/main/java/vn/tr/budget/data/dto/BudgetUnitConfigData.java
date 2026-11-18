@@ -67,4 +67,10 @@ public class BudgetUnitConfigData extends BaseCommonData {
   private Long approverPersonId;
 
   private String approverPersonName;
+
+  private BigDecimal selfTransferLimitAmount;
+
+  private Long unitHeadPersonId;
+
+  private String unitHeadPersonName;
 }

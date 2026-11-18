@@ -6,6 +6,8 @@ import org.springframework.stereotype.Component;
 import org.springframework.validation.Errors;
 import vn.tr.budget.dao.service.BudgetTransactionService;
 import vn.tr.budget.data.dto.BudgetTransactionData;
+import vn.tr.budget.data.enums.BudgetTransactionType;
+import vn.tr.budget.data.enums.BudgetWorkflowStatus;
 import vn.tr.common.core.utils.MessageUtils;
 import vn.tr.common.web.validator.BaseValidator;
 
@@ -60,6 +62,28 @@ public class BudgetTransactionValidator extends BaseValidator {
               "budget.error.year.invalid",
               "Năm ngân sách phải nằm trong khoảng từ 2000 đến " + maxYear,
               maxYear));
+    }
+
+    if (data.getTxType() != null
+        && !data.getTxType().isBlank()
+        && !BudgetTransactionType.isValid(data.getTxType())) {
+      errors.rejectValue(
+          "txType",
+          "budget.error.txType.invalid",
+          MessageUtils.messageOrDefault(
+              "budget.error.txType.invalid",
+              "Loại bút toán giao dịch '" + data.getTxType() + "' không hợp lệ"));
+    }
+
+    if (data.getApprovalStatus() != null
+        && !data.getApprovalStatus().isBlank()
+        && !BudgetWorkflowStatus.isValid(data.getApprovalStatus())) {
+      errors.rejectValue(
+          "approvalStatus",
+          "budget.error.status.invalid",
+          MessageUtils.messageOrDefault(
+              "budget.error.status.invalid",
+              "Trạng thái quy trình '" + data.getApprovalStatus() + "' không hợp lệ"));
     }
   }
 

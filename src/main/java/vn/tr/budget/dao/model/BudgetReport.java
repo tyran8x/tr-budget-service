@@ -179,7 +179,8 @@ public class BudgetReport extends BaseCommonEntity implements AppIsolated {
   private String notes;
 
   @Column(name = "workflow_status", length = 50)
-  private String workflowStatus;
+  @Builder.Default
+  private String workflowStatus = "DRAFT";
 
   @Column(name = "linked_rpt_submission_id")
   private Long linkedRptSubmissionId;
@@ -198,5 +199,21 @@ public class BudgetReport extends BaseCommonEntity implements AppIsolated {
 
   @Column(name = "attachment_file_ids_json", columnDefinition = "TEXT")
   private String attachmentFileIdsJson;
+
+  @Column(name = "form_template_code", length = 100)
+  @Builder.Default
+  private String formTemplateCode = "01a/SDKP-ĐVDT";
+
+  @Column(name = "data_cutoff_date")
+  private LocalDate dataCutoffDate;
+
+  @Column(name = "reconciliation_statement_json", columnDefinition = "TEXT")
+  private String reconciliationStatementJson;
+
+  @Column(name = "treasury_confirmation_code", length = 100)
+  private String treasuryConfirmationCode;
+
+  @Column(name = "treasury_confirmed_date")
+  private LocalDate treasuryConfirmedDate;
 
 }

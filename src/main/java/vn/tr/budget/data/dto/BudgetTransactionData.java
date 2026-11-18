@@ -68,8 +68,6 @@ public class BudgetTransactionData extends BaseCommonData {
 
   private BigDecimal amount;
 
-  private BigDecimal disbursedAmount;
-
   private BigDecimal balanceBeforeAmount;
 
   private BigDecimal balanceAfterAmount;
@@ -129,4 +127,10 @@ public class BudgetTransactionData extends BaseCommonData {
   private String attachmentFileIdsJson;
 
   private String currencyCode;
+
+  private String entryDirection;
+
+  private Long counterpartTxId;
+
+  private String treasuryDocNo;
 }

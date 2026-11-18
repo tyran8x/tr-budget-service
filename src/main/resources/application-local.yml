@@ -56,3 +56,8 @@ security:
 client:
   planning-service:
     url: ${CLIENT_PLANNING_SERVICE_URL:http://localhost:8306}
+
+tr:
+  kafka:
+    payment-listener:
+      enabled: false

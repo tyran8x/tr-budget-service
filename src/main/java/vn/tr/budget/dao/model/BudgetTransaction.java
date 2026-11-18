@@ -127,10 +127,6 @@ public class BudgetTransaction extends BaseCommonEntity implements AppIsolated {
   @Column(name = "amount", precision = 19, scale = 2)
   private BigDecimal amount;
 
-  @Column(name = "disbursed_amount", precision = 19, scale = 2)
-  @Builder.Default
-  private BigDecimal disbursedAmount = BigDecimal.ZERO;
-
   @Column(name = "balance_before_amount", precision = 19, scale = 2)
   private BigDecimal balanceBeforeAmount;
 
@@ -207,7 +203,18 @@ public class BudgetTransaction extends BaseCommonEntity implements AppIsolated {
   private String rejectReason;
 
   @Column(name = "approval_status", length = 50)
-  private String approvalStatus;
+  @Builder.Default
+  private String approvalStatus = "DRAFT";
+
+  @Column(name = "entry_direction", length = 20)
+  @Builder.Default
+  private String entryDirection = "DEBIT";
+
+  @Column(name = "counterpart_tx_id")
+  private Long counterpartTxId;
+
+  @Column(name = "treasury_doc_no", length = 100)
+  private String treasuryDocNo;
 
   @Column(name = "wf_instance_id")
   private Long wfInstanceId;

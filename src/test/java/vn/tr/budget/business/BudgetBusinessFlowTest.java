@@ -19,7 +19,12 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.validation.BeanPropertyBindingResult;
+import vn.tr.common.core.domain.R;
+import vn.tr.common.feign.ai.data.AiTaskRequest;
+import vn.tr.common.feign.ai.data.AiTaskResponse;
+import vn.tr.common.feign.ai.service.AiClient;
 import vn.tr.budget.business.helper.BudgetWorkflowEngineHelper;
 import vn.tr.budget.dao.model.BudgetAllocation;
 import vn.tr.budget.dao.model.BudgetEstimateItem;
@@ -261,7 +266,7 @@ class BudgetBusinessFlowTest {
     when(budgetAllocationRepo.findByBudgetYearOrderByIdAsc(2026)).thenReturn(allocs);
 
     List<Map<String, Object>> tree = dashboardBusiness.getRevenueExpenditureTree(2026);
-    assertThat(tree).hasSize(3);
+    assertThat(tree).hasSize(1);
     Map<String, Object> root = tree.getFirst();
     assertThat((BigDecimal) root.get("effectiveAmount")).isEqualByComparingTo("400000000");
     @SuppressWarnings("unchecked")
@@ -271,6 +276,31 @@ class BudgetBusinessFlowTest {
     List<Map<String, Object>> level3 = (List<Map<String, Object>>) level2.getFirst().get("children");
     assertThat(level3).hasSize(1);
     assertThat(level3.getFirst().get("code")).isEqualTo("EXP-TX-CNTT");
+
+    // Khi chưa kết nối tr-ai-service -> fallback RULE_BASED_HEURISTIC trung thực
+    Map<String, Object> offlineAdvisor = dashboardBusiness.generateAiAdvisorInsights(2026);
+    assertThat(offlineAdvisor.get("advisorModel")).isEqualTo("RULE_BASED_HEURISTIC");
+    assertThat(offlineAdvisor.get("aiAvailable")).isEqualTo(false);
+
+    // Khi kết nối AiClient -> dùng AiClient.dispatch và gắn modelUsed thực tế
+    @SuppressWarnings("unchecked")
+    ObjectProvider<AiClient> aiProvider = mock(ObjectProvider.class);
+    AiClient aiClient = mock(AiClient.class);
+    when(aiProvider.getIfAvailable()).thenReturn(aiClient);
+    when(aiClient.dispatch(any(AiTaskRequest.class)))
+        .thenReturn(
+            R.ok(
+                AiTaskResponse.builder()
+                    .modelUsed("gemini-2.5-flash")
+                    .textResult("Đẩy nhanh giải ngân nhóm CNTT trước quý IV.")
+                    .build()));
+    dashboardBusiness.setAiClientProvider(aiProvider);
+    Map<String, Object> onlineAdvisor = dashboardBusiness.generateAiAdvisorInsights(2026);
+    assertThat(onlineAdvisor.get("advisorModel")).isEqualTo("gemini-2.5-flash");
+    assertThat(onlineAdvisor.get("aiAvailable")).isEqualTo(true);
+    assertThat(onlineAdvisor.get("aiSummary"))
+        .isEqualTo("Đẩy nhanh giải ngân nhóm CNTT trước quý IV.");
+    dashboardBusiness.setAiClientProvider(null);
   }
 
   @Test

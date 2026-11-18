@@ -16,7 +16,10 @@ public enum BudgetAutonomyType {
   GROUP_2("GROUP_2", "Nhóm 2 — Tự bảo đảm chi thường xuyên"),
   GROUP_3("GROUP_3", "Nhóm 3 — Tự bảo đảm một phần chi thường xuyên"),
   GROUP_4("GROUP_4", "Nhóm 4 — Ngân sách nhà nước bảo đảm toàn bộ"),
-  STATE_ADMIN("STATE_ADMIN", "Cơ quan quản lý hành chính nhà nước (Khoán chi NĐ 130)");
+  STATE_ADMIN("STATE_ADMIN", "Cơ quan quản lý hành chính nhà nước (Khoán chi NĐ 130)"),
+  AUTONOMOUS("AUTONOMOUS", "Kinh phí giao tự chủ"),
+  NON_AUTONOMOUS("NON_AUTONOMOUS", "Kinh phí không giao tự chủ"),
+  PARTIALLY_AUTONOMOUS("PARTIALLY_AUTONOMOUS", "Tự chủ một phần");
 
   private final String code;
   private final String label;
@@ -31,5 +34,14 @@ public enum BudgetAutonomyType {
       }
     }
     return null;
+  }
+
+  public static BudgetAutonomyType fromCodeOrDefault(String code, BudgetAutonomyType fallback) {
+    BudgetAutonomyType resolved = fromCode(code);
+    return resolved != null ? resolved : fallback;
+  }
+
+  public static boolean isValid(String code) {
+    return fromCode(code) != null;
   }
 }

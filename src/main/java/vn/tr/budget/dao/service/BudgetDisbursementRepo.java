@@ -42,6 +42,17 @@ public interface BudgetDisbursementRepo
   @Query(value = "SELECT * FROM budget_disbursement WHERE id = :id LIMIT 1", nativeQuery = true)
   Optional<BudgetDisbursement> findByIdIncludingDeleted(@Param("id") Long id);
 
+  @Query(
+      value =
+          "SELECT * FROM budget_disbursement WHERE id = :id AND (app_code = :appCode OR :appCode IS NULL) LIMIT 1",
+      nativeQuery = true)
+  Optional<BudgetDisbursement> findByIdIncludingDeletedByAppCode(
+      @Param("id") Long id, @Param("appCode") String appCode);
+
+  Optional<BudgetDisbursement> findFirstByPaymentTxCodeIgnoreCase(String paymentTxCode);
+
+  Optional<BudgetDisbursement> findFirstByPayTransactionId(Long payTransactionId);
+
   List<BudgetDisbursement> findByAllocationIdOrderByIdAsc(Long allocationId);
 
   List<BudgetDisbursement> findByBudgetYearOrderByIdDesc(Integer budgetYear);

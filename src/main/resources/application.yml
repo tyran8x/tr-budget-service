@@ -146,6 +146,8 @@ sa-token:
   token-style: jwt
   jwt-secret-key: ${SA_TOKEN_JWT_SECRET:DnictPro@123}
   is-log: false
+  shared-lookup:
+    extra-read-prefixes: ${SA_TOKEN_SHARED_EXTRA_READ_PREFIXES:BudgetCategory,BudgetEstimateItem,BudgetUnitConfig}
 
 redisson:
   keyPrefix: ${REDISSON_KEY_PREFIX:${spring.application.name}}
@@ -176,6 +178,9 @@ redisson:
 tr:
   app-code: budget
   app-shorthand: Budget
+  kafka:
+    payment-listener:
+      enabled: ${BUDGET_PAYMENT_KAFKA_ENABLED:false}
   feign:
     core-service-name: ${CORE_SERVICE_NAME:tr-core-service}
     catalog-service-name: ${CATALOG_SERVICE_NAME:tr-catalog-service}

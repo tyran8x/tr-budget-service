@@ -196,9 +196,6 @@ public class BudgetDisbursement extends BaseCommonEntity implements AppIsolated 
   @Column(name = "payment_tx_code", length = 100)
   private String paymentTxCode;
 
-  @Column(name = "payment_status", length = 50)
-  private String paymentStatus;
-
   @Column(name = "sla_due_date")
   private LocalDate slaDueDate;
 
@@ -224,7 +221,17 @@ public class BudgetDisbursement extends BaseCommonEntity implements AppIsolated 
   private String rejectReason;
 
   @Column(name = "approval_status", length = 50)
-  private String approvalStatus;
+  @Builder.Default
+  private String approvalStatus = "DRAFT";
+
+  @Column(name = "commitment_disbursement_id")
+  private Long commitmentDisbursementId;
+
+  @Column(name = "dvc_kbnn_dossier_no", length = 100)
+  private String dvcKbnnDossierNo;
+
+  @Column(name = "advance_settlement_due_date")
+  private LocalDate advanceSettlementDueDate;
 
   @Column(name = "wf_instance_id")
   private Long wfInstanceId;

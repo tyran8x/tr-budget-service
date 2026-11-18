@@ -1,14 +1,11 @@
 package vn.tr.budget.controller;
 
 import cn.dev33.satoken.annotation.SaCheckPermission;
+import cn.dev33.satoken.annotation.SaMode;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
-import java.io.IOException;
-import java.io.InputStream;
-import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import lombok.RequiredArgsConstructor;
@@ -23,18 +20,15 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 import vn.tr.budget.business.BudgetAllocationBusiness;
+import vn.tr.budget.business.BudgetBatchEntryBusiness;
 import vn.tr.budget.data.criteria.BudgetAllocationSearchCriteria;
 import vn.tr.budget.data.dto.BudgetAllocationData;
-import vn.tr.budget.data.dto.BudgetAllocationImportData;
 import vn.tr.budget.data.mapper.BudgetAllocationMapper;
 import vn.tr.budget.excel.BudgetAllocationExcelService;
+import vn.tr.budget.excel.BudgetExcelControllerHelper;
 import vn.tr.common.core.domain.R;
 import vn.tr.common.core.domain.data.PagedData;
-import vn.tr.common.core.exception.base.BaseException;
-import vn.tr.common.core.utils.MessageUtils;
-import vn.tr.common.excel.core.ImportBatchResult;
-import vn.tr.common.excel.core.ImportRowResult;
-import vn.tr.common.feign.budget.data.BudgetPlanSyncRequestData;
+import vn.tr.common.core.domain.data.RefData;
 import vn.tr.common.feign.budget.data.BudgetPlanSyncResultData;
 import vn.tr.common.log.annotation.Log;
 import vn.tr.common.log.enums.BusinessType;
@@ -51,13 +45,16 @@ import vn.tr.common.web.data.dto.DeleteData;
 @RestController
 @RequestMapping("/allocations")
 @RequiredArgsConstructor
-@Tag(name = "Phương án & Quyết định Phân bổ Dự toán Kinh phí Đa kỳ", description = "API quản lý Lập, Thẩm định, Giao & Phân bổ Dự toán Kinh phí theo Năm/Quý/Tháng, Đơn vị và Cây Thu-Chi (kế thừa & nâng cấp từ QlkpPhanBoKinhPhi)")
+@Tag(
+    name = "Phương án & Quyết định Phân bổ Dự toán Kinh phí Đa kỳ",
+    description =
+        "API quản lý Lập, Thẩm định, Giao & Phân bổ Dự toán Kinh phí theo Năm/Quý/Tháng, Đơn vị và Cây Thu-Chi")
 public class BudgetAllocationController extends BaseController {
 
   private final BudgetAllocationBusiness budgetAllocationBusiness;
+  private final BudgetBatchEntryBusiness budgetBatchEntryBusiness;
   private final BudgetAllocationExcelService budgetAllocationExcelService;
   private final BudgetAllocationMapper budgetAllocationMapper;
-  private final HttpServletResponse response;
 
   @SaCheckPermission("BudgetAllocationCreate")
   @PostMapping
@@ -71,7 +68,8 @@ public class BudgetAllocationController extends BaseController {
   @PutMapping("/{id}")
   @Operation(summary = "Cập nhật Phương án & Quyết định Phân bổ Dự toán Kinh phí Đa kỳ")
   @Log(title = "[BudgetAllocation] Update", businessType = BusinessType.UPDATE)
-  public R<BudgetAllocationData> update(@PathVariable Long id, @Valid @RequestBody BudgetAllocationData data) {
+  public R<BudgetAllocationData> update(
+      @PathVariable Long id, @Valid @RequestBody BudgetAllocationData data) {
     return success(budgetAllocationBusiness.update(id, data));
   }
 
@@ -99,6 +97,22 @@ public class BudgetAllocationController extends BaseController {
     return success(budgetAllocationBusiness.findAll(criteria));
   }
 
+  @SaCheckPermission(
+      value = {
+        "BudgetAllocationList",
+        "BudgetDisbursementCreate",
+        "BudgetDisbursementEdit",
+        "BudgetTransactionSubmit",
+        "BudgetTransactionCreate",
+        "BudgetReportCreate"
+      },
+      mode = SaMode.OR)
+  @GetMapping("/options")
+  @Operation(summary = "Lấy danh sách rút gọn (Lookup Options) Phương án Phân bổ Kinh phí")
+  public R<PagedData<RefData<Long>>> getOptions(BudgetAllocationSearchCriteria criteria) {
+    return success(budgetAllocationBusiness.getOptions(criteria));
+  }
+
   @SaCheckPermission("BudgetAllocationDetail")
   @GetMapping("/{id}")
   @Operation(summary = "Lấy chi tiết Phương án & Quyết định Phân bổ Dự toán Kinh phí Đa kỳ")
@@ -107,7 +121,7 @@ public class BudgetAllocationController extends BaseController {
   }
 
   @SaCheckPermission("BudgetAllocationClone")
-  @GetMapping("/{id}/clone")
+  @PostMapping("/{id}/clone")
   @Operation(summary = "Sao chép Phương án & Quyết định Phân bổ Dự toán Kinh phí Đa kỳ")
   @Log(title = "[BudgetAllocation] Clone", businessType = BusinessType.INSERT)
   public R<BudgetAllocationData> cloneById(@PathVariable Long id) {
@@ -138,7 +152,7 @@ public class BudgetAllocationController extends BaseController {
       title = "[BudgetAllocation] Export Excel",
       businessType = BusinessType.EXPORT,
       isSaveRequestData = false)
-  public void export(BudgetAllocationSearchCriteria criteria) {
+  public void export(BudgetAllocationSearchCriteria criteria, HttpServletResponse response) {
     budgetAllocationExcelService.export(criteria, response);
   }
 
@@ -149,7 +163,7 @@ public class BudgetAllocationController extends BaseController {
       title = "[BudgetAllocation] Download Template",
       businessType = BusinessType.IMPORT,
       isSaveRequestData = false)
-  public void downloadTemplate() {
+  public void downloadTemplate(HttpServletResponse response) {
     budgetAllocationExcelService.importTemplate(response);
   }
 
@@ -157,127 +171,72 @@ public class BudgetAllocationController extends BaseController {
   @PostMapping("/import/validate")
   @Operation(summary = "Validate file Excel Import")
   public R<Map<String, Object>> validateImport(@RequestParam("file") MultipartFile file) {
-    try (InputStream is = file.getInputStream()) {
-      ImportBatchResult<BudgetAllocationImportData> batchResult =
-          budgetAllocationExcelService.validateExcel(is, file.getOriginalFilename(), true);
-
-      List<BudgetAllocationData> dataList = new ArrayList<>();
-      List<Map<String, Object>> errorsList = new ArrayList<>();
-
-      for (ImportRowResult<BudgetAllocationImportData> rowResult : batchResult.getRowResults()) {
-        BudgetAllocationData data = budgetAllocationMapper.toImportData(rowResult.getOriginalData());
-        dataList.add(data);
-
-        if (rowResult.hasErrors()) {
-          for (String err : rowResult.getValidationErrors()) {
-            Map<String, Object> errMap = new HashMap<>();
-            errMap.put("row", rowResult.getRowNumber());
-            errMap.put("field", "");
-            errMap.put("message", err);
-            errorsList.add(errMap);
-          }
-        }
-      }
-
-      Map<String, Object> summary = new HashMap<>();
-      summary.put("total", batchResult.getTotalRows());
-      summary.put("valid", batchResult.getTotalRows() - batchResult.getErrorCount());
-      summary.put("invalid", batchResult.getErrorCount());
-
-      Map<String, Object> result = new HashMap<>();
-      result.put("data", dataList);
-      result.put("errors", errorsList);
-      result.put("summary", summary);
-      result.put("valid", batchResult.getErrorCount() == 0);
-
-      return success(result);
-    } catch (IOException e) {
-      throw new BaseException(MessageUtils.message("error.excel.read", e.getMessage()));
-    }
+    return success(
+        BudgetExcelControllerHelper.validateImport(
+            file, budgetAllocationExcelService, budgetAllocationMapper));
   }
 
   @SaCheckPermission("BudgetAllocationImport")
   @PostMapping("/import")
   @Operation(summary = "Import dữ liệu Phương án & Quyết định Phân bổ Dự toán Kinh phí Đa kỳ từ JSON")
   @Log(title = "[BudgetAllocation] Import Commit", businessType = BusinessType.IMPORT)
-  public R<Map<String, Object>> importData(@RequestBody Map<String, List<BudgetAllocationData>> body) {
-    List<BudgetAllocationData> dataList = body.get("data");
-    if (dataList == null || dataList.isEmpty()) {
-      throw new BaseException("Dữ liệu import trống");
-    }
-
-    int created = 0;
-    int updated = 0;
-    List<Map<String, Object>> errors = new ArrayList<>();
-
-    for (int i = 0; i < dataList.size(); i++) {
-      BudgetAllocationData data = dataList.get(i);
-      try {
-        if (data.getId() != null
-            && data.getId() > 0
-            && budgetAllocationBusiness.getInjectedRepo().existsById(data.getId())) {
-          budgetAllocationBusiness.update(data.getId(), data);
-          updated++;
-        } else {
-          budgetAllocationBusiness.create(data);
-          created++;
-        }
-      } catch (Exception e) {
-        Map<String, Object> errMap = new HashMap<>();
-        errMap.put("row", i + 1);
-        errMap.put("message", e.getMessage());
-        errors.add(errMap);
-      }
-    }
-
-    Map<String, Object> result = new HashMap<>();
-    result.put("created", created);
-    result.put("updated", updated);
-    result.put("errors", errors);
-    return success(result);
+  public R<Map<String, Object>> importData(
+      @RequestBody Map<String, List<BudgetAllocationData>> body) {
+    return success(
+        BudgetExcelControllerHelper.importData(
+            body.get("data"),
+            BudgetAllocationData::getId,
+            id -> budgetAllocationBusiness.getInjectedRepo().existsById(id),
+            budgetAllocationBusiness::create,
+            budgetAllocationBusiness::update));
   }
 
-  @SaCheckPermission("BudgetAllocationEdit")
+  @SaCheckPermission("BudgetAllocationSubmit")
   @PostMapping("/{id}/submit")
   @Operation(summary = "Trình thẩm định / phê duyệt Phương án Phân bổ Dự toán Kinh phí")
+  @Log(title = "[BudgetAllocation] Submit", businessType = BusinessType.UPDATE)
   public R<BudgetAllocationData> submitAllocation(
       @PathVariable("id") Long id, @RequestBody(required = false) Map<String, Object> body) {
     return success(budgetAllocationBusiness.submitAllocation(id, body));
   }
 
-  @SaCheckPermission("BudgetAllocationEdit")
+  @SaCheckPermission("BudgetAllocationSelfApprove")
   @PostMapping("/{id}/self-approve")
   @Operation(summary = "Đơn vị tự phê duyệt phân bổ chi tiết trong phạm vi tự chủ tài chính")
+  @Log(title = "[BudgetAllocation] Self Approve", businessType = BusinessType.UPDATE)
   public R<BudgetAllocationData> selfApproveAllocation(
       @PathVariable("id") Long id, @RequestBody(required = false) Map<String, Object> body) {
     return success(budgetAllocationBusiness.selfApproveAllocation(id, body));
   }
 
-  @SaCheckPermission("BudgetAllocationEdit")
+  @SaCheckPermission("BudgetAllocationApprove")
   @PostMapping("/{id}/approve")
   @Operation(summary = "Phê duyệt & Ban hành Quyết định Giao Dự toán Kinh phí")
+  @Log(title = "[BudgetAllocation] Approve", businessType = BusinessType.UPDATE)
   public R<BudgetAllocationData> approveAllocation(
       @PathVariable("id") Long id, @RequestBody(required = false) Map<String, Object> body) {
     return success(budgetAllocationBusiness.approveAllocation(id, body));
   }
 
-  @SaCheckPermission("BudgetAllocationEdit")
+  @SaCheckPermission("BudgetAllocationReject")
   @PostMapping("/{id}/reject")
   @Operation(summary = "Trả lại yêu cầu rà soát / bổ sung thuyết minh Dự toán Kinh phí")
+  @Log(title = "[BudgetAllocation] Reject", businessType = BusinessType.UPDATE)
   public R<BudgetAllocationData> rejectAllocation(
       @PathVariable("id") Long id, @RequestBody(required = false) Map<String, Object> body) {
     return success(budgetAllocationBusiness.rejectAllocation(id, body));
   }
 
-  @SaCheckPermission("BudgetAllocationEdit")
+  @SaCheckPermission("BudgetAllocationSubmit")
   @PostMapping("/{id}/withdraw")
   @Operation(summary = "Thu hồi / Rút tờ trình Phân bổ Dự toán về Dự thảo (DRAFT)")
+  @Log(title = "[BudgetAllocation] Withdraw", businessType = BusinessType.UPDATE)
   public R<BudgetAllocationData> withdrawAllocation(
       @PathVariable("id") Long id, @RequestBody(required = false) Map<String, Object> body) {
     return success(budgetAllocationBusiness.withdrawAllocation(id, body));
   }
 
-  @SaCheckPermission("BudgetAllocationEdit")
+  @SaCheckPermission("BudgetAllocationApprove")
   @PostMapping({"/{id}/recalculate", "/{id}/recalculate-balance"})
   @Operation(summary = "Tính toán lại cân đối Sổ cái Kinh phí, số dư khả dụng và tỷ lệ giải ngân")
   public R<BudgetAllocationData> recalculate(@PathVariable("id") Long id) {
@@ -292,20 +251,6 @@ public class BudgetAllocationController extends BaseController {
   }
 
   @SaCheckPermission("BudgetAllocationList")
-  @PostMapping("/scan-sla-alerts")
-  @Operation(summary = "Quét cảnh báo SLA hồ sơ Tạm ứng / Giải ngân sắp quá hạn quyết toán Kho bạc")
-  public R<Map<String, Object>> scanSlaAlerts() {
-    return success(budgetAllocationBusiness.scanAndDispatchSlaAlerts());
-  }
-
-  @SaCheckPermission("BudgetAllocationEdit")
-  @PostMapping("/sync-from-plan")
-  @Operation(summary = "Đồng bộ Phương án Phân bổ Kinh phí từ Kế hoạch công tác (S2S Feign / Liên thông)")
-  public R<BudgetPlanSyncResultData> syncFromPlan(@RequestBody BudgetPlanSyncRequestData request) {
-    return success(budgetAllocationBusiness.syncFromPlan(request));
-  }
-
-  @SaCheckPermission("BudgetAllocationList")
   @GetMapping("/by-plan/{planCode}")
   @Operation(summary = "Tra cứu bức tranh cân đối Kinh phí theo Mã Kế hoạch công tác")
   public R<BudgetPlanSyncResultData> getBudgetSnapshotByPlanCode(
@@ -313,11 +258,38 @@ public class BudgetAllocationController extends BaseController {
     return success(budgetAllocationBusiness.getBudgetSnapshotByPlanCode(planCode));
   }
 
-  @SaCheckPermission("BudgetAllocationEdit")
+  @SaCheckPermission("BudgetAllocationApprove")
   @PostMapping("/{id}/sync-to-plan")
   @Operation(summary = "Đồng bộ chủ động số liệu Dự toán & Giải ngân sang Kế hoạch công tác liên kết")
+  @Log(title = "[BudgetAllocation] Sync To Plan", businessType = BusinessType.UPDATE)
   public R<Map<String, Object>> syncToLinkedPlan(@PathVariable("id") Long id) {
     return success(budgetAllocationBusiness.syncAllocationToPlanById(id));
   }
 
+  @SaCheckPermission("BudgetAllocationCreate")
+  @PostMapping("/batch")
+  @Operation(summary = "Nhập hàng loạt Phương án Phân bổ Dự toán từ lưới Spreadsheet / Paste Excel")
+  @Log(title = "[BudgetAllocation] Batch Create", businessType = BusinessType.INSERT)
+  public R<Map<String, Object>> batchCreate(@RequestBody List<BudgetAllocationData> items) {
+    return success(budgetBatchEntryBusiness.batchSaveAllocations(items));
+  }
+
+  @SaCheckPermission("BudgetAllocationList")
+  @GetMapping("/tree-matrix")
+  @Operation(summary = "Lấy Ma trận Giao Dự toán Đầu năm (Cây Chỉ tiêu x Đơn vị SDNS)")
+  public R<Map<String, Object>> getAllocationTreeMatrix(
+      @RequestParam(value = "budgetYear", required = false) Integer budgetYear,
+      @RequestParam(value = "periodType", required = false) String periodType) {
+    return success(budgetBatchEntryBusiness.getAllocationTreeMatrix(budgetYear, periodType));
+  }
+
+  @SaCheckPermission(
+      value = {"BudgetAllocationCreate", "BudgetAllocationEdit"},
+      mode = SaMode.OR)
+  @PostMapping("/tree-matrix")
+  @Operation(summary = "Lưu hàng loạt Ma trận Giao Dự toán (Cây Chỉ tiêu x Đơn vị SDNS)")
+  @Log(title = "[BudgetAllocation] Save Tree Matrix", businessType = BusinessType.UPDATE)
+  public R<Map<String, Object>> saveAllocationTreeMatrix(@RequestBody Map<String, Object> body) {
+    return success(budgetBatchEntryBusiness.saveAllocationTreeMatrix(body));
+  }
 }

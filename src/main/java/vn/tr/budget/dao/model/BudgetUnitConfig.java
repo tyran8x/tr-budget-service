@@ -130,4 +130,14 @@ public class BudgetUnitConfig extends BaseCommonEntity implements AppIsolated {
   @Column(name = "approver_person_name", length = 250)
   private String approverPersonName;
 
+  @Column(name = "self_transfer_limit_amount", precision = 19, scale = 2)
+  @Builder.Default
+  private BigDecimal selfTransferLimitAmount = BigDecimal.ZERO;
+
+  @Column(name = "unit_head_person_id")
+  private Long unitHeadPersonId;
+
+  @Column(name = "unit_head_person_name", length = 255)
+  private String unitHeadPersonName;
+
 }

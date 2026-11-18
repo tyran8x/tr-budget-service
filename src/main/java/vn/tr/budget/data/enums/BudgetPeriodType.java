@@ -15,6 +15,7 @@ public enum BudgetPeriodType {
   QUARTER("QUARTER", "Theo quý"),
   HALF_YEAR("HALF_YEAR", "6 tháng (Bán niên)"),
   YEAR("YEAR", "Cả năm ngân sách"),
+  ANNUAL("ANNUAL", "Cả năm ngân sách (Định kỳ năm)"),
   MULTI_YEAR("MULTI_YEAR", "Kế hoạch trung hạn 3 năm (MTEF)");
 
   private final String code;
@@ -24,11 +25,21 @@ public enum BudgetPeriodType {
     if (code == null || code.isBlank()) {
       return null;
     }
+    String normalized = code.trim();
     for (BudgetPeriodType value : values()) {
-      if (value.code.equalsIgnoreCase(code.trim())) {
+      if (value.code.equalsIgnoreCase(normalized)) {
         return value;
       }
     }
     return null;
+  }
+
+  public static BudgetPeriodType fromCodeOrDefault(String code, BudgetPeriodType fallback) {
+    BudgetPeriodType resolved = fromCode(code);
+    return resolved != null ? resolved : fallback;
+  }
+
+  public static boolean isValid(String code) {
+    return fromCode(code) != null;
   }
 }

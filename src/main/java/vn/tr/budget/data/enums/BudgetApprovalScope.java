@@ -29,4 +29,14 @@ public enum BudgetApprovalScope {
     }
     return null;
   }
+
+  public static BudgetApprovalScope fromCodeOrDefault(
+      String code, BudgetApprovalScope fallback) {
+    BudgetApprovalScope resolved = fromCode(code);
+    return resolved != null ? resolved : fallback;
+  }
+
+  public static boolean isValid(String code) {
+    return fromCode(code) != null;
+  }
 }

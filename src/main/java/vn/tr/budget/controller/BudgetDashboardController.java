@@ -33,7 +33,7 @@ public class BudgetDashboardController extends BaseController {
 
   private final BudgetDashboardBusiness budgetDashboardBusiness;
 
-  @SaCheckPermission("BudgetAllocationList")
+  @SaCheckPermission("BudgetDashboardQuery")
   @GetMapping({"/overview", "/summary"})
   @Operation(summary = "Lấy chỉ số KPI tổng quan Dự toán Thu - Chi, Bổ sung, Chuyển nguồn & Giải ngân")
   public R<Map<String, Object>> getOverview(
@@ -47,7 +47,7 @@ public class BudgetDashboardController extends BaseController {
             budgetYear, nodeId, periodType, agencyCode, temporalRegime));
   }
 
-  @SaCheckPermission("BudgetAllocationList")
+  @SaCheckPermission("BudgetDashboardQuery")
   @GetMapping("/unit-matrix")
   @Operation(summary = "Lấy bảng tổng hợp phân bổ, bổ sung, chuyển nguồn & giải ngân theo từng Đơn vị / Phòng ban")
   public R<List<Map<String, Object>>> getUnitMatrix(
@@ -58,11 +58,11 @@ public class BudgetDashboardController extends BaseController {
         budgetDashboardBusiness.getUnitMatrix(budgetYear, agencyCode, temporalRegime));
   }
 
-  @SaCheckPermission("BudgetAllocationList")
+  @SaCheckPermission("BudgetDashboardQuery")
   @GetMapping({"/target-scope", "/node-scope", "/org-scope"})
   @Operation(
       summary =
-          "Lấy dữ liệu Phạm vi Node gốc (SCT, SXD, SGTVT, SYT...), Node trực thuộc và Target (Nhân sự / Tài khoản) theo Thời điểm Sáp nhập")
+          "Lấy dữ liệu Phạm vi Node gốc (SCT, SXD, SGTVT, SYT...), Node trực thuộc và Target theo Thời điểm Sáp nhập")
   public R<Map<String, Object>> getTargetScopeContext(
       @RequestParam(value = "rootNodeCode", required = false) String rootNodeCode,
       @RequestParam(value = "agencyCode", required = false) String agencyCode,
@@ -76,17 +76,17 @@ public class BudgetDashboardController extends BaseController {
             effectiveRoot, temporalRegime, budgetYear, nodeId, nodeCode));
   }
 
-  @SaCheckPermission("BudgetAllocationList")
+  @SaCheckPermission("BudgetDashboardQuery")
   @PostMapping({"/validate-target-scope", "/validate-node-scope", "/validate-org-scope"})
   @Operation(
       summary =
-          "Kiểm tra hợp lệ Node gốc, Node dự toán và Target (Nhân sự lập dự toán / Tài khoản người dùng) theo Thời điểm Sáp nhập")
+          "Kiểm tra hợp lệ Node gốc, Node dự toán và Target theo Thời điểm Sáp nhập")
   public R<Map<String, Object>> validateTargetScopeSelection(
       @RequestBody Map<String, Object> body) {
     return success(budgetDashboardBusiness.validateOrgScopeSelection(body));
   }
 
-  @SaCheckPermission("BudgetAllocationList")
+  @SaCheckPermission("BudgetDashboardQuery")
   @GetMapping("/revenue-expenditure-tree")
   @Operation(summary = "Lấy bảng tổng hợp Cây Dự toán Thu - Chi đa cấp kèm số liệu phân bổ & giải ngân")
   public R<List<Map<String, Object>>> getRevenueExpenditureTree(
@@ -94,7 +94,7 @@ public class BudgetDashboardController extends BaseController {
     return success(budgetDashboardBusiness.getRevenueExpenditureTree(budgetYear));
   }
 
-  @SaCheckPermission("BudgetAllocationList")
+  @SaCheckPermission("BudgetDashboardQuery")
   @GetMapping("/disbursement-scorecard")
   @Operation(summary = "Lấy Bảng chấm điểm Kỷ luật Giải ngân & Quyết toán theo từng Đơn vị (Thang 100 điểm)")
   public R<List<Map<String, Object>>> getDisbursementScorecard(
@@ -102,7 +102,7 @@ public class BudgetDashboardController extends BaseController {
     return success(budgetDashboardBusiness.getDisbursementScorecard(budgetYear));
   }
 
-  @SaCheckPermission("BudgetAllocationList")
+  @SaCheckPermission("BudgetDashboardQuery")
   @PostMapping("/ai-advisor")
   @Operation(
       summary =
@@ -116,7 +116,7 @@ public class BudgetDashboardController extends BaseController {
     return success(budgetDashboardBusiness.generateAiAdvisorInsights(budgetYear));
   }
 
-  @SaCheckPermission("BudgetAllocationList")
+  @SaCheckPermission("BudgetDashboardQuery")
   @GetMapping("/burn-rate-forecast")
   @Operation(
       summary =
@@ -126,7 +126,7 @@ public class BudgetDashboardController extends BaseController {
     return success(budgetDashboardBusiness.getBurnRateForecast(budgetYear));
   }
 
-  @SaCheckPermission("BudgetAllocationList")
+  @SaCheckPermission("BudgetDashboardQuery")
   @GetMapping("/mtef-summary")
   @Operation(
       summary =
@@ -136,7 +136,7 @@ public class BudgetDashboardController extends BaseController {
     return success(budgetDashboardBusiness.getMtefSummary(baseYear));
   }
 
-  @SaCheckPermission("BudgetAllocationList")
+  @SaCheckPermission("BudgetDashboardSimulate")
   @PostMapping("/what-if-simulation")
   @Operation(
       summary =

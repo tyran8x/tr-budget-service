@@ -1,11 +1,13 @@
 package vn.tr.budget.dao.service;
 
+import jakarta.persistence.LockModeType;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import org.javers.spring.annotation.JaversSpringDataAuditable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -41,6 +43,17 @@ public interface BudgetAllocationRepo
 
   @Query(value = "SELECT * FROM budget_allocation WHERE id = :id LIMIT 1", nativeQuery = true)
   Optional<BudgetAllocation> findByIdIncludingDeleted(@Param("id") Long id);
+
+  @Query(
+      value =
+          "SELECT * FROM budget_allocation WHERE id = :id AND (app_code = :appCode OR :appCode IS NULL) LIMIT 1",
+      nativeQuery = true)
+  Optional<BudgetAllocation> findByIdIncludingDeletedByAppCode(
+      @Param("id") Long id, @Param("appCode") String appCode);
+
+  @Lock(LockModeType.PESSIMISTIC_WRITE)
+  @Query("SELECT a FROM BudgetAllocation a WHERE a.id = :id")
+  Optional<BudgetAllocation> findByIdForUpdate(@Param("id") Long id);
 
   List<BudgetAllocation> findByBudgetYearOrderByIdAsc(Integer budgetYear);
 

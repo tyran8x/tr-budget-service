@@ -24,6 +24,7 @@ import vn.tr.budget.data.dto.BudgetCategoryData;
 import vn.tr.budget.data.mapper.BudgetCategoryMapper;
 import vn.tr.budget.data.validator.BudgetCategoryValidator;
 import vn.tr.common.core.domain.data.PagedData;
+import vn.tr.common.core.domain.data.RefData;
 import vn.tr.common.core.enums.LifecycleStatus;
 import vn.tr.common.core.exception.base.EntityNotFoundException;
 import vn.tr.common.jpa.audit.AuditRollbackHelper;
@@ -466,6 +467,21 @@ public class BudgetCategoryBusiness {
     cleaned = cleaned.replaceFirst("(?i)^(DOM|GRP)-" + year + "-(\\d+-)?", "");
     cleaned = cleaned.replaceFirst("(?i)^(DOM|GRP)_" + year + "_(\\d+_)?", "");
     return cleaned;
+  }
+
+  /** Lấy danh sách rút gọn (Lookup Options) của Danh mục Loại - Khoản. */
+  @Transactional(readOnly = true)
+  public PagedData<RefData<Long>> getOptions(BudgetCategorySearchCriteria criteria) {
+    Pageable pageable = CoreUtils.getPageRequest(criteria);
+    Page<BudgetCategory> page = budgetCategoryService.findAll(criteria, pageable);
+    return PagedData.from(
+        page,
+        e ->
+            RefData.of(
+                e.getId(),
+                e.getCode(),
+                e.getName(),
+                e.getStatus() != null ? e.getStatus().name() : null));
   }
 
 }

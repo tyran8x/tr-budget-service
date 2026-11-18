@@ -154,8 +154,11 @@ public class BudgetWorkflowEngineHelper {
     if (allocationId == null) {
       return null;
     }
-    Optional<BudgetAllocation> opt = budgetAllocationRepo.findById(allocationId);
-    if (opt.isEmpty()) {
+    Optional<BudgetAllocation> opt = budgetAllocationRepo.findByIdForUpdate(allocationId);
+    if (opt == null || opt.isEmpty()) {
+      opt = budgetAllocationRepo.findById(allocationId);
+    }
+    if (opt == null || opt.isEmpty()) {
       return null;
     }
     BudgetAllocation alloc = opt.get();
@@ -168,26 +171,42 @@ public class BudgetWorkflowEngineHelper {
     BigDecimal txCarryOut = BigDecimal.ZERO;
     BigDecimal txTransferNet = BigDecimal.ZERO;
     BigDecimal txReduction = BigDecimal.ZERO;
-    BigDecimal txDisbursed = BigDecimal.ZERO;
+    BigDecimal txExpiredCancelled = BigDecimal.ZERO;
     BigDecimal txHeld = BigDecimal.ZERO;
     boolean hasInitialTx = false;
+    boolean hasWithdrawalTx = false;
     boolean hasHoldTx = false;
 
     for (BudgetTransaction tx : txs) {
-      if ("REJECTED".equalsIgnoreCase(tx.getApprovalStatus())
-          || "PENDING".equalsIgnoreCase(tx.getApprovalStatus())) {
+      String approvalStatus =
+          tx.getApprovalStatus() != null ? tx.getApprovalStatus().toUpperCase() : "";
+      if ("REJECTED".equals(approvalStatus)
+          || "PENDING".equals(approvalStatus)
+          || "PENDING_APPROVAL".equals(approvalStatus)
+          || "DRAFT".equals(approvalStatus)
+          || "CANCELLED".equals(approvalStatus)) {
         continue;
       }
       BigDecimal amt = safe(tx.getAmount());
-      txDisbursed = txDisbursed.add(safe(tx.getDisbursedAmount()));
       String type = tx.getTxType() != null ? tx.getTxType().toUpperCase() : "";
       switch (type) {
         case "INITIAL_ALLOCATION" -> {
           txInitial = txInitial.add(amt);
           hasInitialTx = true;
         }
-        case "SUPPLEMENT", "TRANCHE_RELEASE", "BATCH_PAYROLL_INDEXATION" -> txSupplement =
+        case "SUPPLEMENT", "ADDITIONAL", "BATCH_PAYROLL_INDEXATION" -> txSupplement =
             txSupplement.add(amt.abs());
+        case "TRANCHE_RELEASE" -> {
+          txHeld = txHeld.subtract(amt.abs());
+          hasHoldTx = true;
+        }
+        case "WITHDRAWAL" -> {
+          txExpiredCancelled = txExpiredCancelled.add(amt.abs());
+          hasWithdrawalTx = true;
+        }
+        case "AUTONOMY_FUND_DISTRIBUTION" -> {
+          // Phân bổ nội bộ từ quỹ tự chủ không làm phình Tổng dự toán được giao (effectiveAmount)
+        }
         case "ADJUSTMENT" -> {
           if (amt.compareTo(BigDecimal.ZERO) >= 0) {
             txSupplement = txSupplement.add(amt);
@@ -195,10 +214,19 @@ public class BudgetWorkflowEngineHelper {
             txReduction = txReduction.add(amt.abs());
           }
         }
-        case "CARRY_OVER_IN" -> txCarryIn = txCarryIn.add(amt);
+        case "CARRY_OVER_IN" -> txCarryIn = txCarryIn.add(amt.abs());
         case "CARRY_OVER_OUT" -> txCarryOut = txCarryOut.add(amt.abs());
-        case "INTERNAL_TRANSFER", "TRANSFER_IN", "TRANSFER_OUT" -> txTransferNet =
-            txTransferNet.add(amt);
+        case "TRANSFER_IN" -> txTransferNet = txTransferNet.add(amt.abs());
+        case "TRANSFER_OUT" -> txTransferNet = txTransferNet.subtract(amt.abs());
+        case "INTERNAL_TRANSFER" -> {
+          if ("CREDIT".equalsIgnoreCase(tx.getEntryDirection())) {
+            txTransferNet = txTransferNet.add(amt.abs());
+          } else if ("DEBIT".equalsIgnoreCase(tx.getEntryDirection())) {
+            txTransferNet = txTransferNet.subtract(amt.abs());
+          } else {
+            txTransferNet = txTransferNet.add(amt);
+          }
+        }
         case "REDUCTION", "SAVING_REDUCTION" -> txReduction = txReduction.add(amt.abs());
         case "EARMARK_HOLD" -> {
           txHeld = txHeld.add(amt.abs());
@@ -216,22 +244,11 @@ public class BudgetWorkflowEngineHelper {
         hasInitialTx && txInitial.compareTo(BigDecimal.ZERO) > 0
             ? txInitial
             : safe(alloc.getInitialAmount());
-    BigDecimal supplement =
-        txSupplement.compareTo(BigDecimal.ZERO) > 0
-            ? txSupplement
-            : safe(alloc.getSupplementAmount());
-    BigDecimal carryIn =
-        txCarryIn.compareTo(BigDecimal.ZERO) > 0 ? txCarryIn : safe(alloc.getCarryOverInAmount());
-    BigDecimal carryOut =
-        txCarryOut.compareTo(BigDecimal.ZERO) > 0
-            ? txCarryOut
-            : safe(alloc.getCarryOverOutAmount());
-    BigDecimal transferNet =
-        txTransferNet.compareTo(BigDecimal.ZERO) != 0
-            ? txTransferNet
-            : safe(alloc.getTransferNetAmount());
-    BigDecimal reduction =
-        txReduction.compareTo(BigDecimal.ZERO) > 0 ? txReduction : safe(alloc.getReductionAmount());
+    BigDecimal supplement = txSupplement;
+    BigDecimal carryIn = txCarryIn;
+    BigDecimal carryOut = txCarryOut;
+    BigDecimal transferNet = txTransferNet;
+    BigDecimal reduction = txReduction;
 
     BigDecimal effective =
         initial
@@ -254,7 +271,7 @@ public class BudgetWorkflowEngineHelper {
 
     for (BudgetDisbursement d : disbs) {
       String status = d.getApprovalStatus() != null ? d.getApprovalStatus().toUpperCase() : "";
-      if ("REJECTED".equals(status) || "DRAFT".equals(status)) {
+      if ("REJECTED".equals(status) || "DRAFT".equals(status) || "CANCELLED".equals(status)) {
         continue;
       }
       BigDecimal amt = safe(d.getAmount());
@@ -304,16 +321,12 @@ public class BudgetWorkflowEngineHelper {
       advanced = advanced.subtract(advanceSettlementDeduction).max(BigDecimal.ZERO);
     }
 
-    if (disbs.isEmpty()) {
-      committed = hasHoldTx ? txHeld.max(BigDecimal.ZERO) : safe(alloc.getCommittedAmount());
-      advanced = safe(alloc.getAdvancedAmount());
-      disbursed = safe(alloc.getDisbursedAmount()).max(txDisbursed);
-      settled = safe(alloc.getSettledAmount());
-    } else if (hasHoldTx) {
+    if (hasHoldTx) {
       committed = committed.add(txHeld.max(BigDecimal.ZERO));
     }
 
-    BigDecimal expiredCancelled = safe(alloc.getExpiredCancelledAmount());
+    BigDecimal expiredCancelled =
+        hasWithdrawalTx ? txExpiredCancelled : safe(alloc.getExpiredCancelledAmount());
     BigDecimal available =
         effective.subtract(committed).subtract(disbursed).subtract(expiredCancelled);
     BigDecimal rate =
@@ -329,6 +342,7 @@ public class BudgetWorkflowEngineHelper {
     alloc.setCarryOverOutAmount(carryOut);
     alloc.setTransferNetAmount(transferNet);
     alloc.setReductionAmount(reduction);
+    alloc.setExpiredCancelledAmount(expiredCancelled);
     alloc.setEffectiveAmount(effective);
     alloc.setCommittedAmount(committed);
     alloc.setAdvancedAmount(advanced);
@@ -368,6 +382,7 @@ public class BudgetWorkflowEngineHelper {
 
     String type = tx.getTxType() != null ? tx.getTxType().toUpperCase() : "";
     if ("CARRY_OVER_OUT".equals(type)) {
+      tx.setEntryDirection("DEBIT");
       int targetYear =
           tx.getTargetBudgetYear() != null
               ? tx.getTargetBudgetYear()
@@ -443,9 +458,9 @@ public class BudgetWorkflowEngineHelper {
                       .effectiveAmount(tx.getAmount())
                       .committedAmount(BigDecimal.ZERO)
                       .advancedAmount(BigDecimal.ZERO)
-                      .disbursedAmount(safe(tx.getDisbursedAmount()))
+                      .disbursedAmount(BigDecimal.ZERO)
                       .settledAmount(BigDecimal.ZERO)
-                      .availableAmount(tx.getAmount().subtract(safe(tx.getDisbursedAmount())))
+                      .availableAmount(tx.getAmount().abs())
                       .disbursementRatePercent(BigDecimal.ZERO)
                       .status(LifecycleStatus.ACTIVE)
                       .build());
@@ -486,13 +501,14 @@ public class BudgetWorkflowEngineHelper {
                     .fundingSourceCode(targetAlloc.getFundingSourceCode())
                     .fundingSourceName(targetAlloc.getFundingSourceName())
                     .txType("CARRY_OVER_IN")
+                    .entryDirection("CREDIT")
                     .budgetYear(targetYear)
                     .amount(tx.getAmount().abs())
-                    .disbursedAmount(safe(tx.getDisbursedAmount()))
                     .balanceBeforeAmount(targetBefore)
                     .counterpartAllocationId(source.getId())
                     .counterpartAllocationCode(source.getCode())
                     .counterpartAllocationName(source.getName())
+                    .counterpartTxId(tx.getId())
                     .decisionNo(tx.getDecisionNo())
                     .decisionDate(tx.getDecisionDate())
                     .txDate(tx.getTxDate() != null ? tx.getTxDate() : LocalDate.now())
@@ -508,11 +524,19 @@ public class BudgetWorkflowEngineHelper {
                     .build());
       }
       BudgetAllocation updatedTarget = recalculateAllocationMetrics(targetAlloc.getId());
-      if (carryInTx != null && updatedTarget != null) {
-        carryInTx.setBalanceAfterAmount(updatedTarget.getAvailableAmount());
-        budgetTransactionRepo.save(carryInTx);
+      if (carryInTx != null) {
+        if (updatedTarget != null) {
+          carryInTx.setBalanceAfterAmount(updatedTarget.getAvailableAmount());
+          carryInTx = budgetTransactionRepo.save(carryInTx);
+        }
+        if (carryInTx.getId() != null) {
+          tx.setCounterpartTxId(carryInTx.getId());
+        }
       }
     } else if ("INTERNAL_TRANSFER".equals(type) && tx.getCounterpartAllocationId() != null) {
+      BigDecimal signedAbs = safe(tx.getAmount()).abs();
+      tx.setEntryDirection("DEBIT");
+      tx.setAmount(signedAbs.negate());
       Optional<BudgetAllocation> optTarget =
           budgetAllocationRepo.findById(tx.getCounterpartAllocationId());
       if (optTarget.isPresent()) {
@@ -542,12 +566,14 @@ public class BudgetWorkflowEngineHelper {
                       .fundingSourceCode(target.getFundingSourceCode())
                       .fundingSourceName(target.getFundingSourceName())
                       .txType("TRANSFER_IN")
+                      .entryDirection("CREDIT")
                       .budgetYear(target.getBudgetYear())
-                      .amount(tx.getAmount().abs())
+                      .amount(signedAbs)
                       .balanceBeforeAmount(targetBefore)
                       .counterpartAllocationId(source.getId())
                       .counterpartAllocationCode(source.getCode())
                       .counterpartAllocationName(source.getName())
+                      .counterpartTxId(tx.getId())
                       .decisionNo(tx.getDecisionNo())
                       .decisionDate(tx.getDecisionDate())
                       .txDate(tx.getTxDate() != null ? tx.getTxDate() : LocalDate.now())
@@ -565,9 +591,14 @@ public class BudgetWorkflowEngineHelper {
                       .build());
         }
         BudgetAllocation updatedTarget = recalculateAllocationMetrics(target.getId());
-        if (recvTx != null && updatedTarget != null) {
-          recvTx.setBalanceAfterAmount(updatedTarget.getAvailableAmount());
-          budgetTransactionRepo.save(recvTx);
+        if (recvTx != null) {
+          if (updatedTarget != null) {
+            recvTx.setBalanceAfterAmount(updatedTarget.getAvailableAmount());
+            recvTx = budgetTransactionRepo.save(recvTx);
+          }
+          if (recvTx.getId() != null) {
+            tx.setCounterpartTxId(recvTx.getId());
+          }
         }
       }
     }
@@ -593,6 +624,62 @@ public class BudgetWorkflowEngineHelper {
         .findById(estimateItemId)
         .map(item -> Boolean.TRUE.equals(item.getRequireVoucher()))
         .orElse(false);
+  }
+
+  /**
+   * Ghi bút toán Sổ cái ban đầu (INITIAL_ALLOCATION) một lần duy nhất (idempotent) khi Phân bổ được
+   * phê duyệt.
+   */
+  @Transactional
+  public void ensureInitialAllocationTransaction(BudgetAllocation alloc) {
+    if (alloc == null
+        || alloc.getId() == null
+        || alloc.getInitialAmount() == null
+        || alloc.getInitialAmount().compareTo(BigDecimal.ZERO) <= 0
+        || alloc.getCode() == null) {
+      return;
+    }
+    String initCode = alloc.getCode() + "-INIT";
+    if (budgetTransactionRepo.existsByCodeIgnoreCase(initCode)) {
+      return;
+    }
+    budgetTransactionRepo.save(
+        BudgetTransaction.builder()
+            .code(initCode)
+            .name("Giao dự toán đầu năm [" + alloc.getCode() + "]")
+            .allocationId(alloc.getId())
+            .allocationCode(alloc.getCode())
+            .allocationName(alloc.getName())
+            .nodeId(alloc.getNodeId())
+            .nodeCode(alloc.getNodeCode())
+            .nodeName(alloc.getNodeName())
+            .estimateItemId(alloc.getEstimateItemId())
+            .estimateItemCode(alloc.getEstimateItemCode())
+            .estimateItemName(alloc.getEstimateItemName())
+            .categoryId(alloc.getCategoryId())
+            .categoryCode(alloc.getCategoryCode())
+            .categoryName(alloc.getCategoryName())
+            .domainCode(alloc.getDomainCode())
+            .domainName(alloc.getDomainName())
+            .domainGroupCode(alloc.getDomainGroupCode())
+            .domainGroupName(alloc.getDomainGroupName())
+            .fundingSourceCode(alloc.getFundingSourceCode())
+            .fundingSourceName(alloc.getFundingSourceName())
+            .txType("INITIAL_ALLOCATION")
+            .entryDirection("CREDIT")
+            .budgetYear(alloc.getBudgetYear())
+            .amount(alloc.getInitialAmount())
+            .balanceBeforeAmount(BigDecimal.ZERO)
+            .balanceAfterAmount(alloc.getEffectiveAmount() != null ? alloc.getEffectiveAmount() : alloc.getInitialAmount())
+            .txDate(LocalDate.now())
+            .reason("Tự động ghi nhận bút toán giao dự toán đầu năm khi phê duyệt phân bổ")
+            .previousVersion(1)
+            .newVersion(alloc.getCurrentVersion() != null ? alloc.getCurrentVersion() : 1)
+            .approvedByPersonId(alloc.getApprovedByPersonId())
+            .approvedByPersonName(alloc.getApprovedByPersonName())
+            .approvalStatus("APPROVED")
+            .status(LifecycleStatus.ACTIVE)
+            .build());
   }
 
   public BigDecimal safe(BigDecimal val) {

@@ -21,6 +21,7 @@ import java.util.Set;
 import javax.sql.DataSource;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
@@ -38,7 +39,7 @@ import vn.tr.common.satoken.utils.LoginHelper;
 
 /**
  * Cấu hình hỗ trợ khởi chạy độc lập (Standalone Local Profile) cho {@code tr-budget-service}
- * và đồng bộ phiên xác thực Sa-Token Bearer / Cookie từ Gateway từ xa ({@code huydq1@danang.gov.vn}).
+ * và đồng bộ phiên xác thực Sa-Token Bearer / Cookie từ Gateway từ xa.
  *
  * @author tyran8x
  */
@@ -50,6 +51,9 @@ import vn.tr.common.satoken.utils.LoginHelper;
 public class LocalStandaloneConfig implements WebMvcConfigurer {
 
   private final DataSource dataSource;
+
+  @Value("${tr.local.mock-auth-enabled:false}")
+  private boolean mockAuthEnabled;
 
   public static String vnUnaccent(String input) {
     if (input == null) {
@@ -64,13 +68,15 @@ public class LocalStandaloneConfig implements WebMvcConfigurer {
 
   @PostConstruct
   public void initLocalSameTokenBypass() {
-    SaManager.setSaSameTemplate(
-        new SaSameTemplate() {
-          @Override
-          public boolean isValid(String token) {
-            return token != null && !token.isBlank();
-          }
-        });
+    if (mockAuthEnabled) {
+      SaManager.setSaSameTemplate(
+          new SaSameTemplate() {
+            @Override
+            public boolean isValid(String token) {
+              return token != null && !token.isBlank();
+            }
+          });
+    }
     try (Connection conn = dataSource.getConnection();
         Statement stmt = conn.createStatement()) {
       stmt.execute(
@@ -144,6 +150,10 @@ public class LocalStandaloneConfig implements WebMvcConfigurer {
               @Override
               public boolean preHandle(
                   HttpServletRequest request, HttpServletResponse response, Object handler) {
+                if (!mockAuthEnabled) {
+                  return true;
+                }
+
                 if ("true".equalsIgnoreCase(request.getHeader("X-Test-Unauthenticated"))) {
                   throw NotLoginException.newInstance(
                       StpUtil.TYPE,

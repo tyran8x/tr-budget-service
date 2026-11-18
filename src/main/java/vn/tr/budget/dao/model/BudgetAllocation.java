@@ -158,7 +158,8 @@ public class BudgetAllocation extends BaseCommonEntity implements AppIsolated {
   private String approvalScope;
 
   @Column(name = "workflow_status", length = 50)
-  private String workflowStatus;
+  @Builder.Default
+  private String workflowStatus = "DRAFT";
 
   @Column(name = "wf_instance_id")
   private Long wfInstanceId;

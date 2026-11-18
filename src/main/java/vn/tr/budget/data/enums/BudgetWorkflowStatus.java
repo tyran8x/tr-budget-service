@@ -35,4 +35,14 @@ public enum BudgetWorkflowStatus {
     }
     return null;
   }
+
+  public static BudgetWorkflowStatus fromCodeOrDefault(
+      String code, BudgetWorkflowStatus fallback) {
+    BudgetWorkflowStatus resolved = fromCode(code);
+    return resolved != null ? resolved : fallback;
+  }
+
+  public static boolean isValid(String code) {
+    return fromCode(code) != null;
+  }
 }

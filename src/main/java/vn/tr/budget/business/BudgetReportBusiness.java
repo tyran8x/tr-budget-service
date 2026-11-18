@@ -21,6 +21,7 @@ import vn.tr.budget.data.dto.BudgetReportData;
 import vn.tr.budget.data.mapper.BudgetReportMapper;
 import vn.tr.budget.data.validator.BudgetReportValidator;
 import vn.tr.common.core.domain.data.PagedData;
+import vn.tr.common.core.domain.data.RefData;
 import vn.tr.common.core.enums.LifecycleStatus;
 import vn.tr.common.core.exception.base.EntityNotFoundException;
 import vn.tr.common.jpa.audit.AuditRollbackHelper;
@@ -29,10 +30,13 @@ import vn.tr.common.web.data.dto.BulkOperationResult;
 import vn.tr.common.web.data.dto.BulkSortOrderData;
 import vn.tr.common.web.utils.BusinessLogicHelper;
 import vn.tr.common.web.utils.CoreUtils;
+import vn.tr.common.web.workflow.WorkflowBusinessSupport;
+import vn.tr.common.web.workflow.WorkflowCallbackPayload;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.YearMonth;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -57,7 +61,7 @@ import vn.tr.budget.dao.service.BudgetUnitConfigRepo;
 @RequiredArgsConstructor
 @Transactional
 @Slf4j
-public class BudgetReportBusiness {
+public class BudgetReportBusiness implements WorkflowBusinessSupport<BudgetReport> {
 
   private final BudgetReportService budgetReportService;
   private final BudgetReportMapper budgetReportMapper;
@@ -110,7 +114,7 @@ public class BudgetReportBusiness {
       data.setReportDate(LocalDate.now());
     }
     if (StrUtil.isBlank(data.getWorkflowStatus())) {
-      data.setWorkflowStatus("APPROVED");
+      data.setWorkflowStatus("DRAFT");
     }
     syncReportSnapshots(data);
     BudgetReport entity =
@@ -304,9 +308,9 @@ public class BudgetReportBusiness {
             : LocalDate.now().getYear();
     String reportPeriod =
         body != null && body.get("reportPeriod") != null
-            ? String.valueOf(body.get("reportPeriod"))
+            ? String.valueOf(body.get("reportPeriod")).toUpperCase()
             : "QUARTER";
-    Integer periodNumber =
+    int periodNumber =
         body != null && body.get("periodNumber") != null
             ? Integer.parseInt(body.get("periodNumber").toString())
             : 1;
@@ -315,10 +319,61 @@ public class BudgetReportBusiness {
             ? Long.parseLong(body.get("nodeId").toString())
             : null;
 
+    LocalDate[] range = resolvePeriodRange(year, reportPeriod, periodNumber, body);
+    LocalDate fromDate = range[0];
+    LocalDate toDate = range[1];
+
     List<BudgetAllocation> allocs =
         nodeId != null
             ? budgetAllocationRepo.findByNodeIdAndBudgetYearOrderByIdAsc(nodeId, year)
             : budgetAllocationRepo.findByBudgetYearOrderByIdAsc(year);
+    List<BudgetTransaction> yearTxs =
+        budgetTransactionRepo != null
+            ? budgetTransactionRepo.findByBudgetYearOrderByIdDesc(year)
+            : List.of();
+    List<BudgetDisbursement> yearDisbs =
+        budgetDisbursementRepo != null
+            ? budgetDisbursementRepo.findByBudgetYearOrderByIdDesc(year)
+            : List.of();
+
+    List<BudgetTransaction> periodTxs = new ArrayList<>();
+    for (BudgetTransaction tx : yearTxs) {
+      if (nodeId != null && !nodeId.equals(tx.getNodeId())) {
+        continue;
+      }
+      if ("DRAFT".equalsIgnoreCase(tx.getApprovalStatus())
+          || "REJECTED".equalsIgnoreCase(tx.getApprovalStatus())) {
+        continue;
+      }
+      LocalDate txDate =
+          tx.getTxDate() != null
+              ? tx.getTxDate()
+              : (tx.getCreatedAt() != null ? tx.getCreatedAt().toLocalDate() : null);
+      if (txDate == null || (!txDate.isBefore(fromDate) && !txDate.isAfter(toDate))) {
+        periodTxs.add(tx);
+      }
+    }
+
+    List<BudgetDisbursement> periodDisbs = new ArrayList<>();
+    for (BudgetDisbursement d : yearDisbs) {
+      if (nodeId != null && !nodeId.equals(d.getNodeId())) {
+        continue;
+      }
+      if ("DRAFT".equalsIgnoreCase(d.getApprovalStatus())
+          || "REJECTED".equalsIgnoreCase(d.getApprovalStatus())
+          || "CANCELLED".equalsIgnoreCase(d.getApprovalStatus())) {
+        continue;
+      }
+      LocalDate dDate =
+          d.getVoucherDate() != null
+              ? d.getVoucherDate()
+              : (d.getSettledDate() != null
+                  ? d.getSettledDate().toLocalDate()
+                  : (d.getApprovedDate() != null ? d.getApprovedDate().toLocalDate() : null));
+      if (dDate == null || (!dDate.isBefore(fromDate) && !dDate.isAfter(toDate))) {
+        periodDisbs.add(d);
+      }
+    }
 
     BigDecimal revEst = BigDecimal.ZERO;
     BigDecimal revAct = BigDecimal.ZERO;
@@ -333,37 +388,72 @@ public class BudgetReportBusiness {
     BigDecimal remaining = BigDecimal.ZERO;
     BigDecimal expiredCancelled = BigDecimal.ZERO;
 
+    boolean hasPeriodLedgerActivity = !periodTxs.isEmpty() || !periodDisbs.isEmpty();
     for (BudgetAllocation a : allocs) {
-      BigDecimal init = a.getInitialAmount() != null ? a.getInitialAmount() : BigDecimal.ZERO;
-      BigDecimal eff = a.getEffectiveAmount() != null ? a.getEffectiveAmount() : BigDecimal.ZERO;
-      BigDecimal comm = a.getCommittedAmount() != null ? a.getCommittedAmount() : BigDecimal.ZERO;
-      BigDecimal adv = a.getAdvancedAmount() != null ? a.getAdvancedAmount() : BigDecimal.ZERO;
-      BigDecimal disb = a.getDisbursedAmount() != null ? a.getDisbursedAmount() : BigDecimal.ZERO;
-      BigDecimal settled = a.getSettledAmount() != null ? a.getSettledAmount() : BigDecimal.ZERO;
-      BigDecimal avail = a.getAvailableAmount() != null ? a.getAvailableAmount() : BigDecimal.ZERO;
-      BigDecimal expCanc =
-          a.getExpiredCancelledAmount() != null ? a.getExpiredCancelledAmount() : BigDecimal.ZERO;
-      BigDecimal adj =
-          (a.getSupplementAmount() != null ? a.getSupplementAmount() : BigDecimal.ZERO)
-              .add(a.getTransferNetAmount() != null ? a.getTransferNetAmount() : BigDecimal.ZERO)
-              .subtract(a.getReductionAmount() != null ? a.getReductionAmount() : BigDecimal.ZERO);
-      BigDecimal co =
-          (a.getCarryOverInAmount() != null ? a.getCarryOverInAmount() : BigDecimal.ZERO)
-              .add(a.getCarryOverOutAmount() != null ? a.getCarryOverOutAmount() : BigDecimal.ZERO);
+      if ("QUARTER".equals(reportPeriod)
+          && a.getBudgetQuarter() != null
+          && !Integer.valueOf(periodNumber).equals(a.getBudgetQuarter())) {
+        continue;
+      }
+      BigDecimal init = safeDec(a.getInitialAmount());
+      BigDecimal eff = safeDec(a.getEffectiveAmount());
+      BigDecimal expCanc = safeDec(a.getExpiredCancelledAmount());
+      BigDecimal avail = safeDec(a.getAvailableAmount());
       if ("REVENUE".equalsIgnoreCase(a.getItemType())) {
         revEst = revEst.add(eff);
-        revAct = revAct.add(disb);
+        revAct = revAct.add(safeDec(a.getDisbursedAmount()));
       } else {
         expInit = expInit.add(init);
-        expAdj = expAdj.add(adj);
         expEff = expEff.add(eff);
-        expComm = expComm.add(comm);
-        expAdv = expAdv.add(adv);
-        expAct = expAct.add(disb);
-        expSettled = expSettled.add(settled);
-        carryOver = carryOver.add(co);
         remaining = remaining.add(avail);
         expiredCancelled = expiredCancelled.add(expCanc);
+        if (!hasPeriodLedgerActivity) {
+          expAdj =
+              expAdj.add(
+                  safeDec(a.getSupplementAmount())
+                      .add(safeDec(a.getTransferNetAmount()))
+                      .subtract(safeDec(a.getReductionAmount())));
+          carryOver =
+              carryOver.add(
+                  safeDec(a.getCarryOverInAmount()).add(safeDec(a.getCarryOverOutAmount())));
+          expComm = expComm.add(safeDec(a.getCommittedAmount()));
+          expAdv = expAdv.add(safeDec(a.getAdvancedAmount()));
+          expAct = expAct.add(safeDec(a.getDisbursedAmount()));
+          expSettled = expSettled.add(safeDec(a.getSettledAmount()));
+        }
+      }
+    }
+
+    if (hasPeriodLedgerActivity) {
+      for (BudgetTransaction tx : periodTxs) {
+        String type = StrUtil.blankToDefault(tx.getTxType(), "").toUpperCase();
+        BigDecimal amt = safeDec(tx.getAmount());
+        switch (type) {
+          case "SUPPLEMENT", "ADDITIONAL", "TRANSFER_IN" -> expAdj = expAdj.add(amt.abs());
+          case "REDUCTION", "TRANSFER_OUT" -> expAdj = expAdj.subtract(amt.abs());
+          case "INTERNAL_TRANSFER" ->
+              expAdj =
+                  "DEBIT".equalsIgnoreCase(tx.getEntryDirection())
+                      ? expAdj.subtract(amt.abs())
+                      : expAdj.add(amt.abs());
+          case "CARRY_OVER_IN" -> carryOver = carryOver.add(amt.abs());
+          case "CARRY_OVER_OUT" -> carryOver = carryOver.subtract(amt.abs());
+          default -> {}
+        }
+      }
+      for (BudgetDisbursement d : periodDisbs) {
+        BigDecimal amt = safeDec(d.getAmount());
+        String status = StrUtil.blankToDefault(d.getApprovalStatus(), "").toUpperCase();
+        if ("COMMITTED".equals(status)) {
+          expComm = expComm.add(amt);
+        } else if ("ADVANCED".equals(status)) {
+          expAdv = expAdv.add(amt);
+        } else if ("SETTLED".equals(status)) {
+          expSettled = expSettled.add(amt);
+          expAct = expAct.add(amt);
+        } else {
+          expAct = expAct.add(amt);
+        }
       }
     }
 
@@ -403,7 +493,12 @@ public class BudgetReportBusiness {
                     + periodNumber
                     + "/"
                     + year)
-            .description("Tổng hợp tự động từ Sổ cái Phân bổ và Giải ngân Kho bạc")
+            .description(
+                "Tổng hợp tự động từ Sổ cái Phân bổ và Giải ngân Kho bạc ("
+                    + fromDate
+                    + " -> "
+                    + toDate
+                    + ")")
             .budgetYear(year)
             .reportPeriod(reportPeriod)
             .periodNumber(periodNumber)
@@ -413,6 +508,7 @@ public class BudgetReportBusiness {
             .nodeCode(nodeId != null ? "NODE-" + nodeId : "TOAN-SO")
             .nodeName(nodeId != null ? "Đơn vị dự toán #" + nodeId : "Toàn Sở / Đơn vị dự toán cấp I")
             .reportDate(LocalDate.now())
+            .dataCutoffDate(toDate)
             .totalRevenueEstimate(revEst)
             .totalRevenueActual(revAct)
             .totalRevenueCumulative(revAct)
@@ -431,16 +527,101 @@ public class BudgetReportBusiness {
             .disbursementRatePercent(rate)
             .submittedByPersonId(actorPersonId)
             .submittedByPersonName(actorName)
-            .submittedDate(LocalDateTime.now())
-            .reviewedByPersonId(actorPersonId)
-            .reviewedByPersonName(actorName)
-            .approvedByPersonId(actorPersonId)
-            .approvedByPersonName(actorName)
-            .approvedDate(LocalDateTime.now())
-            .workflowStatus("APPROVED")
+            .workflowStatus("DRAFT")
             .status(LifecycleStatus.ACTIVE)
             .build();
     return create(data);
+  }
+
+  private LocalDate[] resolvePeriodRange(
+      int year, String reportPeriod, int periodNumber, Map<String, Object> body) {
+    if (body != null && body.get("fromDate") != null && body.get("toDate") != null) {
+      return new LocalDate[] {
+        LocalDate.parse(body.get("fromDate").toString()),
+        LocalDate.parse(body.get("toDate").toString())
+      };
+    }
+    if ("MONTH".equalsIgnoreCase(reportPeriod)) {
+      int m = Math.max(1, Math.min(12, periodNumber));
+      YearMonth ym = YearMonth.of(year, m);
+      return new LocalDate[] {ym.atDay(1), ym.atEndOfMonth()};
+    }
+    if ("QUARTER".equalsIgnoreCase(reportPeriod)) {
+      int q = Math.max(1, Math.min(4, periodNumber));
+      int startMonth = (q - 1) * 3 + 1;
+      YearMonth start = YearMonth.of(year, startMonth);
+      YearMonth end = YearMonth.of(year, startMonth + 2);
+      return new LocalDate[] {start.atDay(1), end.atEndOfMonth()};
+    }
+    if ("SIX_MONTH".equalsIgnoreCase(reportPeriod)) {
+      boolean secondHalf = periodNumber >= 2;
+      return secondHalf
+          ? new LocalDate[] {LocalDate.of(year, 7, 1), LocalDate.of(year, 12, 31)}
+          : new LocalDate[] {LocalDate.of(year, 1, 1), LocalDate.of(year, 6, 30)};
+    }
+    LocalDate cutoff =
+        body != null && body.get("dataCutoffDate") != null
+            ? LocalDate.parse(body.get("dataCutoffDate").toString())
+            : LocalDate.of(year, 12, 31);
+    return new LocalDate[] {LocalDate.of(year, 1, 1), cutoff};
+  }
+
+  /** Trình duyệt báo cáo quyết toán định kỳ. */
+  public BudgetReportData submitReport(Long id, Map<String, Object> body) {
+    BudgetReport rpt =
+        budgetReportService
+            .findById(id)
+            .orElseThrow(() -> new EntityNotFoundException(BudgetReport.class, id));
+    rpt.setWorkflowStatus("PENDING_APPROVAL");
+    rpt.setSubmittedDate(LocalDateTime.now());
+    String actorName =
+        integrationOrchestrator != null
+            ? integrationOrchestrator.resolveCurrentActorName(
+                body, "actorName", "submittedByPersonName")
+            : "Cán bộ Tài chính - Kế toán";
+    Long actorId =
+        integrationOrchestrator != null
+            ? integrationOrchestrator.resolveCurrentPersonId(body, "submittedByPersonId", "actorId")
+            : null;
+    if (actorId != null) {
+      rpt.setSubmittedByPersonId(actorId);
+    }
+    rpt.setSubmittedByPersonName(actorName);
+    return enrichData(budgetReportMapper.toData(budgetReportService.save(rpt)));
+  }
+
+  /** Từ chối / Trả lại báo cáo quyết toán định kỳ. */
+  public BudgetReportData rejectReport(Long id, Map<String, Object> body) {
+    BudgetReport rpt =
+        budgetReportService
+            .findById(id)
+            .orElseThrow(() -> new EntityNotFoundException(BudgetReport.class, id));
+    rpt.setWorkflowStatus("REJECTED");
+    if (body != null && body.get("comment") != null) {
+      rpt.setReviewComment(String.valueOf(body.get("comment")));
+    } else if (body != null && body.get("reason") != null) {
+      rpt.setReviewComment(String.valueOf(body.get("reason")));
+    }
+    return enrichData(budgetReportMapper.toData(budgetReportService.save(rpt)));
+  }
+
+  /** Lưu kết quả xác nhận đối chiếu số dư Kho bạc Nhà nước cho báo cáo kỳ. */
+  public BudgetReportData confirmTreasuryReconciliation(Long id, Map<String, Object> body) {
+    BudgetReport rpt =
+        budgetReportService
+            .findById(id)
+            .orElseThrow(() -> new EntityNotFoundException(BudgetReport.class, id));
+    Integer q = rpt.getPeriodNumber() != null ? rpt.getPeriodNumber() : 4;
+    Map<String, Object> statement =
+        generateKbnnReconciliationStatement(rpt.getBudgetYear(), q, rpt.getNodeId());
+    rpt.setReconciliationStatementJson(JSONUtil.toJsonStr(statement));
+    String confirmCode =
+        body != null && body.get("treasuryConfirmationCode") != null
+            ? String.valueOf(body.get("treasuryConfirmationCode"))
+            : "KBNN-" + rpt.getBudgetYear() + "-Q" + q + "-" + rpt.getId();
+    rpt.setTreasuryConfirmationCode(confirmCode);
+    rpt.setTreasuryConfirmedDate(LocalDate.now());
+    return enrichData(budgetReportMapper.toData(budgetReportService.save(rpt)));
   }
 
   /** Phê duyệt báo cáo quyết toán định kỳ. */
@@ -572,7 +753,43 @@ public class BudgetReportBusiness {
       row.put("settledActualExpenditure", settled);
       row.put("remainingBalance", avail);
       row.put("remainingEstimateBalance", avail);
-      row.put("reconciledStatus", "MATCHED_KBNN");
+      int allocMatched = 0;
+      int allocPending = 0;
+      for (BudgetDisbursement d : disbs) {
+        if ("REJECTED".equalsIgnoreCase(d.getApprovalStatus())
+            || "CANCELLED".equalsIgnoreCase(d.getApprovalStatus())) {
+          continue;
+        }
+        boolean matchesAlloc =
+            (d.getAllocationId() != null && d.getAllocationId().equals(a.getId()))
+                || (StrUtil.isNotBlank(a.getCode())
+                    && a.getCode().equalsIgnoreCase(d.getAllocationCode()));
+        if (!matchesAlloc) {
+          continue;
+        }
+        if (quarter != null) {
+          if (d.getBudgetQuarter() != null && !quarter.equals(d.getBudgetQuarter())) {
+            continue;
+          }
+          if (d.getBudgetQuarter() == null
+              && d.getVoucherDate() != null
+              && ((d.getVoucherDate().getMonthValue() - 1) / 3 + 1) != quarter) {
+            continue;
+          }
+        }
+        if (StrUtil.isNotBlank(d.getTreasuryRefCode())) {
+          allocMatched++;
+        } else {
+          allocPending++;
+        }
+      }
+      String rowReconciledStatus =
+          (allocMatched + allocPending) == 0
+              ? "NO_DISBURSEMENT"
+              : (allocPending == 0 ? "MATCHED_KBNN" : "PENDING_RECONCILIATION");
+      row.put("matchedVoucherCount", allocMatched);
+      row.put("pendingVoucherCount", allocPending);
+      row.put("reconciledStatus", rowReconciledStatus);
       form01aRows.add(row);
     }
 
@@ -1226,7 +1443,7 @@ public class BudgetReportBusiness {
             : StrUtil.blankToDefault(
                 tx.getDomainCode(),
                 StrUtil.blankToDefault(tx.getCategoryCode(), colCodes.getFirst()));
-    addColValue(map, map.containsKey(key) ? key : colCodes.getFirst(), safeDec(tx.getDisbursedAmount()));
+    addColValue(map, map.containsKey(key) ? key : colCodes.getFirst(), BigDecimal.ZERO);
     return map;
   }
 
@@ -1266,6 +1483,82 @@ public class BudgetReportBusiness {
     return numerator
         .multiply(new BigDecimal("100"))
         .divide(denominator, 2, RoundingMode.HALF_UP);
+  }
+
+  /** Lấy danh sách rút gọn (Lookup Options) Báo cáo Kinh phí Định kỳ. */
+  @Transactional(readOnly = true)
+  public PagedData<RefData<Long>> getOptions(BudgetReportSearchCriteria criteria) {
+    Pageable pageable = CoreUtils.getPageRequest(criteria);
+    Page<BudgetReport> page = budgetReportService.findAll(criteria, pageable);
+    return PagedData.from(
+        page,
+        e ->
+            RefData.of(
+                e.getId(),
+                e.getCode(),
+                e.getName(),
+                e.getStatus() != null ? e.getStatus().name() : null));
+  }
+
+  @Override
+  public String getAppCode() {
+    return "BudgetReport";
+  }
+
+  @Override
+  public String getConfigNamespace() {
+    return "budget";
+  }
+
+  @Override
+  public String getProcessCode() {
+    return "budget_report_approval";
+  }
+
+  @Override
+  public String getCallbackUrl() {
+    return "/api/v1/budget/reports/workflow-callback";
+  }
+
+  @Override
+  public void submitWorkflow(Long id) {
+    submitReport(id, Map.of());
+  }
+
+  @Override
+  public void cancelWorkflow(Long id) {
+    BudgetReport rpt =
+        budgetReportService
+            .findById(id)
+            .orElseThrow(() -> new EntityNotFoundException(BudgetReport.class, id));
+    rpt.setWorkflowStatus("DRAFT");
+    budgetReportService.save(rpt);
+  }
+
+  @Override
+  public void onWorkflowCompleted(WorkflowCallbackPayload payload) {
+    if (payload == null || payload.getEntityId() == null) {
+      return;
+    }
+    String decision = StrUtil.blankToDefault(payload.getDecision(), "").toUpperCase();
+    if ("APPROVE".equals(decision) || "APPROVED".equals(decision)) {
+      approveReport(payload.getEntityId(), Map.of("comment", StrUtil.nullToEmpty(payload.getComment())));
+    } else if ("REJECT".equals(decision) || "REJECTED".equals(decision)) {
+      rejectReport(payload.getEntityId(), Map.of("comment", StrUtil.nullToEmpty(payload.getComment())));
+    }
+  }
+
+  @Override
+  public BudgetReport changeEntityStatus(Long id, LifecycleStatus targetStatus, String comment) {
+    BudgetReport rpt =
+        budgetReportService
+            .findById(id)
+            .orElseThrow(() -> new EntityNotFoundException(BudgetReport.class, id));
+    rpt.setStatus(targetStatus);
+    if (StrUtil.isNotBlank(comment)) {
+      rpt.setReviewComment(comment);
+    }
+    return budgetReportService.save(rpt);
   }
 
 }

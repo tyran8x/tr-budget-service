@@ -1,14 +1,11 @@
 package vn.tr.budget.controller;
 
 import cn.dev33.satoken.annotation.SaCheckPermission;
+import cn.dev33.satoken.annotation.SaMode;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
-import java.io.IOException;
-import java.io.InputStream;
-import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import lombok.RequiredArgsConstructor;
@@ -25,15 +22,12 @@ import org.springframework.web.multipart.MultipartFile;
 import vn.tr.budget.business.BudgetReportBusiness;
 import vn.tr.budget.data.criteria.BudgetReportSearchCriteria;
 import vn.tr.budget.data.dto.BudgetReportData;
-import vn.tr.budget.data.dto.BudgetReportImportData;
 import vn.tr.budget.data.mapper.BudgetReportMapper;
+import vn.tr.budget.excel.BudgetExcelControllerHelper;
 import vn.tr.budget.excel.BudgetReportExcelService;
 import vn.tr.common.core.domain.R;
 import vn.tr.common.core.domain.data.PagedData;
-import vn.tr.common.core.exception.base.BaseException;
-import vn.tr.common.core.utils.MessageUtils;
-import vn.tr.common.excel.core.ImportBatchResult;
-import vn.tr.common.excel.core.ImportRowResult;
+import vn.tr.common.core.domain.data.RefData;
 import vn.tr.common.log.annotation.Log;
 import vn.tr.common.log.enums.BusinessType;
 import vn.tr.common.web.core.BaseController;
@@ -49,13 +43,15 @@ import vn.tr.common.web.data.dto.DeleteData;
 @RestController
 @RequestMapping("/reports")
 @RequiredArgsConstructor
-@Tag(name = "Báo cáo Thực hiện Thu - Chi & Tổng hợp Quyết toán Định kỳ", description = "API quản lý Báo cáo Thực hiện Thu - Chi, Giải ngân & Tổng hợp Quyết toán định kỳ Tháng/Quý/6 tháng/Năm (kế thừa & nâng cấp từ QlkpBaoCaoThuChi & QlkpTongHopThuChi)")
+@Tag(
+    name = "Báo cáo Thực hiện Thu - Chi & Tổng hợp Quyết toán Định kỳ",
+    description =
+        "API quản lý Báo cáo Thực hiện Thu - Chi, Giải ngân & Tổng hợp Quyết toán định kỳ Tháng/Quý/6 tháng/Năm")
 public class BudgetReportController extends BaseController {
 
   private final BudgetReportBusiness budgetReportBusiness;
   private final BudgetReportExcelService budgetReportExcelService;
   private final BudgetReportMapper budgetReportMapper;
-  private final HttpServletResponse response;
 
   @SaCheckPermission("BudgetReportCreate")
   @PostMapping
@@ -69,7 +65,8 @@ public class BudgetReportController extends BaseController {
   @PutMapping("/{id}")
   @Operation(summary = "Cập nhật Báo cáo Thực hiện Thu - Chi & Tổng hợp Quyết toán Định kỳ")
   @Log(title = "[BudgetReport] Update", businessType = BusinessType.UPDATE)
-  public R<BudgetReportData> update(@PathVariable Long id, @Valid @RequestBody BudgetReportData data) {
+  public R<BudgetReportData> update(
+      @PathVariable Long id, @Valid @RequestBody BudgetReportData data) {
     return success(budgetReportBusiness.update(id, data));
   }
 
@@ -97,6 +94,13 @@ public class BudgetReportController extends BaseController {
     return success(budgetReportBusiness.findAll(criteria));
   }
 
+  @SaCheckPermission(value = {"BudgetReportList"}, mode = SaMode.OR)
+  @GetMapping("/options")
+  @Operation(summary = "Lấy danh sách rút gọn (Lookup Options) Báo cáo Kinh phí Định kỳ")
+  public R<PagedData<RefData<Long>>> getOptions(BudgetReportSearchCriteria criteria) {
+    return success(budgetReportBusiness.getOptions(criteria));
+  }
+
   @SaCheckPermission("BudgetReportDetail")
   @GetMapping("/{id}")
   @Operation(summary = "Lấy chi tiết Báo cáo Thực hiện Thu - Chi & Tổng hợp Quyết toán Định kỳ")
@@ -105,7 +109,7 @@ public class BudgetReportController extends BaseController {
   }
 
   @SaCheckPermission("BudgetReportClone")
-  @GetMapping("/{id}/clone")
+  @PostMapping("/{id}/clone")
   @Operation(summary = "Sao chép Báo cáo Thực hiện Thu - Chi & Tổng hợp Quyết toán Định kỳ")
   @Log(title = "[BudgetReport] Clone", businessType = BusinessType.INSERT)
   public R<BudgetReportData> cloneById(@PathVariable Long id) {
@@ -136,18 +140,19 @@ public class BudgetReportController extends BaseController {
       title = "[BudgetReport] Export Excel",
       businessType = BusinessType.EXPORT,
       isSaveRequestData = false)
-  public void export(BudgetReportSearchCriteria criteria) {
+  public void export(BudgetReportSearchCriteria criteria, HttpServletResponse response) {
     budgetReportExcelService.export(criteria, response);
   }
 
   @SaCheckPermission("BudgetReportImport")
   @GetMapping({"/import-template", "/import/template"})
-  @Operation(summary = "Tải file mẫu Import Báo cáo Thực hiện Thu - Chi & Tổng hợp Quyết toán Định kỳ")
+  @Operation(
+      summary = "Tải file mẫu Import Báo cáo Thực hiện Thu - Chi & Tổng hợp Quyết toán Định kỳ")
   @Log(
       title = "[BudgetReport] Download Template",
       businessType = BusinessType.IMPORT,
       isSaveRequestData = false)
-  public void downloadTemplate() {
+  public void downloadTemplate(HttpServletResponse response) {
     budgetReportExcelService.importTemplate(response);
   }
 
@@ -155,102 +160,71 @@ public class BudgetReportController extends BaseController {
   @PostMapping("/import/validate")
   @Operation(summary = "Validate file Excel Import")
   public R<Map<String, Object>> validateImport(@RequestParam("file") MultipartFile file) {
-    try (InputStream is = file.getInputStream()) {
-      ImportBatchResult<BudgetReportImportData> batchResult =
-          budgetReportExcelService.validateExcel(is, file.getOriginalFilename(), true);
-
-      List<BudgetReportData> dataList = new ArrayList<>();
-      List<Map<String, Object>> errorsList = new ArrayList<>();
-
-      for (ImportRowResult<BudgetReportImportData> rowResult : batchResult.getRowResults()) {
-        BudgetReportData data = budgetReportMapper.toImportData(rowResult.getOriginalData());
-        dataList.add(data);
-
-        if (rowResult.hasErrors()) {
-          for (String err : rowResult.getValidationErrors()) {
-            Map<String, Object> errMap = new HashMap<>();
-            errMap.put("row", rowResult.getRowNumber());
-            errMap.put("field", "");
-            errMap.put("message", err);
-            errorsList.add(errMap);
-          }
-        }
-      }
-
-      Map<String, Object> summary = new HashMap<>();
-      summary.put("total", batchResult.getTotalRows());
-      summary.put("valid", batchResult.getTotalRows() - batchResult.getErrorCount());
-      summary.put("invalid", batchResult.getErrorCount());
-
-      Map<String, Object> result = new HashMap<>();
-      result.put("data", dataList);
-      result.put("errors", errorsList);
-      result.put("summary", summary);
-      result.put("valid", batchResult.getErrorCount() == 0);
-
-      return success(result);
-    } catch (IOException e) {
-      throw new BaseException(MessageUtils.message("error.excel.read", e.getMessage()));
-    }
+    return success(
+        BudgetExcelControllerHelper.validateImport(
+            file, budgetReportExcelService, budgetReportMapper));
   }
 
   @SaCheckPermission("BudgetReportImport")
   @PostMapping("/import")
-  @Operation(summary = "Import dữ liệu Báo cáo Thực hiện Thu - Chi & Tổng hợp Quyết toán Định kỳ từ JSON")
+  @Operation(
+      summary = "Import dữ liệu Báo cáo Thực hiện Thu - Chi & Tổng hợp Quyết toán Định kỳ từ JSON")
   @Log(title = "[BudgetReport] Import Commit", businessType = BusinessType.IMPORT)
   public R<Map<String, Object>> importData(@RequestBody Map<String, List<BudgetReportData>> body) {
-    List<BudgetReportData> dataList = body.get("data");
-    if (dataList == null || dataList.isEmpty()) {
-      throw new BaseException("Dữ liệu import trống");
-    }
-
-    int created = 0;
-    int updated = 0;
-    List<Map<String, Object>> errors = new ArrayList<>();
-
-    for (int i = 0; i < dataList.size(); i++) {
-      BudgetReportData data = dataList.get(i);
-      try {
-        if (data.getId() != null
-            && data.getId() > 0
-            && budgetReportBusiness.getInjectedRepo().existsById(data.getId())) {
-          budgetReportBusiness.update(data.getId(), data);
-          updated++;
-        } else {
-          budgetReportBusiness.create(data);
-          created++;
-        }
-      } catch (Exception e) {
-        Map<String, Object> errMap = new HashMap<>();
-        errMap.put("row", i + 1);
-        errMap.put("message", e.getMessage());
-        errors.add(errMap);
-      }
-    }
-
-    Map<String, Object> result = new HashMap<>();
-    result.put("created", created);
-    result.put("updated", updated);
-    result.put("errors", errors);
-    return success(result);
+    return success(
+        BudgetExcelControllerHelper.importData(
+            body.get("data"),
+            BudgetReportData::getId,
+            id -> budgetReportBusiness.getInjectedRepo().existsById(id),
+            budgetReportBusiness::create,
+            budgetReportBusiness::update));
   }
 
-  @SaCheckPermission("BudgetReportCreate")
+  @SaCheckPermission("BudgetReportConsolidate")
   @PostMapping("/generate-consolidated")
   @Operation(
       summary =
           "Tổng hợp tự động Báo cáo Thực hiện Thu - Chi & Quyết toán định kỳ từ Sổ cái Phân bổ & Giải ngân")
+  @Log(title = "[BudgetReport] Generate Consolidated", businessType = BusinessType.INSERT)
   public R<BudgetReportData> generateConsolidatedReport(
       @RequestBody(required = false) Map<String, Object> body) {
     return success(budgetReportBusiness.generateConsolidatedReport(body));
   }
 
-  @SaCheckPermission("BudgetReportEdit")
+  @SaCheckPermission("BudgetReportSubmit")
+  @PostMapping("/{id}/submit")
+  @Operation(summary = "Trình duyệt Báo cáo Thực hiện Thu - Chi & Quyết toán định kỳ")
+  @Log(title = "[BudgetReport] Submit", businessType = BusinessType.UPDATE)
+  public R<BudgetReportData> submitReport(
+      @PathVariable("id") Long id, @RequestBody(required = false) Map<String, Object> body) {
+    return success(budgetReportBusiness.submitReport(id, body));
+  }
+
+  @SaCheckPermission("BudgetReportSubmit")
+  @PostMapping("/{id}/treasury-reconciliation")
+  @Operation(summary = "Lưu kết quả xác nhận đối chiếu số dư Kho bạc Nhà nước cho báo cáo kỳ")
+  @Log(title = "[BudgetReport] Confirm KBNN Reconciliation", businessType = BusinessType.UPDATE)
+  public R<BudgetReportData> confirmTreasuryReconciliation(
+      @PathVariable("id") Long id, @RequestBody(required = false) Map<String, Object> body) {
+    return success(budgetReportBusiness.confirmTreasuryReconciliation(id, body));
+  }
+
+  @SaCheckPermission("BudgetReportApprove")
   @PostMapping("/{id}/approve")
   @Operation(summary = "Phê duyệt Báo cáo Thực hiện Thu - Chi & Quyết toán định kỳ")
+  @Log(title = "[BudgetReport] Approve", businessType = BusinessType.UPDATE)
   public R<BudgetReportData> approveReport(
       @PathVariable("id") Long id, @RequestBody(required = false) Map<String, Object> body) {
     return success(budgetReportBusiness.approveReport(id, body));
+  }
+
+  @SaCheckPermission("BudgetReportReject")
+  @PostMapping("/{id}/reject")
+  @Operation(summary = "Từ chối / Trả lại Báo cáo Thực hiện Thu - Chi & Quyết toán định kỳ")
+  @Log(title = "[BudgetReport] Reject", businessType = BusinessType.UPDATE)
+  public R<BudgetReportData> rejectReport(
+      @PathVariable("id") Long id, @RequestBody(required = false) Map<String, Object> body) {
+    return success(budgetReportBusiness.rejectReport(id, body));
   }
 
   @SaCheckPermission("BudgetReportList")
@@ -270,7 +244,7 @@ public class BudgetReportController extends BaseController {
   @GetMapping("/dynamic-domain-matrix")
   @Operation(
       summary =
-          "Kết xuất Ma trận Động Đa chiều theo Lĩnh vực / Nhóm lĩnh vực / Loại-Khoản (Dynamic Domain/Group Matrix) tính đến ngày chốt (asOfDate)")
+          "Kết xuất Ma trận Động Đa chiều theo Lĩnh vực / Nhóm lĩnh vực / Loại-Khoản tính đến ngày chốt (asOfDate)")
   public R<Map<String, Object>> getDynamicDomainMatrix(
       @RequestParam(value = "budgetYear", required = false) Integer budgetYear,
       @RequestParam(value = "asOfDate", required = false) String asOfDate,
@@ -281,5 +255,4 @@ public class BudgetReportController extends BaseController {
         budgetReportBusiness.generateDynamicDomainMatrix(
             budgetYear, asOfDate, groupByDimension, viewMode, nodeId));
   }
-
 }

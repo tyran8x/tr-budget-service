@@ -3,25 +3,33 @@ package vn.tr.budget.business;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import cn.dev33.satoken.stp.StpUtil;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
+import org.mockito.MockedStatic;
 import org.mockito.junit.jupiter.MockitoExtension;
+import vn.tr.budget.business.helper.BudgetIntegrationOrchestrator;
 import vn.tr.budget.business.helper.BudgetWorkflowEngineHelper;
 import vn.tr.budget.controller.BudgetInternalController;
 import vn.tr.budget.dao.model.BudgetAllocation;
@@ -35,8 +43,10 @@ import vn.tr.budget.dao.service.BudgetTransactionRepo;
 import vn.tr.budget.data.dto.BudgetDisbursementData;
 import vn.tr.budget.data.mapper.BudgetDisbursementMapper;
 import vn.tr.budget.data.validator.BudgetDisbursementValidator;
+import vn.tr.common.core.exception.base.BaseException;
 import vn.tr.common.jpa.audit.AuditRollbackHelper;
 import vn.tr.common.jpa.helper.GenericUpsertHelper;
+import vn.tr.common.satoken.utils.LoginHelper;
 import vn.tr.common.web.utils.BusinessLogicHelper;
 
 /**
@@ -367,8 +377,16 @@ class BudgetDashboardAndWebhookTest {
     when(dashBusiness.getOverview(2026, 101L, null))
         .thenReturn(Map.of("budgetYear", 2026, "nodeId", 101L));
 
+    BudgetTransactionBusiness mockTxBusiness = mock(BudgetTransactionBusiness.class);
+    when(mockTxBusiness.recordFromPlan(any()))
+        .thenReturn(Map.of("recorded", true, "transactionCode", "PLNTX-KH-01"));
+
+    com.fasterxml.jackson.databind.ObjectMapper objectMapper =
+        new com.fasterxml.jackson.databind.ObjectMapper();
+    objectMapper.findAndRegisterModules();
     BudgetInternalController internalController =
-        new BudgetInternalController(allocBusiness, disbBusiness, dashBusiness);
+        new BudgetInternalController(
+            allocBusiness, disbBusiness, mockTxBusiness, dashBusiness, objectMapper);
 
     assertEquals(
         "KH-2026-01",
@@ -388,17 +406,33 @@ class BudgetDashboardAndWebhookTest {
     assertEquals(
         true,
         internalController
-            .reserveCommitment(Map.of("taskCode", "NV-01"))
+            .reserveCommitment(
+                vn.tr.common.feign.budget.data.BudgetCommitmentReserveData.builder()
+                    .planItemCode("NV-01")
+                    .build())
             .getData()
             .get("committed"));
     assertEquals(
         true,
         internalController
-            .settleDisbursementFromPaymentWebhook(55L, Map.of("paymentTxCode", "TX-01"))
+            .settleDisbursementFromPaymentWebhook(
+                55L,
+                vn.tr.common.feign.budget.data.BudgetPaymentSettleData.builder()
+                    .transactionCode("TX-01")
+                    .build())
             .getData()
             .get("settled"));
     assertEquals(
         2026, internalController.getDashboardOverview(2026, 101L).getData().get("budgetYear"));
+    assertEquals(
+        true,
+        internalController
+            .recordPlanLedgerTransaction(
+                vn.tr.common.feign.budget.data.BudgetLedgerTransactionData.builder()
+                    .planCode("KH-2026-01")
+                    .build())
+            .getData()
+            .get("recorded"));
   }
 
   @Test
@@ -559,122 +593,162 @@ class BudgetDashboardAndWebhookTest {
             workflowEngineHelper,
             budgetAllocationRepo);
 
-    // 1. NV-01: Bổ sung nội dung nhiệm vụ chi
-    Map<String, Object> suppRes =
-        txBusiness.supplementBudgetContent(
-            Map.of(
-                "budgetYear", 2026,
-                "contentTitle", "Bổ sung kinh phí vận hành hạ tầng IOC",
-                "amount", "1502000000",
-                "domainCode", "CDS",
-                "decisionNo", "QĐ-2150/QĐ-UBND"));
-    assertEquals(true, suppRes.get("supplemented"));
-    assertEquals(new BigDecimal("1502000000"), suppRes.get("supplementedAmount"));
+    BudgetIntegrationOrchestrator mockOrchestrator = mock(BudgetIntegrationOrchestrator.class);
+    lenient().when(mockOrchestrator.resolveActiveStaffCount(101L)).thenReturn(35);
+    txBusiness.setIntegrationOrchestrator(mockOrchestrator);
 
-    // 2. NV-02: Chuyển nguồn liên năm (2025 -> 2026)
-    Map<String, Object> carryRes =
-        txBusiness.executeYearCarryOver(
-            Map.of(
-                "fromYear", 2025,
-                "toYear", 2026,
-                "amount", "1512000000",
-                "sourceDomainCode", "TCDLCL"));
-    assertEquals(true, carryRes.get("carriedOver"));
-    assertEquals(new BigDecimal("1512000000"), carryRes.get("carryOverAmount"));
+    // Kiểm tra chặn spoofing khi chưa đăng nhập dù truyền actorRole trong body
+    assertThrows(
+        BaseException.class,
+        () ->
+            txBusiness.supplementBudgetContent(
+                Map.of(
+                    "budgetYear", 2026,
+                    "contentTitle", "Spoofed Director Action",
+                    "amount", "1000000",
+                    "actorRole", "STC_DIRECTOR")));
 
-    // 3. NV-03: Điều chuyển nội bộ chéo lĩnh vực (Tổng biến động = 0)
-    Map<String, Object> crossRes =
-        txBusiness.executeCrossDomainTransfer(
-            Map.of(
-                "budgetYear", 2026,
-                "fromDomainCode", "KHCN",
-                "toDomainCode", "DMST",
-                "amount", "2655000000"));
-    assertEquals(true, crossRes.get("transferred"));
-    assertEquals(BigDecimal.ZERO, crossRes.get("netUnitChange"));
-    assertTrue(String.valueOf(crossRes.get("dynamicBreakdownJson")).contains("-2655000000"));
+    AtomicBoolean isSuperAdmin = new AtomicBoolean(false);
+    AtomicReference<List<String>> currentRoles =
+        new AtomicReference<>(List.of("ROLE_BUDGET_DIRECTORATE"));
 
-    // 4. NV-04: Tiết kiệm chi thường xuyên theo NQ 135
-    Map<String, Object> saveRes =
-        txBusiness.executeSavingAndReduction(
-            Map.of(
-                "budgetYear", 2026,
-                "reductionSubtype", "SAVING_NQ135",
-                "amount", "1481000000"));
-    assertEquals(true, saveRes.get("reduced"));
-    assertEquals(new BigDecimal("-1481000000"), saveRes.get("signedAdjustmentAmount"));
+    try (MockedStatic<LoginHelper> loginMock = mockStatic(LoginHelper.class);
+        MockedStatic<StpUtil> stpMock = mockStatic(StpUtil.class)) {
+      loginMock.when(LoginHelper::isSuperAdmin).thenAnswer(inv -> isSuperAdmin.get());
+      stpMock.when(StpUtil::isLogin).thenReturn(true);
+      stpMock.when(StpUtil::getRoleList).thenAnswer(inv -> currentRoles.get());
+      stpMock.when(StpUtil::getPermissionList).thenReturn(List.of());
 
-    // 5. NV-05: Thu hồi / Hủy dự toán hết niên độ
-    Map<String, Object> cancelRes =
-        txBusiness.cancelExpiredAllocation(
-            Map.of("budgetYear", 2026, "amount", "500000000", "actorRole", "TREASURY_RECONCILER"));
-    assertEquals(true, cancelRes.get("cancelled"));
-    assertEquals(new BigDecimal("500000000"), cancelRes.get("cancelledAmount"));
+      // 1. NV-01: Bổ sung nội dung nhiệm vụ chi
+      Map<String, Object> suppRes =
+          txBusiness.supplementBudgetContent(
+              Map.of(
+                  "budgetYear", 2026,
+                  "contentTitle", "Bổ sung kinh phí vận hành hạ tầng IOC",
+                  "amount", "1502000000",
+                  "domainCode", "CDS",
+                  "decisionNo", "QĐ-2150/QĐ-UBND"));
+      assertEquals(true, suppRes.get("supplemented"));
+      assertEquals(new BigDecimal("1502000000"), suppRes.get("supplementedAmount"));
 
-    // 6. Ma trận Phân tách Vai trò & Quyền hạn (5 vai trò x 9 nghiệp vụ)
-    Map<String, Object> roleMatrix = txBusiness.getOperationRoleMatrix();
-    assertEquals(5, roleMatrix.get("totalRoles"));
-    assertEquals(9, roleMatrix.get("totalOperations"));
+      // 2. NV-02: Chuyển nguồn liên năm (2025 -> 2026)
+      Map<String, Object> carryRes =
+          txBusiness.executeYearCarryOver(
+              Map.of(
+                  "fromYear", 2025,
+                  "toYear", 2026,
+                  "amount", "1512000000",
+                  "sourceDomainCode", "TCDLCL"));
+      assertEquals(true, carryRes.get("carriedOver"));
+      assertEquals(new BigDecimal("1512000000"), carryRes.get("carryOverAmount"));
 
-    // Kiểm tra phân tách nhiệm vụ: Kế toán đơn vị (UNIT_ACCOUNTANT) lập NV-01 -> trạng thái PENDING
-    Map<String, Object> suppByAccountant =
-        txBusiness.supplementBudgetContent(
-            Map.of(
-                "budgetYear", 2026,
-                "contentTitle", "Tờ trình bổ sung của Kế toán đơn vị",
-                "amount", "200000000",
-                "actorRole", "UNIT_ACCOUNTANT"));
-    @SuppressWarnings("unchecked")
-    Map<String, Object> accMeta = (Map<String, Object>) suppByAccountant.get("roleExecutionMeta");
-    assertEquals("PENDING", accMeta.get("effectiveApprovalStatus"));
-    assertEquals("STC_DIRECTOR", accMeta.get("requiredApproverRole"));
+      // 3. NV-03: Điều chuyển nội bộ chéo lĩnh vực (Tổng biến động = 0)
+      Map<String, Object> crossRes =
+          txBusiness.executeCrossDomainTransfer(
+              Map.of(
+                  "budgetYear", 2026,
+                  "fromDomainCode", "KHCN",
+                  "toDomainCode", "DMST",
+                  "amount", "2655000000"));
+      assertEquals(true, crossRes.get("transferred"));
+      assertEquals(BigDecimal.ZERO, crossRes.get("netUnitChange"));
+      assertTrue(String.valueOf(crossRes.get("dynamicBreakdownJson")).contains("-2655000000"));
 
-    // 7. DX-01: Tạm giữ / Phong tỏa & Giải tỏa dự toán chờ duyệt chủ trương
-    Map<String, Object> holdRes =
-        txBusiness.executeEarmarkHold(
-            Map.of(
-                "budgetYear", 2026,
-                "holdAction", "HOLD",
-                "amount", "300000000",
-                "actorRole", "PARENT_APPRAISER"));
-    assertEquals(true, holdRes.get("executed"));
-    assertEquals("HOLD", holdRes.get("holdAction"));
+      // 4. NV-04: Tiết kiệm chi thường xuyên theo NQ 135
+      Map<String, Object> saveRes =
+          txBusiness.executeSavingAndReduction(
+              Map.of(
+                  "budgetYear", 2026,
+                  "reductionSubtype", "SAVING_NQ135",
+                  "amount", "1481000000"));
+      assertEquals(true, saveRes.get("reduced"));
+      assertEquals(new BigDecimal("-1481000000"), saveRes.get("signedAdjustmentAmount"));
 
-    // 8. DX-02: Giải tỏa dự toán theo đợt (TRANCHE_Q3)
-    Map<String, Object> trancheRes =
-        txBusiness.executeTrancheRelease(
-            Map.of(
-                "budgetYear", 2026,
-                "trancheCode", "TRANCHE_Q3",
-                "releaseRatePercent", "25",
-                "actorRole", "STC_DIRECTOR"));
-    assertEquals(true, trancheRes.get("released"));
-    assertEquals("TRANCHE_Q3", trancheRes.get("trancheCode"));
+      // 5. NV-05: Thu hồi / Hủy dự toán hết niên độ (TREASURY_RECONCILER)
+      currentRoles.set(List.of("TREASURY_RECONCILER"));
+      Map<String, Object> cancelRes =
+          txBusiness.cancelExpiredAllocation(
+              Map.of("budgetYear", 2026, "amount", "500000000"));
+      assertEquals(true, cancelRes.get("cancelled"));
+      assertEquals(new BigDecimal("500000000"), cancelRes.get("cancelledAmount"));
 
-    // 9. DX-03: Điều chỉnh dự toán hàng loạt theo lương cơ sở & biên chế
-    Map<String, Object> payrollRes =
-        txBusiness.executeBatchPayrollIndexation(
-            Map.of(
-                "budgetYear", 2026,
-                "oldBaseSalary", "1800000",
-                "newBaseSalary", "2340000",
-                "staffChangeCount", 2,
-                "actorRole", "STC_DIRECTOR"));
-    assertEquals(true, payrollRes.get("indexed"));
-    assertEquals(new BigDecimal("30.00"), payrollRes.get("salaryIncreaseRatePercent"));
+      // 6. Ma trận Phân tách Vai trò & Quyền hạn (5 vai trò x 9 nghiệp vụ)
+      Map<String, Object> roleMatrix = txBusiness.getOperationRoleMatrix();
+      assertEquals(5, roleMatrix.get("totalRoles"));
+      assertEquals(9, roleMatrix.get("totalOperations"));
 
-    // 10. DX-04: Trích lập 4 Quỹ tự chủ tài chính cuối năm theo NĐ 60/2021/NĐ-CP
-    Map<String, Object> fundRes =
-        txBusiness.executeAutonomyFundDistribution(
-            Map.of(
-                "budgetYear", 2026,
-                "autonomyGroup", "GROUP_2",
-                "surplusAmount", "1000000000",
-                "actorRole", "UNIT_DIRECTOR"));
-    assertEquals(true, fundRes.get("distributed"));
-    assertEquals(new BigDecimal("250000000"), fundRes.get("pthdsnAmount"));
-    assertEquals(new BigDecimal("450000000"), fundRes.get("bstnAmount"));
-    assertEquals(new BigDecimal("200000000"), fundRes.get("ktplAmount"));
-    assertEquals(new BigDecimal("100000000"), fundRes.get("dpodtnAmount"));
+      // Kiểm tra phân tách nhiệm vụ: Kế toán đơn vị (ROLE_BUDGET_UNIT_ACCOUNTANT) lập NV-01 -> PENDING dù cố giả mạo actorRole
+      currentRoles.set(List.of("ROLE_BUDGET_UNIT_ACCOUNTANT"));
+      Map<String, Object> suppByAccountant =
+          txBusiness.supplementBudgetContent(
+              Map.of(
+                  "budgetYear", 2026,
+                  "contentTitle", "Tờ trình bổ sung của Kế toán đơn vị",
+                  "amount", "200000000",
+                  "actorRole", "STC_DIRECTOR"));
+      @SuppressWarnings("unchecked")
+      Map<String, Object> accMeta = (Map<String, Object>) suppByAccountant.get("roleExecutionMeta");
+      assertEquals("UNIT_ACCOUNTANT", accMeta.get("actorRole"));
+      assertEquals("PENDING", accMeta.get("effectiveApprovalStatus"));
+      assertEquals("STC_DIRECTOR", accMeta.get("requiredApproverRole"));
+
+      // Vai trò Kế toán đơn vị không được khởi tạo DX-01 -> bị chặn kể cả truyền actorRole trong body
+      assertThrows(
+          BaseException.class,
+          () ->
+              txBusiness.executeEarmarkHold(
+                  Map.of(
+                      "budgetYear", 2026,
+                      "holdAction", "HOLD",
+                      "amount", "300000000",
+                      "actorRole", "STC_DIRECTOR")));
+
+      // 7. DX-01: Tạm giữ / Phong tỏa & Giải tỏa dự toán chờ duyệt chủ trương (ROLE_BUDGET_FINANCE_APPRAISER)
+      currentRoles.set(List.of("ROLE_BUDGET_FINANCE_APPRAISER"));
+      Map<String, Object> holdRes =
+          txBusiness.executeEarmarkHold(
+              Map.of(
+                  "budgetYear", 2026,
+                  "holdAction", "HOLD",
+                  "amount", "300000000"));
+      assertEquals(true, holdRes.get("executed"));
+      assertEquals("HOLD", holdRes.get("holdAction"));
+
+      // 8. DX-02: Giải tỏa dự toán theo đợt (ROLE_BUDGET_DIRECTORATE)
+      currentRoles.set(List.of("ROLE_BUDGET_DIRECTORATE"));
+      Map<String, Object> trancheRes =
+          txBusiness.executeTrancheRelease(
+              Map.of(
+                  "budgetYear", 2026,
+                  "trancheCode", "TRANCHE_Q3",
+                  "releaseRatePercent", "25"));
+      assertEquals(true, trancheRes.get("released"));
+      assertEquals("TRANCHE_Q3", trancheRes.get("trancheCode"));
+
+      // 9. DX-03: Điều chỉnh dự toán hàng loạt theo lương cơ sở & biên chế (từ Directory Service)
+      Map<String, Object> payrollRes =
+          txBusiness.executeBatchPayrollIndexation(
+              Map.of(
+                  "budgetYear", 2026,
+                  "oldBaseSalary", "1800000",
+                  "newBaseSalary", "2340000",
+                  "staffChangeCount", 2));
+      assertEquals(true, payrollRes.get("indexed"));
+      assertEquals(new BigDecimal("30.00"), payrollRes.get("salaryIncreaseRatePercent"));
+
+      // 10. DX-04: Trích lập 4 Quỹ tự chủ tài chính cuối năm theo NĐ 60/2021/NĐ-CP (ROLE_BUDGET_UNIT_HEAD)
+      currentRoles.set(List.of("ROLE_BUDGET_UNIT_HEAD"));
+      Map<String, Object> fundRes =
+          txBusiness.executeAutonomyFundDistribution(
+              Map.of(
+                  "budgetYear", 2026,
+                  "autonomyGroup", "GROUP_2",
+                  "surplusAmount", "1000000000"));
+      assertEquals(true, fundRes.get("distributed"));
+      assertEquals(new BigDecimal("250000000"), fundRes.get("pthdsnAmount"));
+      assertEquals(new BigDecimal("450000000"), fundRes.get("bstnAmount"));
+      assertEquals(new BigDecimal("200000000"), fundRes.get("ktplAmount"));
+      assertEquals(new BigDecimal("100000000"), fundRes.get("dpodtnAmount"));
+    }
   }
 }

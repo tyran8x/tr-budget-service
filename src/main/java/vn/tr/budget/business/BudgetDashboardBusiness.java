@@ -11,6 +11,7 @@ import java.util.Map;
 import java.util.Set;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -22,6 +23,11 @@ import vn.tr.budget.dao.service.BudgetAllocationRepo;
 import vn.tr.budget.dao.service.BudgetDisbursementRepo;
 import vn.tr.budget.dao.service.BudgetEstimateItemRepo;
 import vn.tr.budget.dao.service.BudgetTransactionRepo;
+import vn.tr.common.core.domain.R;
+import vn.tr.common.feign.ai.data.AiTaskRequest;
+import vn.tr.common.feign.ai.data.AiTaskResponse;
+import vn.tr.common.feign.ai.enums.AiTaskType;
+import vn.tr.common.feign.ai.service.AiClient;
 import vn.tr.common.feign.identity.TemporalTargetScopeHelper;
 
 /**
@@ -46,6 +52,13 @@ public class BudgetDashboardBusiness {
       new TemporalTargetScopeHelper();
   @org.springframework.beans.factory.annotation.Autowired(required = false)
   private vn.tr.common.feign.identity.UnifiedIdentityResolver unifiedIdentityResolver;
+
+  @Autowired(required = false)
+  private ObjectProvider<AiClient> aiClientProvider;
+
+  public void setAiClientProvider(ObjectProvider<AiClient> aiClientProvider) {
+    this.aiClientProvider = aiClientProvider;
+  }
 
   @jakarta.annotation.PostConstruct
   void initTemporalScopeHelper() {
@@ -529,7 +542,7 @@ public class BudgetDashboardBusiness {
       rollupEstimateTreeMetrics(root);
     }
 
-    return allNodes;
+    return roots;
   }
 
   @SuppressWarnings("unchecked")
@@ -723,10 +736,55 @@ public class BudgetDashboardBusiness {
             "suggestedAction", action3,
             "suggestion", action3));
 
+    String advisorModel = "RULE_BASED_HEURISTIC";
+    boolean aiAvailable = false;
+    String aiSummary = null;
+    AiClient aiClient = aiClientProvider != null ? aiClientProvider.getIfAvailable() : null;
+    if (aiClient != null) {
+      try {
+        String prompt =
+            String.format(
+                "Phân tích tình hình thực hiện dự toán năm %d: tỷ lệ giải ngân %s%%, đơn vị giải ngân chậm nhất '%s' (%s%%), đơn vị dư khả dụng cao nhất '%s' (%s VNĐ), dự báo kết dư cuối năm %s VNĐ. Hãy đưa ra 3 khuyến nghị điều hành ngắn gọn bằng tiếng Việt.",
+                year,
+                overview.get("disbursementRatePercent"),
+                slowestUnitName,
+                slowestRate,
+                highestSurplusUnitName,
+                highestSurplusAmount.toPlainString(),
+                burnForecast.get("totalProjectedUnspentAtYearEnd"));
+        R<AiTaskResponse> aiRes =
+            aiClient.dispatch(
+                AiTaskRequest.builder()
+                    .taskType(AiTaskType.CHAT)
+                    .systemPrompt(
+                        "Bạn là cố vấn tài chính công & ngân sách nhà nước Việt Nam theo Luật NSNN 2015 và NĐ 60/2021.")
+                    .userPrompt(prompt)
+                    .temperature(0.2)
+                    .build());
+        if (aiRes != null
+            && aiRes.getData() != null
+            && aiRes.getData().getTextResult() != null
+            && !aiRes.getData().getTextResult().isBlank()) {
+          aiAvailable = true;
+          aiSummary = aiRes.getData().getTextResult().trim();
+          advisorModel =
+              aiRes.getData().getModelUsed() != null && !aiRes.getData().getModelUsed().isBlank()
+                  ? aiRes.getData().getModelUsed()
+                  : "AI_SERVICE_LLM";
+        }
+      } catch (Exception e) {
+        log.debug("[BudgetAiAdvisor] Fallback to RULE_BASED_HEURISTIC: {}", e.getMessage());
+      }
+    }
+
     Map<String, Object> res = new LinkedHashMap<>();
     res.put("budgetYear", year);
     res.put("generatedAt", LocalDate.now().toString());
-    res.put("advisorModel", "TR-Finance-Advisor-v4.2");
+    res.put("advisorModel", advisorModel);
+    res.put("aiAvailable", aiAvailable);
+    if (aiSummary != null) {
+      res.put("aiSummary", aiSummary);
+    }
     res.put("unitCountAnalyzed", unitMatrix.size());
     res.put("burnRateSummary", burnForecast);
     res.put("recommendations", recommendations);

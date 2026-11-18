@@ -80,4 +80,8 @@ public class BudgetCategoryData extends BaseCommonData {
   public void setAllowCarryOver(Boolean allowCarryOver) {
     this.isAllowCarryOver = allowCarryOver;
   }
+
+  private String treePath;
+
+  private String sourceCode;
 }

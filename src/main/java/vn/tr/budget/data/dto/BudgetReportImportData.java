@@ -75,7 +75,7 @@ public class BudgetReportImportData {
 
   @ExcelProperty(value = "Tổng chi dự toán (VNĐ)", index = 9)
   @ColumnWidth(22)
-  private BigDecimal totalExpenditurePlan;
+  private BigDecimal totalExpenditureInitial;
 
   @ExcelProperty(value = "Tổng chi thực hiện (VNĐ)", index = 10)
   @ColumnWidth(22)
@@ -83,11 +83,11 @@ public class BudgetReportImportData {
 
   @ExcelProperty(value = "Tỷ lệ giải ngân (%)", index = 11)
   @ColumnWidth(18)
-  private BigDecimal disbursementRate;
+  private BigDecimal disbursementRatePercent;
 
   @ExcelProperty(value = "Trạng thái", index = 12)
   @ColumnWidth(20)
-  private String approvalStatus;
+  private String workflowStatus;
 
   @ExcelProperty(value = "Mô tả", index = 13)
   @ColumnWidth(45)

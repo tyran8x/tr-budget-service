@@ -18,6 +18,7 @@ import vn.tr.budget.data.dto.BudgetAllocationData;
 import vn.tr.budget.data.mapper.BudgetAllocationMapper;
 import vn.tr.budget.data.validator.BudgetAllocationValidator;
 import vn.tr.common.core.domain.data.PagedData;
+import vn.tr.common.core.domain.data.RefData;
 import vn.tr.common.core.enums.LifecycleStatus;
 import vn.tr.common.core.exception.base.EntityNotFoundException;
 import vn.tr.common.jpa.audit.AuditRollbackHelper;
@@ -26,6 +27,8 @@ import vn.tr.common.web.data.dto.BulkOperationResult;
 import vn.tr.common.web.data.dto.BulkSortOrderData;
 import vn.tr.common.web.utils.BusinessLogicHelper;
 import vn.tr.common.web.utils.CoreUtils;
+import vn.tr.common.web.workflow.WorkflowBusinessSupport;
+import vn.tr.common.web.workflow.WorkflowCallbackPayload;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -50,7 +53,7 @@ import vn.tr.common.feign.budget.data.BudgetPlanSyncResultData;
 @RequiredArgsConstructor
 @Transactional
 @Slf4j
-public class BudgetAllocationBusiness {
+public class BudgetAllocationBusiness implements WorkflowBusinessSupport<BudgetAllocation> {
 
   private final BudgetAllocationService budgetAllocationService;
   private final BudgetAllocationMapper budgetAllocationMapper;
@@ -362,7 +365,7 @@ public class BudgetAllocationBusiness {
       if (wfId != null) {
         saved.setWfInstanceId(wfId);
         if (StrUtil.isBlank(saved.getWfProcessCode())) {
-          saved.setWfProcessCode("BUDGET_ALLOCATION_APPROVAL");
+          saved.setWfProcessCode(BudgetIntegrationOrchestrator.WF_PROCESS_ALLOCATION);
         }
         saved = budgetAllocationService.save(saved);
       }
@@ -401,6 +404,7 @@ public class BudgetAllocationBusiness {
       alloc.setReviewComment(comment);
     }
     BudgetAllocation saved = budgetAllocationService.save(alloc);
+    workflowEngineHelper.ensureInitialAllocationTransaction(saved);
     saved = workflowEngineHelper.recalculateAllocationMetrics(saved.getId());
     if (integrationOrchestrator != null) {
       integrationOrchestrator.notifyAllocationLifecycleEvent(
@@ -442,6 +446,7 @@ public class BudgetAllocationBusiness {
       alloc.setReviewComment(comment);
     }
     BudgetAllocation saved = budgetAllocationService.save(alloc);
+    workflowEngineHelper.ensureInitialAllocationTransaction(saved);
     saved = workflowEngineHelper.recalculateAllocationMetrics(saved.getId());
     if (integrationOrchestrator != null) {
       integrationOrchestrator.executeWorkflowAction(
@@ -677,6 +682,91 @@ public class BudgetAllocationBusiness {
 
   private String extractComment(Map<String, Object> body) {
     return body != null && body.get("comment") != null ? String.valueOf(body.get("comment")) : "";
+  }
+
+  /** Lấy danh sách rút gọn (Lookup Options) Phương án Phân bổ Kinh phí. */
+  @Transactional(readOnly = true)
+  public PagedData<RefData<Long>> getOptions(BudgetAllocationSearchCriteria criteria) {
+    Pageable pageable = CoreUtils.getPageRequest(criteria);
+    Page<BudgetAllocation> page = budgetAllocationService.findAll(criteria, pageable);
+    return PagedData.from(
+        page,
+        e ->
+            RefData.of(
+                    e.getId(),
+                    e.getCode(),
+                    e.getName(),
+                    e.getStatus() != null ? e.getStatus().name() : null)
+                .addExtra("budgetYear", e.getBudgetYear())
+                .addExtra("nodeId", e.getNodeId())
+                .addExtra("availableAmount", e.getAvailableAmount()));
+  }
+
+  @Override
+  public String getAppCode() {
+    return "BudgetAllocation";
+  }
+
+  @Override
+  public String getConfigNamespace() {
+    return "budget";
+  }
+
+  @Override
+  public String getProcessCode() {
+    return BudgetIntegrationOrchestrator.WF_PROCESS_ALLOCATION;
+  }
+
+  @Override
+  public String getCallbackUrl() {
+    return "/api/v1/budget/allocations/workflow-callback";
+  }
+
+  @Override
+  public void submitWorkflow(Long id) {
+    submitAllocation(id, Map.of());
+  }
+
+  @Override
+  public void cancelWorkflow(Long id) {
+    BudgetAllocation alloc =
+        budgetAllocationService
+            .findById(id)
+            .orElseThrow(() -> new EntityNotFoundException(BudgetAllocation.class, id));
+    alloc.setWorkflowStatus("DRAFT");
+    budgetAllocationService.save(alloc);
+    if (integrationOrchestrator != null) {
+      integrationOrchestrator.executeWorkflowAction(getAppCode(), id, "WITHDRAW", "Hủy trình duyệt");
+    }
+  }
+
+  @Override
+  public void onWorkflowCompleted(WorkflowCallbackPayload payload) {
+    if (payload == null || payload.getEntityId() == null) {
+      return;
+    }
+    String decision = StrUtil.blankToDefault(payload.getDecision(), "").toUpperCase();
+    if ("APPROVE".equals(decision) || "APPROVED".equals(decision)) {
+      approveAllocation(
+          payload.getEntityId(), Map.of("comment", StrUtil.nullToEmpty(payload.getComment())));
+    } else if ("REJECT".equals(decision) || "REJECTED".equals(decision)) {
+      rejectAllocation(
+          payload.getEntityId(), Map.of("comment", StrUtil.nullToEmpty(payload.getComment())));
+    }
+  }
+
+  @Override
+  public BudgetAllocation changeEntityStatus(
+      Long id, LifecycleStatus targetStatus, String comment) {
+    BudgetAllocation alloc =
+        budgetAllocationService
+            .findById(id)
+            .orElseThrow(() -> new EntityNotFoundException(BudgetAllocation.class, id));
+    alloc.setStatus(targetStatus);
+    if (StrUtil.isNotBlank(comment)) {
+      alloc.setReviewComment(comment);
+    }
+    return budgetAllocationService.save(alloc);
   }
 
 }

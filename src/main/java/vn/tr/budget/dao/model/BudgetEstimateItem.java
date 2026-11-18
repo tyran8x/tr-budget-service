@@ -108,6 +108,21 @@ public class BudgetEstimateItem extends BaseCommonEntity implements AppIsolated 
   @Builder.Default
   private Boolean isRequireVoucher = Boolean.TRUE;
 
+  @Column(name = "budget_year")
+  private Integer budgetYear;
+
+  @Column(name = "tree_path", length = 500)
+  private String treePath;
+
+  @Column(name = "display_index", length = 50)
+  private String displayIndex;
+
+  @Column(name = "max_ceiling_amount", precision = 19, scale = 2)
+  private BigDecimal maxCeilingAmount;
+
+  @Column(name = "legal_basis_ref", length = 500)
+  private String legalBasisRef;
+
   public Boolean getRequireVoucher() {
     return this.isRequireVoucher;
   }

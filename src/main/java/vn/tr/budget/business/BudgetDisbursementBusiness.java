@@ -18,7 +18,9 @@ import vn.tr.budget.data.dto.BudgetDisbursementData;
 import vn.tr.budget.data.mapper.BudgetDisbursementMapper;
 import vn.tr.budget.data.validator.BudgetDisbursementValidator;
 import vn.tr.common.core.domain.data.PagedData;
+import vn.tr.common.core.domain.data.RefData;
 import vn.tr.common.core.enums.LifecycleStatus;
+import vn.tr.common.core.event.payment.PaymentCompletedEvent;
 import vn.tr.common.core.exception.base.EntityNotFoundException;
 import vn.tr.common.jpa.audit.AuditRollbackHelper;
 import vn.tr.common.jpa.helper.GenericUpsertHelper;
@@ -26,6 +28,8 @@ import vn.tr.common.web.data.dto.BulkOperationResult;
 import vn.tr.common.web.data.dto.BulkSortOrderData;
 import vn.tr.common.web.utils.BusinessLogicHelper;
 import vn.tr.common.web.utils.CoreUtils;
+import vn.tr.common.web.workflow.WorkflowBusinessSupport;
+import vn.tr.common.web.workflow.WorkflowCallbackPayload;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -38,6 +42,7 @@ import vn.tr.budget.dao.model.BudgetEstimateItem;
 import vn.tr.budget.dao.model.BudgetUnitConfig;
 import vn.tr.budget.dao.service.BudgetAllocationRepo;
 import vn.tr.budget.dao.service.BudgetCategoryRepo;
+import vn.tr.budget.dao.service.BudgetDisbursementRepo;
 import vn.tr.budget.dao.service.BudgetEstimateItemRepo;
 import vn.tr.budget.dao.service.BudgetUnitConfigRepo;
 import vn.tr.common.core.exception.base.BaseException;
@@ -51,7 +56,7 @@ import vn.tr.common.core.exception.base.BaseException;
 @RequiredArgsConstructor
 @Transactional
 @Slf4j
-public class BudgetDisbursementBusiness {
+public class BudgetDisbursementBusiness implements WorkflowBusinessSupport<BudgetDisbursement> {
 
   private final BudgetDisbursementService budgetDisbursementService;
   private final BudgetDisbursementMapper budgetDisbursementMapper;
@@ -74,6 +79,13 @@ public class BudgetDisbursementBusiness {
   @Autowired(required = false)
   private BudgetIntegrationOrchestrator integrationOrchestrator;
 
+  @Autowired(required = false)
+  private BudgetDisbursementRepo budgetDisbursementRepo;
+
+  public void setBudgetDisbursementRepo(BudgetDisbursementRepo budgetDisbursementRepo) {
+    this.budgetDisbursementRepo = budgetDisbursementRepo;
+  }
+
   public JpaRepository<BudgetDisbursement, Long> getInjectedRepo() {
     return budgetDisbursementService.getRepository();
   }
@@ -92,7 +104,7 @@ public class BudgetDisbursementBusiness {
       data.setDisbursementType("DISBURSEMENT");
     }
     if (StrUtil.isBlank(data.getApprovalStatus())) {
-      data.setApprovalStatus("APPROVED_DISBURSED");
+      data.setApprovalStatus("DRAFT");
     }
     if (data.getRequestedAmount() == null && data.getAmount() != null) {
       data.setRequestedAmount(data.getAmount());
@@ -102,7 +114,7 @@ public class BudgetDisbursementBusiness {
       data.setNetPaymentAmount(data.getAmount().subtract(tax));
     }
     syncDisbursementSnapshots(data);
-    validateOverBudgetAndVoucherGates(data);
+    validateOverBudgetAndVoucherGates(data, null);
     BudgetDisbursement entity =
         genericUpsertHelper.upsert(
             data,
@@ -110,7 +122,7 @@ public class BudgetDisbursementBusiness {
             () -> budgetDisbursementMapper.toEntity(data),
             budgetDisbursementMapper::updateEntityFromData,
             budgetDisbursementService.getRepository());
-    if (entity.getAllocationId() != null) {
+    if (entity.getAllocationId() != null && !"DRAFT".equalsIgnoreCase(entity.getApprovalStatus())) {
       workflowEngineHelper.recalculateAllocationMetrics(entity.getAllocationId());
     }
     return enrichData(budgetDisbursementMapper.toData(entity));
@@ -126,6 +138,7 @@ public class BudgetDisbursementBusiness {
     data.setId(id);
     validateData(data);
     syncDisbursementSnapshots(data);
+    validateOverBudgetAndVoucherGates(data, existing);
     budgetDisbursementMapper.updateEntityFromData(data, existing);
     BudgetDisbursement saved = budgetDisbursementService.save(existing);
     if (oldAllocId != null) {
@@ -356,7 +369,8 @@ public class BudgetDisbursementBusiness {
         budgetDisbursementValidator, data, "budgetDisbursementData");
   }
 
-  private void validateOverBudgetAndVoucherGates(BudgetDisbursementData data) {
+  private void validateOverBudgetAndVoucherGates(
+      BudgetDisbursementData data, BudgetDisbursement existing) {
     String dtype = StrUtil.nullToEmpty(data.getDisbursementType()).toUpperCase();
     if (("DISBURSEMENT".equals(dtype)
             || "DIRECT_PAYMENT".equals(dtype)
@@ -374,12 +388,22 @@ public class BudgetDisbursementBusiness {
       BudgetAllocation alloc =
           budgetAllocationRepo.findById(data.getAllocationId()).orElse(null);
       if (alloc != null && alloc.getAvailableAmount() != null) {
-        if (data.getAmount().compareTo(alloc.getAvailableAmount()) > 0) {
+        BigDecimal effectiveAvailable = alloc.getAvailableAmount();
+        if (existing != null
+            && existing.getAllocationId() != null
+            && existing.getAllocationId().equals(data.getAllocationId())
+            && existing.getAmount() != null
+            && !"DRAFT".equalsIgnoreCase(existing.getApprovalStatus())
+            && !"REJECTED".equalsIgnoreCase(existing.getApprovalStatus())
+            && !"CANCELLED".equalsIgnoreCase(existing.getApprovalStatus())) {
+          effectiveAvailable = effectiveAvailable.add(existing.getAmount());
+        }
+        if (data.getAmount().compareTo(effectiveAvailable) > 0) {
           throw new BaseException(
               "Số tiền đề nghị giải ngân ("
                   + data.getAmount().toPlainString()
                   + " VNĐ) vượt quá dự toán khả dụng còn lại ("
-                  + alloc.getAvailableAmount().toPlainString()
+                  + effectiveAvailable.toPlainString()
                   + " VNĐ) của phân bổ ["
                   + alloc.getCode()
                   + "].");
@@ -511,6 +535,28 @@ public class BudgetDisbursementBusiness {
             ? String.valueOf(body.get("name"))
             : ("Cam kết chi thực hiện nhiệm vụ kế hoạch " + planCode);
 
+    Long resolvedNodeId =
+        alloc != null
+            ? alloc.getNodeId()
+            : (body != null && body.get("nodeId") != null
+                ? Long.valueOf(String.valueOf(body.get("nodeId")))
+                : null);
+    if (resolvedNodeId == null) {
+      throw new BaseException("Thiếu thông tin Đơn vị dự toán (nodeId) để lập cam kết chi.");
+    }
+    String resolvedNodeCode =
+        alloc != null
+            ? alloc.getNodeCode()
+            : (body != null && body.get("nodeCode") != null
+                ? String.valueOf(body.get("nodeCode"))
+                : null);
+    String resolvedNodeName =
+        alloc != null
+            ? alloc.getNodeName()
+            : (body != null && body.get("nodeName") != null
+                ? String.valueOf(body.get("nodeName"))
+                : null);
+
     BudgetDisbursementData data =
         BudgetDisbursementData.builder()
             .code(code)
@@ -518,9 +564,9 @@ public class BudgetDisbursementBusiness {
             .allocationId(alloc != null ? alloc.getId() : null)
             .allocationCode(alloc != null ? alloc.getCode() : null)
             .allocationName(alloc != null ? alloc.getName() : null)
-            .nodeId(alloc != null ? alloc.getNodeId() : 101L)
-            .nodeCode(alloc != null ? alloc.getNodeCode() : "VAN_PHONG_SO")
-            .nodeName(alloc != null ? alloc.getNodeName() : "Văn phòng Sở")
+            .nodeId(resolvedNodeId)
+            .nodeCode(resolvedNodeCode)
+            .nodeName(resolvedNodeName)
             .budgetYear(alloc != null ? alloc.getBudgetYear() : LocalDate.now().getYear())
             .disbursementType("COMMITMENT")
             .amount(amount)
@@ -565,7 +611,7 @@ public class BudgetDisbursementBusiness {
    * Kết xuất Gói Hồ sơ Giao dịch Điện tử Dịch vụ công Kho bạc Nhà nước (DVC KBNN / TABMIS - UPG-07)
    * theo Mẫu C2-02a/NS (Giấy rút dự toán ngân sách nhà nước) & C2-03/NS (Nghị định 11/2020/NĐ-CP).
    */
-  @Transactional(readOnly = true)
+  @Transactional
   public Map<String, Object> exportKbnnDvcPackage(Long id) {
     BudgetDisbursement disb =
         budgetDisbursementService
@@ -666,27 +712,46 @@ public class BudgetDisbursementBusiness {
             ? disb.getNetPaymentAmount()
             : amount.subtract(taxAmount);
 
+    String dossierNo =
+        StrUtil.isNotBlank(disb.getDvcKbnnDossierNo())
+            ? disb.getDvcKbnnDossierNo()
+            : ("DVC-"
+                + (disb.getBudgetYear() != null ? disb.getBudgetYear() : LocalDate.now().getYear())
+                + "-"
+                + disb.getId());
+    if (StrUtil.isBlank(disb.getDvcKbnnDossierNo())) {
+      disb.setDvcKbnnDossierNo(dossierNo);
+      budgetDisbursementService.save(disb);
+    }
+
+    String unitCodeSafe = StrUtil.blankToDefault(disb.getNodeCode(), "VAN_PHONG_SO");
+    String unitNameSafe = StrUtil.blankToDefault(disb.getNodeName(), "Đơn vị dự toán");
+    String beneficiarySafe =
+        StrUtil.blankToDefault(disb.getBeneficiaryName(), "Đơn vị thụ hưởng hợp đồng");
+
     String xmlPayloadPreview =
-        "<DVC_KBNN_PACKAGE version=\"3.5\" standard=\"ND11-2020-ND-CP\">"
+        "<DVC_KBNN_PACKAGE version=\"3.5\" standard=\"ND11-2020-ND-CP\" dossierNo=\""
+            + escapeXml(dossierNo)
+            + "\">"
             + "<HEADER><FORM_CODE>"
-            + formCode
+            + escapeXml(formCode)
             + "</FORM_CODE><TREASURY_REF>"
-            + treasuryRefCode
+            + escapeXml(treasuryRefCode)
             + "</TREASURY_REF><VOUCHER_NO>"
-            + voucherNo
+            + escapeXml(voucherNo)
             + "</VOUCHER_NO></HEADER>"
             + "<BUDGET_UNIT><CODE>"
-            + StrUtil.blankToDefault(disb.getNodeCode(), "VAN_PHONG_SO")
+            + escapeXml(unitCodeSafe)
             + "</CODE><NAME>"
-            + StrUtil.blankToDefault(disb.getNodeName(), "Văn phòng Sở")
+            + escapeXml(unitNameSafe)
             + "</NAME><TREASURY_ACCOUNT>"
-            + treasuryAccountNo
+            + escapeXml(treasuryAccountNo)
             + "</TREASURY_ACCOUNT><CHAPTER>"
-            + chapterCode
+            + escapeXml(chapterCode)
             + "</CHAPTER><CLAUSE>"
-            + clauseCode
+            + escapeXml(clauseCode)
             + "</CLAUSE><SUB_ITEM>"
-            + subItemCode
+            + escapeXml(subItemCode)
             + "</SUB_ITEM></BUDGET_UNIT>"
             + "<PAYMENT><GROSS_AMOUNT>"
             + amount.toPlainString()
@@ -695,15 +760,16 @@ public class BudgetDisbursementBusiness {
             + "</TAX_WITHHOLDING><NET_AMOUNT>"
             + netPaymentAmount.toPlainString()
             + "</NET_AMOUNT><BENEFICIARY>"
-            + StrUtil.blankToDefault(disb.getBeneficiaryName(), "Đơn vị thụ hưởng hợp đồng")
+            + escapeXml(beneficiarySafe)
             + "</BENEFICIARY><BANK_ACCOUNT>"
-            + beneficiaryBankAccount
+            + escapeXml(beneficiaryBankAccount)
             + "</BANK_ACCOUNT><BANK_NAME>"
-            + beneficiaryBankName
+            + escapeXml(beneficiaryBankName)
             + "</BANK_NAME></PAYMENT></DVC_KBNN_PACKAGE>";
 
     Map<String, Object> pkg = new java.util.LinkedHashMap<>();
     pkg.put("packageId", "PKG-KBNN-" + disb.getId() + "-" + LocalDate.now().getYear());
+    pkg.put("dvcKbnnDossierNo", dossierNo);
     pkg.put("formCode", formCode);
     pkg.put("dvcPortalStandard", "DVC-KBNN-v3.5 / TABMIS (Nghị định 11/2020/NĐ-CP)");
     pkg.put("disbursementId", disb.getId());
@@ -713,23 +779,146 @@ public class BudgetDisbursementBusiness {
     pkg.put("treasuryRefCode", treasuryRefCode);
     pkg.put("treasuryAccountNo", treasuryAccountNo);
     pkg.put("budgetYear", disb.getBudgetYear());
-    pkg.put("unitCode", StrUtil.blankToDefault(disb.getNodeCode(), "VAN_PHONG_SO"));
-    pkg.put("unitName", StrUtil.blankToDefault(disb.getNodeName(), "Văn phòng Sở"));
+    pkg.put("unitCode", unitCodeSafe);
+    pkg.put("unitName", unitNameSafe);
     pkg.put("chapterCode", chapterCode);
     pkg.put("clauseCode", clauseCode);
     pkg.put("subItemCode", subItemCode);
     pkg.put("amount", amount);
     pkg.put("taxAmount", taxAmount);
     pkg.put("netPaymentAmount", netPaymentAmount);
-    pkg.put(
-        "beneficiaryName",
-        StrUtil.blankToDefault(disb.getBeneficiaryName(), "Đơn vị thụ hưởng hợp đồng"));
+    pkg.put("beneficiaryName", beneficiarySafe);
     pkg.put("beneficiaryAccount", beneficiaryBankAccount);
     pkg.put("beneficiaryBank", beneficiaryBankName);
     pkg.put("digitalSignatureStatus", "READY_FOR_VGCA_TOKEN_SIGNING");
     pkg.put("exportedAt", LocalDate.now().toString());
     pkg.put("xmlPayloadPreview", xmlPayloadPreview);
     return pkg;
+  }
+
+  private String escapeXml(String value) {
+    if (value == null) {
+      return "";
+    }
+    return value
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace("\"", "&quot;")
+        .replace("'", "&apos;");
+  }
+
+  /**
+   * Đối soát và nghiệm thu tự động hồ sơ giải ngân khi nhận sự kiện {@link PaymentCompletedEvent}
+   * từ Apache Kafka ({@code tr-payment-service}). Bảo đảm idempotent khi nhận trùng thông điệp.
+   */
+  public Map<String, Object> settleFromPaymentEvent(PaymentCompletedEvent event) {
+    if (event == null) {
+      return Map.of("settled", false, "reason", "EMPTY_EVENT");
+    }
+    if (StrUtil.isNotBlank(event.getAppCode())
+        && !"budget".equalsIgnoreCase(event.getAppCode())
+        && !StrUtil.containsIgnoreCase(event.getSourceModule(), "BUDGET")) {
+      return Map.of("settled", false, "ignored", true, "appCode", event.getAppCode());
+    }
+    BudgetDisbursementRepo repo = resolveDisbursementRepo();
+    BudgetDisbursement disb = null;
+    if (StrUtil.isNotBlank(event.getReferenceId())) {
+      try {
+        disb = budgetDisbursementService.findById(Long.parseLong(event.getReferenceId().trim())).orElse(null);
+      } catch (NumberFormatException ignored) {
+        // Fallback sang các khóa tham chiếu khác
+      }
+    }
+    if (disb == null && event.getMetadata() != null && event.getMetadata().get("disbursementId") != null) {
+      try {
+        disb =
+            budgetDisbursementService
+                .findById(Long.parseLong(String.valueOf(event.getMetadata().get("disbursementId")).trim()))
+                .orElse(null);
+      } catch (NumberFormatException ignored) {
+        // Bỏ qua
+      }
+    }
+    if (disb == null && repo != null && StrUtil.isNotBlank(event.getTransactionCode())) {
+      disb = repo.findFirstByPaymentTxCodeIgnoreCase(event.getTransactionCode().trim()).orElse(null);
+    }
+    if (disb == null && repo != null && StrUtil.isNotBlank(event.getReferenceCode())) {
+      List<BudgetDisbursement> list =
+          repo.findAllByCodeIgnoreCaseIncludingDeletedSorted(event.getReferenceCode().trim());
+      for (BudgetDisbursement cand : list) {
+        if (cand.getDeletedAt() == null) {
+          disb = cand;
+          break;
+        }
+      }
+    }
+    if (disb == null) {
+      return Map.of(
+          "settled", false,
+          "ignored", true,
+          "transactionCode", StrUtil.nullToEmpty(event.getTransactionCode()));
+    }
+    if ("SETTLED".equalsIgnoreCase(disb.getApprovalStatus())) {
+      return Map.of(
+          "settled", true,
+          "idempotent", true,
+          "disbursementId", disb.getId(),
+          "disbursementCode", StrUtil.nullToEmpty(disb.getCode()),
+          "approvalStatus", "SETTLED");
+    }
+    String paymentTxCode =
+        StrUtil.blankToDefault(event.getTransactionCode(), StrUtil.blankToDefault(disb.getPaymentTxCode(), "PAY-" + disb.getCode()));
+    String treasuryRefCode =
+        StrUtil.blankToDefault(event.getBankReferenceNo(), StrUtil.blankToDefault(disb.getTreasuryRefCode(), "KBNN-KFK-" + disb.getId()));
+    String voucherNo =
+        StrUtil.blankToDefault(event.getReceiptNo(), StrUtil.blankToDefault(disb.getVoucherNo(), "UNC-KFK-" + disb.getCode()));
+
+    disb.setPaymentTxCode(paymentTxCode);
+    disb.setTreasuryRefCode(treasuryRefCode);
+    disb.setVoucherNo(voucherNo);
+    disb.setSettledAmount(event.getPaidAmount() != null ? event.getPaidAmount() : disb.getAmount());
+    disb.setSettledDate(event.getPaidAt() != null ? event.getPaidAt() : LocalDateTime.now());
+    if (!"ADVANCE".equalsIgnoreCase(disb.getDisbursementType())) {
+      disb.setDisbursementType("SETTLEMENT");
+    }
+    disb.setApprovalStatus("SETTLED");
+
+    BudgetDisbursement saved = budgetDisbursementService.save(disb);
+    BudgetAllocation updatedAlloc = null;
+    if (saved.getAllocationId() != null) {
+      updatedAlloc = workflowEngineHelper.recalculateAllocationMetrics(saved.getAllocationId());
+    }
+    if (integrationOrchestrator != null) {
+      integrationOrchestrator.notifyDisbursementEvent(saved, "SETTLED");
+      if (updatedAlloc != null) {
+        integrationOrchestrator.syncAllocationToLinkedPlan(
+            updatedAlloc,
+            "DISBURSEMENT_KAFKA_SETTLED",
+            saved.getAmount(),
+            saved.getCode(),
+            "Đối soát tự động qua Kafka payment-events [" + paymentTxCode + "]");
+      }
+    }
+    return Map.of(
+        "settled", true,
+        "idempotent", false,
+        "disbursementId", saved.getId(),
+        "disbursementCode", StrUtil.nullToEmpty(saved.getCode()),
+        "paymentTxCode", paymentTxCode,
+        "treasuryRefCode", treasuryRefCode,
+        "voucherNo", voucherNo,
+        "approvalStatus", saved.getApprovalStatus());
+  }
+
+  private BudgetDisbursementRepo resolveDisbursementRepo() {
+    if (budgetDisbursementRepo != null) {
+      return budgetDisbursementRepo;
+    }
+    if (budgetDisbursementService.getRepository() instanceof BudgetDisbursementRepo repo) {
+      return repo;
+    }
+    return null;
   }
 
   /**
@@ -802,6 +991,96 @@ public class BudgetDisbursementBusiness {
         "voucherNo", voucherNo,
         "approvalStatus", saved.getApprovalStatus(),
         "data", enrichData(budgetDisbursementMapper.toData(saved)));
+  }
+
+  /**
+   * Lấy danh sách rút gọn (Lookup Options) Hồ sơ Giải ngân — ẩn thông tin tài khoản thụ hưởng và
+   * mã số thuế.
+   */
+  @Transactional(readOnly = true)
+  public PagedData<RefData<Long>> getOptions(BudgetDisbursementSearchCriteria criteria) {
+    Pageable pageable = CoreUtils.getPageRequest(criteria);
+    Page<BudgetDisbursement> page = budgetDisbursementService.findAll(criteria, pageable);
+    return PagedData.from(
+        page,
+        e ->
+            RefData.of(
+                e.getId(),
+                e.getCode(),
+                e.getName(),
+                e.getStatus() != null ? e.getStatus().name() : null));
+  }
+
+  @Override
+  public String getAppCode() {
+    return "BudgetDisbursement";
+  }
+
+  @Override
+  public String getConfigNamespace() {
+    return "budget";
+  }
+
+  @Override
+  public String getProcessCode() {
+    return BudgetIntegrationOrchestrator.WF_PROCESS_DISBURSEMENT;
+  }
+
+  @Override
+  public String getCallbackUrl() {
+    return "/api/v1/budget/disbursements/workflow-callback";
+  }
+
+  @Override
+  public void submitWorkflow(Long id) {
+    BudgetDisbursement disb =
+        budgetDisbursementService
+            .findById(id)
+            .orElseThrow(() -> new EntityNotFoundException(BudgetDisbursement.class, id));
+    disb.setApprovalStatus("PENDING_APPROVAL");
+    budgetDisbursementService.save(disb);
+  }
+
+  @Override
+  public void cancelWorkflow(Long id) {
+    BudgetDisbursement disb =
+        budgetDisbursementService
+            .findById(id)
+            .orElseThrow(() -> new EntityNotFoundException(BudgetDisbursement.class, id));
+    disb.setApprovalStatus("DRAFT");
+    budgetDisbursementService.save(disb);
+    if (disb.getAllocationId() != null) {
+      workflowEngineHelper.recalculateAllocationMetrics(disb.getAllocationId());
+    }
+  }
+
+  @Override
+  public void onWorkflowCompleted(WorkflowCallbackPayload payload) {
+    if (payload == null || payload.getEntityId() == null) {
+      return;
+    }
+    String decision = StrUtil.blankToDefault(payload.getDecision(), "").toUpperCase();
+    if ("APPROVE".equals(decision) || "APPROVED".equals(decision)) {
+      approveDisbursement(
+          payload.getEntityId(), Map.of("comment", StrUtil.nullToEmpty(payload.getComment())));
+    } else if ("REJECT".equals(decision) || "REJECTED".equals(decision)) {
+      rejectDisbursement(
+          payload.getEntityId(), Map.of("reason", StrUtil.nullToEmpty(payload.getComment())));
+    }
+  }
+
+  @Override
+  public BudgetDisbursement changeEntityStatus(
+      Long id, LifecycleStatus targetStatus, String comment) {
+    BudgetDisbursement disb =
+        budgetDisbursementService
+            .findById(id)
+            .orElseThrow(() -> new EntityNotFoundException(BudgetDisbursement.class, id));
+    disb.setStatus(targetStatus);
+    if (StrUtil.isNotBlank(comment)) {
+      disb.setDescription(comment);
+    }
+    return budgetDisbursementService.save(disb);
   }
 
 }

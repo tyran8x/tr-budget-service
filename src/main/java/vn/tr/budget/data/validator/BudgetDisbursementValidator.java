@@ -7,6 +7,8 @@ import org.springframework.stereotype.Component;
 import org.springframework.validation.Errors;
 import vn.tr.budget.dao.service.BudgetDisbursementService;
 import vn.tr.budget.data.dto.BudgetDisbursementData;
+import vn.tr.budget.data.enums.BudgetDisbursementType;
+import vn.tr.budget.data.enums.BudgetWorkflowStatus;
 import vn.tr.common.core.utils.MessageUtils;
 import vn.tr.common.web.validator.BaseValidator;
 
@@ -61,6 +63,28 @@ public class BudgetDisbursementValidator extends BaseValidator {
               "budget.error.year.invalid",
               "Năm ngân sách phải nằm trong khoảng từ 2000 đến " + maxYear,
               maxYear));
+    }
+
+    if (data.getDisbursementType() != null
+        && !data.getDisbursementType().isBlank()
+        && !BudgetDisbursementType.isValid(data.getDisbursementType())) {
+      errors.rejectValue(
+          "disbursementType",
+          "budget.error.disbursementType.invalid",
+          MessageUtils.messageOrDefault(
+              "budget.error.disbursementType.invalid",
+              "Loại nghiệp vụ giải ngân '" + data.getDisbursementType() + "' không hợp lệ"));
+    }
+
+    if (data.getApprovalStatus() != null
+        && !data.getApprovalStatus().isBlank()
+        && !BudgetWorkflowStatus.isValid(data.getApprovalStatus())) {
+      errors.rejectValue(
+          "approvalStatus",
+          "budget.error.status.invalid",
+          MessageUtils.messageOrDefault(
+              "budget.error.status.invalid",
+              "Trạng thái chứng từ '" + data.getApprovalStatus() + "' không hợp lệ"));
     }
 
     if (data.getAmount() != null && data.getAmount().compareTo(BigDecimal.ZERO) <= 0) {

@@ -73,7 +73,7 @@ public class BudgetCategoryImportData {
 
   @ExcelProperty(value = "Nguồn kinh phí", index = 9)
   @ColumnWidth(20)
-  private String fundingSource;
+  private String sourceCode;
 
   @ExcelProperty(value = "Mô tả", index = 10)
   @ColumnWidth(45)

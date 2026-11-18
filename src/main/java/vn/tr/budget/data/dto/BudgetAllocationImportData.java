@@ -94,7 +94,7 @@ public class BudgetAllocationImportData {
 
   @ExcelProperty(value = "Trạng thái phê duyệt", index = 14)
   @ColumnWidth(20)
-  private String approvalStatus;
+  private String workflowStatus;
 
   @ExcelProperty(value = "Mô tả", index = 15)
   @ColumnWidth(45)

@@ -112,8 +112,6 @@ public class BudgetDisbursementData extends BaseCommonData {
 
   private String paymentTxCode;
 
-  private String paymentStatus;
-
   private LocalDate slaDueDate;
 
   private Long requestedByPersonId;
@@ -143,4 +141,10 @@ public class BudgetDisbursementData extends BaseCommonData {
   private Long locationId;
 
   private String currencyCode;
+
+  private Long commitmentDisbursementId;
+
+  private String dvcKbnnDossierNo;
+
+  private LocalDate advanceSettlementDueDate;
 }

@@ -63,4 +63,14 @@ public class BudgetEstimateItemData extends BaseCommonData {
   public void setRequireVoucher(Boolean requireVoucher) {
     this.isRequireVoucher = requireVoucher;
   }
+
+  private Integer budgetYear;
+
+  private String treePath;
+
+  private String displayIndex;
+
+  private BigDecimal maxCeilingAmount;
+
+  private String legalBasisRef;
 }

@@ -37,7 +37,7 @@ public final class BudgetCategorySpecifications {
       Predicate chapterCodeCondition = CriteriaBuilderHelper.createEquals(cb, root, "chapterCode", criteria.getChapterCode());
       Predicate clauseCodeCondition = CriteriaBuilderHelper.createEquals(cb, root, "clauseCode", criteria.getClauseCode());
       Predicate autonomyTypeCondition = CriteriaBuilderHelper.createEquals(cb, root, "autonomyType", criteria.getAutonomyType());
-      Predicate allowCarryOverCondition = CriteriaBuilderHelper.createEquals(cb, root, "allowCarryOver", criteria.getAllowCarryOver());
+      Predicate allowCarryOverCondition = CriteriaBuilderHelper.createEquals(cb, root, "isAllowCarryOver", criteria.getAllowCarryOver());
       return CriteriaBuilderHelper.and(
           cb,
           textSearchCondition,

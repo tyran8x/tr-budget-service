@@ -39,11 +39,15 @@ public class BudgetEstimateItemValidator extends BaseValidator {
     BudgetEstimateItemData data = (BudgetEstimateItemData) target;
 
     if (data.getCode() != null && !data.getCode().isBlank()) {
+      boolean duplicate =
+          data.getBudgetYear() != null
+              ? service.existsDuplicateCodeInYear(data.getCode(), data.getBudgetYear(), data.getId())
+              : isDuplicateCode(data.getId(), data.getCode());
       validateDuplicateCode(
           errors,
           "code",
           data.getCode(),
-          isDuplicateCode(data.getId(), data.getCode()),
+          duplicate,
           MessageUtils.messageOrDefault(
               "error.code.duplicate",
               "Mã định danh '" + data.getCode() + "' đã tồn tại trong hệ thống",
@@ -58,6 +62,19 @@ public class BudgetEstimateItemValidator extends BaseValidator {
           MessageUtils.messageOrDefault(
               "budget.error.amount.negative",
               "Số tiền dự toán / kinh phí không được nhỏ hơn 0"));
+    }
+
+    if (data.getMaxCeilingAmount() != null
+        && data.getMaxCeilingAmount().compareTo(BigDecimal.ZERO) < 0) {
+      errors.rejectValue(
+          "maxCeilingAmount",
+          "budget.error.amount.negative",
+          "Trần định mức tối đa không được nhỏ hơn 0");
+    }
+
+    for (String formulaIssue :
+        BudgetEstimateFormulaValidator.inspectFormula(data.getFormula(), data.getCode())) {
+      errors.rejectValue("formula", "budget.estimate.formula.invalid", formulaIssue);
     }
   }
 

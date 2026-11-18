@@ -42,5 +42,12 @@ public interface BudgetReportRepo
   @Query(value = "SELECT * FROM budget_report WHERE id = :id LIMIT 1", nativeQuery = true)
   Optional<BudgetReport> findByIdIncludingDeleted(@Param("id") Long id);
 
+  @Query(
+      value =
+          "SELECT * FROM budget_report WHERE id = :id AND (app_code = :appCode OR :appCode IS NULL) LIMIT 1",
+      nativeQuery = true)
+  Optional<BudgetReport> findByIdIncludingDeletedByAppCode(
+      @Param("id") Long id, @Param("appCode") String appCode);
+
   List<BudgetReport> findByBudgetYearOrderByIdDesc(Integer budgetYear);
 }

@@ -111,4 +111,14 @@ public class BudgetReportData extends BaseCommonData {
   private Long docSignatureId;
 
   private String attachmentFileIdsJson;
+
+  private String formTemplateCode;
+
+  private LocalDate dataCutoffDate;
+
+  private String reconciliationStatementJson;
+
+  private String treasuryConfirmationCode;
+
+  private LocalDate treasuryConfirmedDate;
 }
