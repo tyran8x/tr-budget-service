@@ -98,11 +98,26 @@ public class BudgetUnitConfigController extends BaseController {
   @SaCheckPermission(
       value = {
         "BudgetUnitConfigList",
+        "BudgetUnitConfigOptions",
+        "BudgetUnitConfigView",
+        "BudgetUnitConfigDetail",
+        "BudgetAllocationList",
         "BudgetAllocationCreate",
         "BudgetAllocationEdit",
+        "BudgetAllocationSelfApprove",
+        "BudgetEstimateItemList",
+        "BudgetDisbursementList",
         "BudgetDisbursementCreate",
+        "BudgetDisbursementEdit",
+        "BudgetTransactionList",
+        "BudgetTransactionCreate",
+        "BudgetTransactionEdit",
         "BudgetTransactionSubmit",
-        "BudgetReportConsolidate"
+        "BudgetReportList",
+        "BudgetReportCreate",
+        "BudgetReportEdit",
+        "BudgetReportConsolidate",
+        "BudgetDashboardQuery"
       },
       mode = SaMode.OR)
   @GetMapping("/options")

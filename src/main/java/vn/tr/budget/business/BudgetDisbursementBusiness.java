@@ -28,6 +28,7 @@ import vn.tr.common.web.data.dto.BulkOperationResult;
 import vn.tr.common.web.data.dto.BulkSortOrderData;
 import vn.tr.common.web.utils.BusinessLogicHelper;
 import vn.tr.common.web.utils.CoreUtils;
+import vn.tr.common.web.utils.LookupOptionsHelper;
 import vn.tr.common.web.workflow.WorkflowBusinessSupport;
 import vn.tr.common.web.workflow.WorkflowCallbackPayload;
 import java.math.BigDecimal;
@@ -999,8 +1000,11 @@ public class BudgetDisbursementBusiness implements WorkflowBusinessSupport<Budge
    */
   @Transactional(readOnly = true)
   public PagedData<RefData<Long>> getOptions(BudgetDisbursementSearchCriteria criteria) {
-    Pageable pageable = CoreUtils.getPageRequest(criteria);
-    Page<BudgetDisbursement> page = budgetDisbursementService.findAll(criteria, pageable);
+    BudgetDisbursementSearchCriteria effective =
+        LookupOptionsHelper.prepare(
+            criteria != null ? criteria : new BudgetDisbursementSearchCriteria());
+    Pageable pageable = CoreUtils.getPageRequest(effective);
+    Page<BudgetDisbursement> page = budgetDisbursementService.findAll(effective, pageable);
     return PagedData.from(
         page,
         e ->
@@ -1008,7 +1012,7 @@ public class BudgetDisbursementBusiness implements WorkflowBusinessSupport<Budge
                 e.getId(),
                 e.getCode(),
                 e.getName(),
-                e.getStatus() != null ? e.getStatus().name() : null));
+                LookupOptionsHelper.normalizeStatus(e.getStatus())));
   }
 
   @Override

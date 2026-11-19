@@ -27,6 +27,7 @@ import vn.tr.common.web.data.dto.BulkOperationResult;
 import vn.tr.common.web.data.dto.BulkSortOrderData;
 import vn.tr.common.web.utils.BusinessLogicHelper;
 import vn.tr.common.web.utils.CoreUtils;
+import vn.tr.common.web.utils.LookupOptionsHelper;
 import java.math.BigDecimal;
 import org.springframework.beans.factory.annotation.Autowired;
 import vn.tr.budget.business.helper.BudgetIntegrationOrchestrator;
@@ -263,8 +264,11 @@ public class BudgetUnitConfigBusiness {
    */
   @Transactional(readOnly = true)
   public PagedData<RefData<Long>> getOptions(BudgetUnitConfigSearchCriteria criteria) {
-    Pageable pageable = CoreUtils.getPageRequest(criteria);
-    Page<BudgetUnitConfig> page = budgetUnitConfigService.findAll(criteria, pageable);
+    BudgetUnitConfigSearchCriteria effective =
+        LookupOptionsHelper.prepare(
+            criteria != null ? criteria : new BudgetUnitConfigSearchCriteria());
+    Pageable pageable = CoreUtils.getPageRequest(effective);
+    Page<BudgetUnitConfig> page = budgetUnitConfigService.findAll(effective, pageable);
     return PagedData.from(
         page,
         e ->
@@ -272,7 +276,7 @@ public class BudgetUnitConfigBusiness {
                     e.getId(),
                     e.getCode(),
                     e.getName(),
-                    e.getStatus() != null ? e.getStatus().name() : null)
+                    LookupOptionsHelper.normalizeStatus(e.getStatus()))
                 .addExtra("nodeId", e.getNodeId())
                 .addExtra("nodeCode", e.getNodeCode())
                 .addExtra("nodeName", e.getNodeName()));

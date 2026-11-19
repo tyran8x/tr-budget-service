@@ -99,7 +99,19 @@ public class BudgetDisbursementController extends BaseController {
   }
 
   @SaCheckPermission(
-      value = {"BudgetDisbursementList", "BudgetReportList"},
+      value = {
+        "BudgetDisbursementList",
+        "BudgetDisbursementOptions",
+        "BudgetDisbursementView",
+        "BudgetDisbursementDetail",
+        "BudgetAllocationList",
+        "BudgetTransactionList",
+        "BudgetReportList",
+        "BudgetReportCreate",
+        "BudgetReportEdit",
+        "BudgetReportConsolidate",
+        "BudgetDashboardQuery"
+      },
       mode = SaMode.OR)
   @GetMapping("/options")
   @Operation(summary = "Lấy danh sách rút gọn (Lookup Options) Hồ sơ Giải ngân Kho bạc")

@@ -5,6 +5,7 @@ import org.springframework.data.jpa.domain.Specification;
 import vn.tr.budget.dao.model.BudgetDisbursement;
 import vn.tr.budget.data.criteria.BudgetDisbursementSearchCriteria;
 import vn.tr.common.jpa.helper.CriteriaBuilderHelper;
+import vn.tr.common.web.utils.LookupOptionsHelper;
 
 /**
  * JPA Specification cho BudgetDisbursement.
@@ -24,7 +25,9 @@ public final class BudgetDisbursementSpecifications {
           CriteriaBuilderHelper.createOrUnaccentedLike(
               cb, root, criteria.getSearch(), "name", "code", "allocationCode", "nodeName", "beneficiaryName", "voucherNo", "contractNo");
       Predicate statusCondition =
-          CriteriaBuilderHelper.createEquals(cb, root, "status", criteria.getStatus());
+          LookupOptionsHelper.hasExplicitIds(criteria)
+              ? null
+              : CriteriaBuilderHelper.createEquals(cb, root, "status", criteria.getStatus());
       Predicate idsCondition = CriteriaBuilderHelper.createIn(cb, root, "id", criteria.getIds());
       Predicate codesCondition =
           CriteriaBuilderHelper.createIn(cb, root, "code", criteria.getCodes());

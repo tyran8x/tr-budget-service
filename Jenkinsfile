@@ -158,7 +158,7 @@ pipeline {
                             echo "--- DOCKER BUILD & DEPLOY ---"
                             mkdir -p "${remoteDir}"
                             cd "${remoteDir}" || { echo "❌ Cannot cd: ${remoteDir}"; exit 1; }
-                            printf "FROM eclipse-temurin:25-jre-alpine\\nWORKDIR /app\\nCOPY ${svcName}.jar app.jar\\nENV TZ=Asia/Ho_Chi_Minh\\nENV SPRING_PROFILES_ACTIVE=docker,${envLower}\\nENTRYPOINT [\\\"java\\\", \\\"-Xms128m\\\", \\\"-Xmx512m\\\", \\\"-XX:+UseContainerSupport\\\", \\\"-jar\\\", \\\"app.jar\\\"]\\n" > Dockerfile.deploy
+                            printf "FROM eclipse-temurin:25-jre-alpine\\nWORKDIR /app\\nCOPY ${svcName}.jar app.jar\\nENV TZ=Asia/Ho_Chi_Minh\\nENV SPRING_PROFILES_ACTIVE=docker,${envLower}\\nENTRYPOINT [\\\"java\\\", \\\"-Xms128m\\\", \\\"-Xmx512m\\\", \\\"-XX:+UseContainerSupport\\\", \\\"-XX:-UseBASE64Intrinsics\\\", \\\"-jar\\\", \\\"app.jar\\\"]\\n" > Dockerfile.deploy
                             IMAGE_NAME="tyran8x/${svcName}"
                             docker build -f Dockerfile.deploy -t \${IMAGE_NAME}:${envLower} -t \${IMAGE_NAME}:${appVer} .
                             docker ps -q --filter "publish=8306" | xargs -r docker stop || true

@@ -97,7 +97,19 @@ public class BudgetTransactionController extends BaseController {
   }
 
   @SaCheckPermission(
-      value = {"BudgetTransactionList", "BudgetAllocationList", "BudgetReportList"},
+      value = {
+        "BudgetTransactionList",
+        "BudgetTransactionOptions",
+        "BudgetTransactionView",
+        "BudgetTransactionDetail",
+        "BudgetAllocationList",
+        "BudgetDisbursementList",
+        "BudgetReportList",
+        "BudgetReportCreate",
+        "BudgetReportEdit",
+        "BudgetReportConsolidate",
+        "BudgetDashboardQuery"
+      },
       mode = SaMode.OR)
   @GetMapping("/options")
   @Operation(summary = "Lấy danh sách rút gọn (Lookup Options) Giao dịch Sổ cái Ngân sách")

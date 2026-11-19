@@ -146,8 +146,6 @@ sa-token:
   token-style: jwt
   jwt-secret-key: ${SA_TOKEN_JWT_SECRET:DnictPro@123}
   is-log: false
-  shared-lookup:
-    extra-read-prefixes: ${SA_TOKEN_SHARED_EXTRA_READ_PREFIXES:BudgetCategory,BudgetEstimateItem,BudgetUnitConfig}
 
 redisson:
   keyPrefix: ${REDISSON_KEY_PREFIX:${spring.application.name}}

@@ -33,6 +33,7 @@ import vn.tr.common.web.data.dto.BulkOperationResult;
 import vn.tr.common.web.data.dto.BulkSortOrderData;
 import vn.tr.common.web.utils.BusinessLogicHelper;
 import vn.tr.common.web.utils.CoreUtils;
+import vn.tr.common.web.utils.LookupOptionsHelper;
 
 
 /**
@@ -472,8 +473,11 @@ public class BudgetCategoryBusiness {
   /** Lấy danh sách rút gọn (Lookup Options) của Danh mục Loại - Khoản. */
   @Transactional(readOnly = true)
   public PagedData<RefData<Long>> getOptions(BudgetCategorySearchCriteria criteria) {
-    Pageable pageable = CoreUtils.getPageRequest(criteria);
-    Page<BudgetCategory> page = budgetCategoryService.findAll(criteria, pageable);
+    BudgetCategorySearchCriteria effective =
+        LookupOptionsHelper.prepare(
+            criteria != null ? criteria : new BudgetCategorySearchCriteria());
+    Pageable pageable = CoreUtils.getPageRequest(effective);
+    Page<BudgetCategory> page = budgetCategoryService.findAll(effective, pageable);
     return PagedData.from(
         page,
         e ->
@@ -481,7 +485,7 @@ public class BudgetCategoryBusiness {
                 e.getId(),
                 e.getCode(),
                 e.getName(),
-                e.getStatus() != null ? e.getStatus().name() : null));
+                LookupOptionsHelper.normalizeStatus(e.getStatus())));
   }
 
 }

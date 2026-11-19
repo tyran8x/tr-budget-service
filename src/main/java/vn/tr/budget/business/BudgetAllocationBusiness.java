@@ -27,6 +27,7 @@ import vn.tr.common.web.data.dto.BulkOperationResult;
 import vn.tr.common.web.data.dto.BulkSortOrderData;
 import vn.tr.common.web.utils.BusinessLogicHelper;
 import vn.tr.common.web.utils.CoreUtils;
+import vn.tr.common.web.utils.LookupOptionsHelper;
 import vn.tr.common.web.workflow.WorkflowBusinessSupport;
 import vn.tr.common.web.workflow.WorkflowCallbackPayload;
 import java.math.BigDecimal;
@@ -687,8 +688,11 @@ public class BudgetAllocationBusiness implements WorkflowBusinessSupport<BudgetA
   /** Lấy danh sách rút gọn (Lookup Options) Phương án Phân bổ Kinh phí. */
   @Transactional(readOnly = true)
   public PagedData<RefData<Long>> getOptions(BudgetAllocationSearchCriteria criteria) {
-    Pageable pageable = CoreUtils.getPageRequest(criteria);
-    Page<BudgetAllocation> page = budgetAllocationService.findAll(criteria, pageable);
+    BudgetAllocationSearchCriteria effective =
+        LookupOptionsHelper.prepare(
+            criteria != null ? criteria : new BudgetAllocationSearchCriteria());
+    Pageable pageable = CoreUtils.getPageRequest(effective);
+    Page<BudgetAllocation> page = budgetAllocationService.findAll(effective, pageable);
     return PagedData.from(
         page,
         e ->
@@ -696,7 +700,7 @@ public class BudgetAllocationBusiness implements WorkflowBusinessSupport<BudgetA
                     e.getId(),
                     e.getCode(),
                     e.getName(),
-                    e.getStatus() != null ? e.getStatus().name() : null)
+                    LookupOptionsHelper.normalizeStatus(e.getStatus()))
                 .addExtra("budgetYear", e.getBudgetYear())
                 .addExtra("nodeId", e.getNodeId())
                 .addExtra("availableAmount", e.getAvailableAmount()));

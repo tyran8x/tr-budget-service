@@ -5,6 +5,7 @@ import org.springframework.data.jpa.domain.Specification;
 import vn.tr.budget.dao.model.BudgetReport;
 import vn.tr.budget.data.criteria.BudgetReportSearchCriteria;
 import vn.tr.common.jpa.helper.CriteriaBuilderHelper;
+import vn.tr.common.web.utils.LookupOptionsHelper;
 
 /**
  * JPA Specification cho BudgetReport.
@@ -24,7 +25,9 @@ public final class BudgetReportSpecifications {
           CriteriaBuilderHelper.createOrUnaccentedLike(
               cb, root, criteria.getSearch(), "name", "code", "nodeCode", "nodeName", "reportPeriod", "reportScope");
       Predicate statusCondition =
-          CriteriaBuilderHelper.createEquals(cb, root, "status", criteria.getStatus());
+          LookupOptionsHelper.hasExplicitIds(criteria)
+              ? null
+              : CriteriaBuilderHelper.createEquals(cb, root, "status", criteria.getStatus());
       Predicate idsCondition = CriteriaBuilderHelper.createIn(cb, root, "id", criteria.getIds());
       Predicate codesCondition =
           CriteriaBuilderHelper.createIn(cb, root, "code", criteria.getCodes());

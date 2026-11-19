@@ -180,6 +180,7 @@ start_app() {
 
     local JVM_ARGS="$JAVA_OPTS \
         -XX:+UseContainerSupport \
+        -XX:-UseBASE64Intrinsics \
         -DLOG_PATH=$LOG_BASE_PATH \
         -Dspring.application.name=$APP_NAME \
         -Dspring.profiles.active=$SPRING_PROFILE \

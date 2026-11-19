@@ -94,7 +94,16 @@ public class BudgetReportController extends BaseController {
     return success(budgetReportBusiness.findAll(criteria));
   }
 
-  @SaCheckPermission(value = {"BudgetReportList"}, mode = SaMode.OR)
+  @SaCheckPermission(
+      value = {
+        "BudgetReportList",
+        "BudgetReportOptions",
+        "BudgetReportView",
+        "BudgetReportDetail",
+        "BudgetAllocationList",
+        "BudgetDashboardQuery"
+      },
+      mode = SaMode.OR)
   @GetMapping("/options")
   @Operation(summary = "Lấy danh sách rút gọn (Lookup Options) Báo cáo Kinh phí Định kỳ")
   public R<PagedData<RefData<Long>>> getOptions(BudgetReportSearchCriteria criteria) {

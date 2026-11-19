@@ -5,6 +5,7 @@ import org.springframework.data.jpa.domain.Specification;
 import vn.tr.budget.dao.model.BudgetTransaction;
 import vn.tr.budget.data.criteria.BudgetTransactionSearchCriteria;
 import vn.tr.common.jpa.helper.CriteriaBuilderHelper;
+import vn.tr.common.web.utils.LookupOptionsHelper;
 
 /**
  * JPA Specification cho BudgetTransaction.
@@ -24,7 +25,9 @@ public final class BudgetTransactionSpecifications {
           CriteriaBuilderHelper.createOrUnaccentedLike(
               cb, root, criteria.getSearch(), "name", "code", "allocationCode", "nodeName", "txType", "decisionNo", "reason");
       Predicate statusCondition =
-          CriteriaBuilderHelper.createEquals(cb, root, "status", criteria.getStatus());
+          LookupOptionsHelper.hasExplicitIds(criteria)
+              ? null
+              : CriteriaBuilderHelper.createEquals(cb, root, "status", criteria.getStatus());
       Predicate idsCondition = CriteriaBuilderHelper.createIn(cb, root, "id", criteria.getIds());
       Predicate codesCondition =
           CriteriaBuilderHelper.createIn(cb, root, "code", criteria.getCodes());

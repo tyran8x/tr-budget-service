@@ -315,12 +315,15 @@ class BudgetAuditRemediationTest {
             mock(BusinessLogicHelper.class),
             mock(BudgetWorkflowEngineHelper.class));
 
-    PagedData<RefData<Long>> cfgOptions =
-        cfgBusiness.getOptions(new BudgetUnitConfigSearchCriteria());
+    BudgetUnitConfigSearchCriteria cfgCriteria = new BudgetUnitConfigSearchCriteria();
+    cfgCriteria.setSize(999);
+    PagedData<RefData<Long>> cfgOptions = cfgBusiness.getOptions(cfgCriteria);
+    assertThat(cfgCriteria.getSize()).isEqualTo(200);
     assertThat(cfgOptions.getContent()).hasSize(1);
     RefData<Long> opt = cfgOptions.getContent().getFirst();
     assertThat(opt.getKey()).isEqualTo(1L);
     assertThat(opt.getCode()).isEqualTo("UNIT-101");
+    assertThat(opt.getStatus()).isEqualTo("ACTIVE");
     assertThat(opt.getExtra()).doesNotContainKeys("taxCode", "bankAccountNo", "treasuryAccountNo");
 
     BudgetDisbursementService disbService = mock(BudgetDisbursementService.class);

@@ -30,6 +30,7 @@ import vn.tr.common.web.data.dto.BulkOperationResult;
 import vn.tr.common.web.data.dto.BulkSortOrderData;
 import vn.tr.common.web.utils.BusinessLogicHelper;
 import vn.tr.common.web.utils.CoreUtils;
+import vn.tr.common.web.utils.LookupOptionsHelper;
 import vn.tr.common.web.workflow.WorkflowBusinessSupport;
 import vn.tr.common.web.workflow.WorkflowCallbackPayload;
 import java.math.BigDecimal;
@@ -1488,8 +1489,11 @@ public class BudgetReportBusiness implements WorkflowBusinessSupport<BudgetRepor
   /** Lấy danh sách rút gọn (Lookup Options) Báo cáo Kinh phí Định kỳ. */
   @Transactional(readOnly = true)
   public PagedData<RefData<Long>> getOptions(BudgetReportSearchCriteria criteria) {
-    Pageable pageable = CoreUtils.getPageRequest(criteria);
-    Page<BudgetReport> page = budgetReportService.findAll(criteria, pageable);
+    BudgetReportSearchCriteria effective =
+        LookupOptionsHelper.prepare(
+            criteria != null ? criteria : new BudgetReportSearchCriteria());
+    Pageable pageable = CoreUtils.getPageRequest(effective);
+    Page<BudgetReport> page = budgetReportService.findAll(effective, pageable);
     return PagedData.from(
         page,
         e ->
@@ -1497,7 +1501,7 @@ public class BudgetReportBusiness implements WorkflowBusinessSupport<BudgetRepor
                 e.getId(),
                 e.getCode(),
                 e.getName(),
-                e.getStatus() != null ? e.getStatus().name() : null));
+                LookupOptionsHelper.normalizeStatus(e.getStatus())));
   }
 
   @Override

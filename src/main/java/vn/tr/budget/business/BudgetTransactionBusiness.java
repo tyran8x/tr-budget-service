@@ -34,6 +34,7 @@ import vn.tr.common.web.data.dto.BulkOperationResult;
 import vn.tr.common.web.data.dto.BulkSortOrderData;
 import vn.tr.common.web.utils.BusinessLogicHelper;
 import vn.tr.common.web.utils.CoreUtils;
+import vn.tr.common.web.utils.LookupOptionsHelper;
 import vn.tr.common.web.workflow.WorkflowBusinessSupport;
 import vn.tr.common.web.workflow.WorkflowCallbackPayload;
 import java.math.BigDecimal;
@@ -2562,8 +2563,11 @@ public class BudgetTransactionBusiness implements WorkflowBusinessSupport<Budget
   /** Lấy danh sách rút gọn (Lookup Options) Giao dịch Sổ cái Ngân sách. */
   @Transactional(readOnly = true)
   public PagedData<RefData<Long>> getOptions(BudgetTransactionSearchCriteria criteria) {
-    Pageable pageable = CoreUtils.getPageRequest(criteria);
-    Page<BudgetTransaction> page = budgetTransactionService.findAll(criteria, pageable);
+    BudgetTransactionSearchCriteria effective =
+        LookupOptionsHelper.prepare(
+            criteria != null ? criteria : new BudgetTransactionSearchCriteria());
+    Pageable pageable = CoreUtils.getPageRequest(effective);
+    Page<BudgetTransaction> page = budgetTransactionService.findAll(effective, pageable);
     return PagedData.from(
         page,
         e ->
@@ -2571,7 +2575,7 @@ public class BudgetTransactionBusiness implements WorkflowBusinessSupport<Budget
                 e.getId(),
                 e.getCode(),
                 e.getName(),
-                e.getStatus() != null ? e.getStatus().name() : null));
+                LookupOptionsHelper.normalizeStatus(e.getStatus())));
   }
 
   @Override

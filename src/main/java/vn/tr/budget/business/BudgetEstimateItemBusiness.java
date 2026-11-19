@@ -39,6 +39,7 @@ import vn.tr.common.web.data.dto.BulkOperationResult;
 import vn.tr.common.web.data.dto.BulkSortOrderData;
 import vn.tr.common.web.utils.BusinessLogicHelper;
 import vn.tr.common.web.utils.CoreUtils;
+import vn.tr.common.web.utils.LookupOptionsHelper;
 import vn.tr.common.core.utils.ServiceUtils;
 
 /**
@@ -408,8 +409,11 @@ public class BudgetEstimateItemBusiness {
   /** Lấy danh sách rút gọn (Lookup Options) của Mục Dự toán Thu - Chi. */
   @Transactional(readOnly = true)
   public PagedData<RefData<Long>> getOptions(BudgetEstimateItemSearchCriteria criteria) {
-    Pageable pageable = CoreUtils.getPageRequest(criteria);
-    Page<BudgetEstimateItem> page = budgetEstimateItemService.findAll(criteria, pageable);
+    BudgetEstimateItemSearchCriteria effective =
+        LookupOptionsHelper.prepare(
+            criteria != null ? criteria : new BudgetEstimateItemSearchCriteria());
+    Pageable pageable = CoreUtils.getPageRequest(effective);
+    Page<BudgetEstimateItem> page = budgetEstimateItemService.findAll(effective, pageable);
     return PagedData.from(
         page,
         e ->
@@ -417,7 +421,7 @@ public class BudgetEstimateItemBusiness {
                 e.getId(),
                 e.getCode(),
                 e.getName(),
-                e.getStatus() != null ? e.getStatus().name() : null));
+                LookupOptionsHelper.normalizeStatus(e.getStatus())));
   }
 
 }

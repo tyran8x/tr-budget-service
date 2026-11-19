@@ -101,10 +101,24 @@ public class BudgetEstimateItemController extends BaseController {
   @SaCheckPermission(
       value = {
         "BudgetEstimateItemList",
+        "BudgetEstimateItemOptions",
+        "BudgetEstimateItemView",
+        "BudgetEstimateItemDetail",
+        "BudgetAllocationList",
         "BudgetAllocationCreate",
         "BudgetAllocationEdit",
+        "BudgetDisbursementList",
         "BudgetDisbursementCreate",
-        "BudgetDisbursementEdit"
+        "BudgetDisbursementEdit",
+        "BudgetTransactionList",
+        "BudgetTransactionCreate",
+        "BudgetTransactionEdit",
+        "BudgetTransactionSubmit",
+        "BudgetReportList",
+        "BudgetReportCreate",
+        "BudgetReportEdit",
+        "BudgetReportConsolidate",
+        "BudgetDashboardQuery"
       },
       mode = SaMode.OR)
   @GetMapping("/options")

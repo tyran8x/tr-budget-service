@@ -96,10 +96,30 @@ public class BudgetCategoryController extends BaseController {
   @SaCheckPermission(
       value = {
         "BudgetCategoryList",
+        "BudgetCategoryOptions",
+        "BudgetCategoryView",
+        "BudgetCategoryDetail",
+        "BudgetAllocationList",
         "BudgetAllocationCreate",
         "BudgetAllocationEdit",
+        "BudgetEstimateItemList",
         "BudgetEstimateItemCreate",
-        "BudgetEstimateItemEdit"
+        "BudgetEstimateItemEdit",
+        "BudgetDisbursementList",
+        "BudgetDisbursementCreate",
+        "BudgetDisbursementEdit",
+        "BudgetTransactionList",
+        "BudgetTransactionCreate",
+        "BudgetTransactionEdit",
+        "BudgetTransactionSubmit",
+        "BudgetReportList",
+        "BudgetReportCreate",
+        "BudgetReportEdit",
+        "BudgetReportConsolidate",
+        "BudgetUnitConfigList",
+        "BudgetUnitConfigCreate",
+        "BudgetUnitConfigEdit",
+        "BudgetDashboardQuery"
       },
       mode = SaMode.OR)
   @GetMapping("/options")
