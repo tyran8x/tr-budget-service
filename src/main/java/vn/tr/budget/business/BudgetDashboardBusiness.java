@@ -3,10 +3,12 @@ package vn.tr.budget.business;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import lombok.RequiredArgsConstructor;
@@ -23,11 +25,13 @@ import vn.tr.budget.dao.service.BudgetAllocationRepo;
 import vn.tr.budget.dao.service.BudgetDisbursementRepo;
 import vn.tr.budget.dao.service.BudgetEstimateItemRepo;
 import vn.tr.budget.dao.service.BudgetTransactionRepo;
+import vn.tr.common.core.context.HeaderContext;
 import vn.tr.common.core.domain.R;
 import vn.tr.common.feign.ai.data.AiTaskRequest;
 import vn.tr.common.feign.ai.data.AiTaskResponse;
 import vn.tr.common.feign.ai.enums.AiTaskType;
 import vn.tr.common.feign.ai.service.AiClient;
+import vn.tr.common.feign.dto.InternalAnalyticsMetricData;
 import vn.tr.common.feign.identity.TemporalTargetScopeHelper;
 
 /**
@@ -196,6 +200,122 @@ public class BudgetDashboardBusiness {
     res.put("disbursementRatePercent", disbursementRate);
     res.put("settlementRatePercent", settlementRate);
     return res;
+  }
+
+  /**
+   * Tổng hợp chỉ số phân tích kinh phí chuẩn hóa (chỉ đọc) phục vụ Analytics Hub ({@code
+   * tr-reporting-service}) qua kênh S2S Same-Token.
+   */
+  public InternalAnalyticsMetricData getInternalAnalyticsMetrics(
+      String unitCode, Integer year, String period) {
+    int effectiveYear = year != null ? year : LocalDate.now().getYear();
+    String normUnit = unitCode != null && !unitCode.isBlank() ? unitCode.trim() : null;
+    String normPeriod = period != null && !period.isBlank() ? period.trim() : null;
+    String periodTypeFilter = resolveBudgetPeriodTypeFilter(normPeriod);
+
+    Map<String, Object> overview =
+        getOverview(effectiveYear, null, periodTypeFilter, normUnit, null);
+    List<Map<String, Object>> unitMatrix = getUnitMatrix(effectiveYear, normUnit, null);
+    List<Map<String, Object>> scorecards = getDisbursementScorecard(effectiveYear);
+
+    long totalRecords = toLongMetric(overview.get("totalAllocations"));
+    long completedRecords = toLongMetric(overview.get("approvedAllocations"));
+    double completionRate = toDoubleMetric(overview.get("disbursementRatePercent"));
+
+    double scoreSum = 0.0;
+    long scoreCount = 0L;
+    for (Map<String, Object> card : scorecards) {
+      if (normUnit != null) {
+        String cardCode = card.get("nodeCode") != null ? String.valueOf(card.get("nodeCode")) : "";
+        String cardAgency =
+            card.get("agencyCode") != null ? String.valueOf(card.get("agencyCode")) : "";
+        if (!cardCode.equalsIgnoreCase(normUnit) && !cardAgency.equalsIgnoreCase(normUnit)) {
+          continue;
+        }
+      }
+      Object scoreObj = card.get("totalDisciplineScore");
+      if (scoreObj instanceof Number num) {
+        scoreSum += num.doubleValue();
+        scoreCount++;
+      }
+    }
+    double avgScore =
+        scoreCount > 0 ? Math.round((scoreSum / scoreCount) * 100.0) / 100.0 : completionRate;
+
+    List<Map<String, Object>> breakdown = new ArrayList<>();
+    for (Map<String, Object> u : unitMatrix) {
+      Map<String, Object> row = new LinkedHashMap<>();
+      row.put("unitCode", u.get("nodeCode"));
+      row.put("unitName", u.get("nodeName"));
+      row.put("totalRecords", toLongMetric(u.get("allocationsCount")));
+      row.put("effectiveAmount", u.get("effectiveAmount"));
+      row.put("disbursedAmount", u.get("disbursedAmount"));
+      row.put("availableAmount", u.get("availableAmount"));
+      row.put("completionRate", toDoubleMetric(u.get("disbursementRatePercent")));
+      breakdown.add(row);
+    }
+
+    Map<String, Object> metrics = new LinkedHashMap<>();
+    metrics.put("totalAllocations", totalRecords);
+    metrics.put("approvedAllocations", completedRecords);
+    metrics.put("pendingAllocations", toLongMetric(overview.get("pendingAllocations")));
+    metrics.put("totalTransactions", toLongMetric(overview.get("totalTransactions")));
+    metrics.put("totalDisbursements", toLongMetric(overview.get("totalDisbursements")));
+    metrics.put("totalInitialBudget", overview.get("totalInitialBudget"));
+    metrics.put("totalEffectiveBudget", overview.get("totalEffectiveBudget"));
+    metrics.put("totalDisbursedBudget", overview.get("totalDisbursedBudget"));
+    metrics.put("totalSettledBudget", overview.get("totalSettledBudget"));
+    metrics.put("totalAvailableBudget", overview.get("totalAvailableBudget"));
+    metrics.put("totalCommittedBudget", overview.get("totalCommittedBudget"));
+    metrics.put("totalRevenueEstimate", overview.get("totalRevenueEstimate"));
+    metrics.put("totalRevenueActual", overview.get("totalRevenueActual"));
+    metrics.put("disbursementRatePercent", overview.get("disbursementRatePercent"));
+    metrics.put("settlementRatePercent", overview.get("settlementRatePercent"));
+
+    String resolvedAppCode = HeaderContext.getAppCode();
+    if (resolvedAppCode == null || resolvedAppCode.isBlank()) {
+      resolvedAppCode = "budget";
+    }
+
+    return InternalAnalyticsMetricData.builder()
+        .sourceService("tr-budget-service")
+        .appCode(resolvedAppCode)
+        .unitCode(normUnit)
+        .reportYear(effectiveYear)
+        .reportPeriod(normPeriod != null ? normPeriod : "YEAR")
+        .totalRecords(totalRecords)
+        .completedRecords(completedRecords)
+        .completionRate(completionRate)
+        .avgScore(avgScore)
+        .metrics(metrics)
+        .breakdownByUnit(breakdown)
+        .generatedAt(LocalDateTime.now())
+        .build();
+  }
+
+  private static String resolveBudgetPeriodTypeFilter(String period) {
+    if (period == null || period.isBlank()) {
+      return null;
+    }
+    String up = period.trim().toUpperCase(Locale.ROOT);
+    if ("ANNUAL".equals(up) || "QUARTERLY".equals(up) || "MONTHLY".equals(up)) {
+      return up;
+    }
+    return null;
+  }
+
+  private static long toLongMetric(Object val) {
+    if (val instanceof Number num) {
+      return num.longValue();
+    }
+    return 0L;
+  }
+
+  private static double toDoubleMetric(Object val) {
+    if (val instanceof Number num) {
+      return Math.round(num.doubleValue() * 100.0) / 100.0;
+    }
+    return 0.0;
   }
 
   public List<Map<String, Object>> getUnitMatrix(Integer budgetYear) {

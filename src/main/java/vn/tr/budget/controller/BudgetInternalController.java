@@ -1,5 +1,7 @@
 package vn.tr.budget.controller;
 
+import cn.dev33.satoken.annotation.SaIgnore;
+import cn.dev33.satoken.same.SaSameUtil;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.swagger.v3.oas.annotations.Hidden;
 import io.swagger.v3.oas.annotations.Operation;
@@ -23,6 +25,7 @@ import vn.tr.common.feign.budget.data.BudgetLedgerTransactionData;
 import vn.tr.common.feign.budget.data.BudgetPaymentSettleData;
 import vn.tr.common.feign.budget.data.BudgetPlanSyncRequestData;
 import vn.tr.common.feign.budget.data.BudgetPlanSyncResultData;
+import vn.tr.common.feign.dto.InternalAnalyticsMetricData;
 import vn.tr.common.web.core.BaseController;
 
 /**
@@ -39,6 +42,7 @@ import vn.tr.common.web.core.BaseController;
  *
  * @author tyran8x
  */
+@SaIgnore
 @Hidden
 @RestController
 @RequestMapping("/internal/budget")
@@ -105,5 +109,20 @@ public class BudgetInternalController extends BaseController {
       @RequestParam(value = "budgetYear", required = false) Integer budgetYear,
       @RequestParam(value = "nodeId", required = false) Long nodeId) {
     return success(budgetDashboardBusiness.getOverview(budgetYear, nodeId, null));
+  }
+
+  /**
+   * Truy vấn chỉ số phân tích kinh phí & giải ngân chuẩn hóa (chỉ đọc) phục vụ Analytics Hub
+   * ({@code tr-reporting-service}) qua kênh S2S Same-Token.
+   */
+  @SaIgnore
+  @GetMapping("/analytics/metrics")
+  @Operation(summary = "Truy vấn chỉ số phân tích ngân sách chuẩn hóa cho Analytics Hub (S2S)")
+  public R<InternalAnalyticsMetricData> getInternalAnalyticsMetrics(
+      @RequestParam(value = "unitCode", required = false) String unitCode,
+      @RequestParam(value = "year", required = false) Integer year,
+      @RequestParam(value = "period", required = false) String period) {
+    SaSameUtil.checkCurrentRequestToken();
+    return success(budgetDashboardBusiness.getInternalAnalyticsMetrics(unitCode, year, period));
   }
 }
