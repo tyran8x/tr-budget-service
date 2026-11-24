@@ -1,5 +1,6 @@
 package vn.tr.budget.business;
 
+import cn.hutool.core.util.StrUtil;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
@@ -25,6 +26,7 @@ import vn.tr.budget.dao.service.BudgetAllocationRepo;
 import vn.tr.budget.dao.service.BudgetDisbursementRepo;
 import vn.tr.budget.dao.service.BudgetEstimateItemRepo;
 import vn.tr.budget.dao.service.BudgetTransactionRepo;
+import vn.tr.common.core.constant.ServiceNameConstants;
 import vn.tr.common.core.context.HeaderContext;
 import vn.tr.common.core.domain.R;
 import vn.tr.common.feign.ai.data.AiTaskRequest;
@@ -33,6 +35,7 @@ import vn.tr.common.feign.ai.enums.AiTaskType;
 import vn.tr.common.feign.ai.service.AiClient;
 import vn.tr.common.feign.dto.InternalAnalyticsMetricData;
 import vn.tr.common.feign.identity.TemporalTargetScopeHelper;
+import vn.tr.common.jpa.aspect.GlobalAppCodeFilterAspect;
 
 /**
  * Nghiệp vụ Dashboard Thống kê Dự toán Thu - Chi, Ma trận Kinh phí theo Đơn vị,
@@ -203,83 +206,162 @@ public class BudgetDashboardBusiness {
   }
 
   /**
-   * Tổng hợp chỉ số phân tích kinh phí chuẩn hóa (chỉ đọc) phục vụ Analytics Hub ({@code
-   * tr-reporting-service}) qua kênh S2S Same-Token.
+   * Tổng hợp chỉ số phân tích kinh phí chuẩn hóa (chỉ đọc) bằng truy vấn SQL/JPQL {@code GROUP BY}
+   * cô lập chặt theo {@code app_code} (fail-closed nếu không có {@code X-App-Code} trừ trường hợp
+   * tường minh {@code SYSTEM}) phục vụ Analytics Hub ({@code tr-reporting-service}).
    */
   public InternalAnalyticsMetricData getInternalAnalyticsMetrics(
       String unitCode, Integer year, String period) {
     int effectiveYear = year != null ? year : LocalDate.now().getYear();
-    String normUnit = unitCode != null && !unitCode.isBlank() ? unitCode.trim() : null;
-    String normPeriod = period != null && !period.isBlank() ? period.trim() : null;
+    String normUnit = StrUtil.isNotBlank(unitCode) ? unitCode.trim() : null;
+    String normPeriod = StrUtil.isNotBlank(period) ? period.trim() : null;
     String periodTypeFilter = resolveBudgetPeriodTypeFilter(normPeriod);
 
-    Map<String, Object> overview =
-        getOverview(effectiveYear, null, periodTypeFilter, normUnit, null);
-    List<Map<String, Object>> unitMatrix = getUnitMatrix(effectiveYear, normUnit, null);
-    List<Map<String, Object>> scorecards = getDisbursementScorecard(effectiveYear);
-
-    long totalRecords = toLongMetric(overview.get("totalAllocations"));
-    long completedRecords = toLongMetric(overview.get("approvedAllocations"));
-    double completionRate = toDoubleMetric(overview.get("disbursementRatePercent"));
-
-    double scoreSum = 0.0;
-    long scoreCount = 0L;
-    for (Map<String, Object> card : scorecards) {
-      if (normUnit != null) {
-        String cardCode = card.get("nodeCode") != null ? String.valueOf(card.get("nodeCode")) : "";
-        String cardAgency =
-            card.get("agencyCode") != null ? String.valueOf(card.get("agencyCode")) : "";
-        if (!cardCode.equalsIgnoreCase(normUnit) && !cardAgency.equalsIgnoreCase(normUnit)) {
-          continue;
-        }
-      }
-      Object scoreObj = card.get("totalDisciplineScore");
-      if (scoreObj instanceof Number num) {
-        scoreSum += num.doubleValue();
-        scoreCount++;
-      }
+    String headerAppCode = HeaderContext.getAppCode();
+    boolean systemBypass = GlobalAppCodeFilterAspect.isExplicitSystemBypass(headerAppCode);
+    String effectiveAppCode = GlobalAppCodeFilterAspect.resolveEffectiveS2sAppCode();
+    if (!systemBypass && StrUtil.isBlank(effectiveAppCode)) {
+      return buildEmptyInternalAnalytics(normUnit, effectiveYear, normPeriod);
     }
-    double avgScore =
-        scoreCount > 0 ? Math.round((scoreSum / scoreCount) * 100.0) / 100.0 : completionRate;
+    String queryAppCode = systemBypass ? null : effectiveAppCode;
+
+    List<Object[]> summaryRows =
+        budgetAllocationRepo.summarizeInternalAnalytics(
+            effectiveYear, periodTypeFilter, normUnit, queryAppCode);
+    Object[] sr =
+        summaryRows != null && !summaryRows.isEmpty() && summaryRows.get(0) != null
+            ? summaryRows.get(0)
+            : new Object[0];
+
+    long totalRecords = toLongMetric(sr.length > 0 ? sr[0] : null);
+    long completedRecords = toLongMetric(sr.length > 1 ? sr[1] : null);
+    long pendingAllocations = toLongMetric(sr.length > 2 ? sr[2] : null);
+    BigDecimal totalRevenueEstimate = toBigDecimalMetric(sr.length > 3 ? sr[3] : null);
+    BigDecimal totalRevenueActual = toBigDecimalMetric(sr.length > 4 ? sr[4] : null);
+    BigDecimal totalInitial = toBigDecimalMetric(sr.length > 5 ? sr[5] : null);
+    BigDecimal totalEffective = toBigDecimalMetric(sr.length > 6 ? sr[6] : null);
+    BigDecimal totalCommitted = toBigDecimalMetric(sr.length > 7 ? sr[7] : null);
+    BigDecimal totalDisbursed = toBigDecimalMetric(sr.length > 8 ? sr[8] : null);
+    BigDecimal totalSettled = toBigDecimalMetric(sr.length > 9 ? sr[9] : null);
+    BigDecimal totalAvailable = toBigDecimalMetric(sr.length > 10 ? sr[10] : null);
+
+    BigDecimal disbursementRate =
+        totalEffective.compareTo(BigDecimal.ZERO) > 0
+            ? totalDisbursed
+                .multiply(new BigDecimal("100"))
+                .divide(totalEffective, 2, RoundingMode.HALF_UP)
+            : BigDecimal.ZERO;
+    BigDecimal settlementRate =
+        totalDisbursed.compareTo(BigDecimal.ZERO) > 0
+            ? totalSettled
+                .multiply(new BigDecimal("100"))
+                .divide(totalDisbursed, 2, RoundingMode.HALF_UP)
+            : BigDecimal.ZERO;
+
+    long totalTransactions =
+        budgetTransactionRepo.countInternalAnalytics(effectiveYear, normUnit, queryAppCode);
+    List<Object[]> disbSummaryRows =
+        budgetDisbursementRepo.summarizeInternalAnalytics(effectiveYear, normUnit, queryAppCode);
+    Object[] dr =
+        disbSummaryRows != null && !disbSummaryRows.isEmpty() && disbSummaryRows.get(0) != null
+            ? disbSummaryRows.get(0)
+            : new Object[0];
+    long totalDisbursements = toLongMetric(dr.length > 0 ? dr[0] : null);
+    long compliantVouchers = toLongMetric(dr.length > 1 ? dr[1] : null);
+    BigDecimal voucherComplianceScore =
+        totalDisbursements > 0
+            ? BigDecimal.valueOf(compliantVouchers)
+                .multiply(new BigDecimal("15.0"))
+                .divide(BigDecimal.valueOf(totalDisbursements), 1, RoundingMode.HALF_UP)
+            : new BigDecimal("14.5");
 
     List<Map<String, Object>> breakdown = new ArrayList<>();
-    for (Map<String, Object> u : unitMatrix) {
-      Map<String, Object> row = new LinkedHashMap<>();
-      row.put("unitCode", u.get("nodeCode"));
-      row.put("unitName", u.get("nodeName"));
-      row.put("totalRecords", toLongMetric(u.get("allocationsCount")));
-      row.put("effectiveAmount", u.get("effectiveAmount"));
-      row.put("disbursedAmount", u.get("disbursedAmount"));
-      row.put("availableAmount", u.get("availableAmount"));
-      row.put("completionRate", toDoubleMetric(u.get("disbursementRatePercent")));
-      breakdown.add(row);
+    double scoreSum = 0.0;
+    long scoreCount = 0L;
+    List<Object[]> unitRows =
+        budgetAllocationRepo.aggregateInternalAnalyticsByUnit(
+            effectiveYear, periodTypeFilter, normUnit, queryAppCode);
+    if (unitRows != null) {
+      for (Object[] ur : unitRows) {
+        if (ur == null || ur.length < 8) {
+          continue;
+        }
+        String uCode = ur[0] != null ? String.valueOf(ur[0]) : "GENERAL";
+        String uName = ur[1] != null ? String.valueOf(ur[1]) : uCode;
+        long uCount = toLongMetric(ur[2]);
+        BigDecimal uInitial = toBigDecimalMetric(ur[3]);
+        BigDecimal uEffective = toBigDecimalMetric(ur[4]);
+        BigDecimal uDisbursed = toBigDecimalMetric(ur[5]);
+        BigDecimal uSettled = toBigDecimalMetric(ur[6]);
+        BigDecimal uAvailable = toBigDecimalMetric(ur[7]);
+        BigDecimal uRate =
+            uEffective.compareTo(BigDecimal.ZERO) > 0
+                ? uDisbursed
+                    .multiply(new BigDecimal("100"))
+                    .divide(uEffective, 2, RoundingMode.HALF_UP)
+                : BigDecimal.ZERO;
+
+        BigDecimal disbScore =
+            uRate.multiply(new BigDecimal("0.40")).min(new BigDecimal("40.00")).setScale(1, RoundingMode.HALF_UP);
+        BigDecimal setRatio =
+            uDisbursed.compareTo(BigDecimal.ZERO) > 0
+                ? uSettled.multiply(new BigDecimal("100")).divide(uDisbursed, 2, RoundingMode.HALF_UP)
+                : new BigDecimal("85.00");
+        BigDecimal setScore =
+            setRatio.multiply(new BigDecimal("0.25")).min(new BigDecimal("25.00")).setScale(1, RoundingMode.HALF_UP);
+        BigDecimal varRatio =
+            uInitial.compareTo(BigDecimal.ZERO) > 0
+                ? uEffective.subtract(uInitial).abs().divide(uInitial, 4, RoundingMode.HALF_UP)
+                : BigDecimal.ZERO;
+        BigDecimal accScore =
+            new BigDecimal("20.0")
+                .subtract(varRatio.multiply(new BigDecimal("20.0")))
+                .max(new BigDecimal("12.0"))
+                .min(new BigDecimal("20.0"))
+                .setScale(1, RoundingMode.HALF_UP);
+        BigDecimal unitDisciplineScore = disbScore.add(setScore).add(accScore).add(voucherComplianceScore);
+        scoreSum += unitDisciplineScore.doubleValue();
+        scoreCount++;
+
+        Map<String, Object> row = new LinkedHashMap<>();
+        row.put("unitCode", uCode);
+        row.put("unitName", uName);
+        row.put("totalRecords", uCount);
+        row.put("effectiveAmount", uEffective);
+        row.put("disbursedAmount", uDisbursed);
+        row.put("availableAmount", uAvailable);
+        row.put("completionRate", toDoubleMetric(uRate));
+        breakdown.add(row);
+      }
     }
+
+    double completionRate = toDoubleMetric(disbursementRate);
+    double avgScore =
+        scoreCount > 0 ? Math.round((scoreSum / scoreCount) * 100.0) / 100.0 : completionRate;
 
     Map<String, Object> metrics = new LinkedHashMap<>();
     metrics.put("totalAllocations", totalRecords);
     metrics.put("approvedAllocations", completedRecords);
-    metrics.put("pendingAllocations", toLongMetric(overview.get("pendingAllocations")));
-    metrics.put("totalTransactions", toLongMetric(overview.get("totalTransactions")));
-    metrics.put("totalDisbursements", toLongMetric(overview.get("totalDisbursements")));
-    metrics.put("totalInitialBudget", overview.get("totalInitialBudget"));
-    metrics.put("totalEffectiveBudget", overview.get("totalEffectiveBudget"));
-    metrics.put("totalDisbursedBudget", overview.get("totalDisbursedBudget"));
-    metrics.put("totalSettledBudget", overview.get("totalSettledBudget"));
-    metrics.put("totalAvailableBudget", overview.get("totalAvailableBudget"));
-    metrics.put("totalCommittedBudget", overview.get("totalCommittedBudget"));
-    metrics.put("totalRevenueEstimate", overview.get("totalRevenueEstimate"));
-    metrics.put("totalRevenueActual", overview.get("totalRevenueActual"));
-    metrics.put("disbursementRatePercent", overview.get("disbursementRatePercent"));
-    metrics.put("settlementRatePercent", overview.get("settlementRatePercent"));
-
-    String resolvedAppCode = HeaderContext.getAppCode();
-    if (resolvedAppCode == null || resolvedAppCode.isBlank()) {
-      resolvedAppCode = "budget";
-    }
+    metrics.put("pendingAllocations", pendingAllocations);
+    metrics.put("totalTransactions", totalTransactions);
+    metrics.put("totalDisbursements", totalDisbursements);
+    metrics.put("totalInitialBudget", totalInitial);
+    metrics.put("totalEffectiveBudget", totalEffective);
+    metrics.put("totalDisbursedBudget", totalDisbursed);
+    metrics.put("totalSettledBudget", totalSettled);
+    metrics.put("totalAvailableBudget", totalAvailable);
+    metrics.put("totalCommittedBudget", totalCommitted);
+    metrics.put("totalRevenueEstimate", totalRevenueEstimate);
+    metrics.put("totalRevenueActual", totalRevenueActual);
+    metrics.put("disbursementRatePercent", disbursementRate);
+    metrics.put("settlementRatePercent", settlementRate);
 
     return InternalAnalyticsMetricData.builder()
-        .sourceService("tr-budget-service")
-        .appCode(resolvedAppCode)
+        .sourceService(ServiceNameConstants.BUDGET_SERVICE)
+        .appCode(
+            systemBypass
+                ? GlobalAppCodeFilterAspect.S2S_SYSTEM_BYPASS_APP_CODE
+                : effectiveAppCode)
         .unitCode(normUnit)
         .reportYear(effectiveYear)
         .reportPeriod(normPeriod != null ? normPeriod : "YEAR")
@@ -291,6 +373,50 @@ public class BudgetDashboardBusiness {
         .breakdownByUnit(breakdown)
         .generatedAt(LocalDateTime.now())
         .build();
+  }
+
+  private InternalAnalyticsMetricData buildEmptyInternalAnalytics(
+      String unitCode, int year, String period) {
+    Map<String, Object> metrics = new LinkedHashMap<>();
+    metrics.put("totalAllocations", 0L);
+    metrics.put("approvedAllocations", 0L);
+    metrics.put("pendingAllocations", 0L);
+    metrics.put("totalTransactions", 0L);
+    metrics.put("totalDisbursements", 0L);
+    metrics.put("totalInitialBudget", BigDecimal.ZERO);
+    metrics.put("totalEffectiveBudget", BigDecimal.ZERO);
+    metrics.put("totalDisbursedBudget", BigDecimal.ZERO);
+    metrics.put("totalSettledBudget", BigDecimal.ZERO);
+    metrics.put("totalAvailableBudget", BigDecimal.ZERO);
+    metrics.put("totalCommittedBudget", BigDecimal.ZERO);
+    metrics.put("totalRevenueEstimate", BigDecimal.ZERO);
+    metrics.put("totalRevenueActual", BigDecimal.ZERO);
+    metrics.put("disbursementRatePercent", BigDecimal.ZERO);
+    metrics.put("settlementRatePercent", BigDecimal.ZERO);
+    return InternalAnalyticsMetricData.builder()
+        .sourceService(ServiceNameConstants.BUDGET_SERVICE)
+        .appCode(null)
+        .unitCode(unitCode)
+        .reportYear(year)
+        .reportPeriod(period != null ? period : "YEAR")
+        .totalRecords(0L)
+        .completedRecords(0L)
+        .completionRate(0.0)
+        .avgScore(0.0)
+        .metrics(metrics)
+        .breakdownByUnit(List.of())
+        .generatedAt(LocalDateTime.now())
+        .build();
+  }
+
+  private static BigDecimal toBigDecimalMetric(Object val) {
+    if (val instanceof BigDecimal bd) {
+      return bd;
+    }
+    if (val instanceof Number num) {
+      return BigDecimal.valueOf(num.doubleValue());
+    }
+    return BigDecimal.ZERO;
   }
 
   private static String resolveBudgetPeriodTypeFilter(String period) {
@@ -574,7 +700,11 @@ public class BudgetDashboardBusiness {
 
   public List<Map<String, Object>> getRevenueExpenditureTree(Integer budgetYear) {
     int year = budgetYear != null ? budgetYear : LocalDate.now().getYear();
-    List<BudgetEstimateItem> items = new ArrayList<>(budgetEstimateItemRepo.findAll());
+    String effectiveAppCode = GlobalAppCodeFilterAspect.resolveEffectiveS2sAppCode();
+    List<BudgetEstimateItem> queriedItems =
+        budgetEstimateItemRepo.findByYearAndAppCodeOrdered(year, effectiveAppCode);
+    List<BudgetEstimateItem> items =
+        queriedItems != null ? new ArrayList<>(queriedItems) : new ArrayList<>();
     items.sort(
         Comparator.comparing(
                 BudgetEstimateItem::getSortOrder, Comparator.nullsLast(Comparator.naturalOrder()))

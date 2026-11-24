@@ -70,4 +70,12 @@ public interface BudgetEstimateItemRepo
           + "ORDER BY e.deletedAt ASC NULLS FIRST, e.updatedAt DESC")
   List<BudgetEstimateItem> findByCodeInYearSorted(
       @Param("code") String code, @Param("budgetYear") Integer budgetYear);
+
+  @Query(
+      "SELECT e FROM BudgetEstimateItem e "
+          + "WHERE (:budgetYear IS NULL OR e.budgetYear IS NULL OR e.budgetYear = :budgetYear) "
+          + "AND (:appCode IS NULL OR e.appCode = :appCode) "
+          + "ORDER BY e.sortOrder ASC NULLS LAST, e.code ASC, e.id ASC")
+  List<BudgetEstimateItem> findByYearAndAppCodeOrdered(
+      @Param("budgetYear") Integer budgetYear, @Param("appCode") String appCode);
 }

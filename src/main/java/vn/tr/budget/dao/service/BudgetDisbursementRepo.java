@@ -56,4 +56,18 @@ public interface BudgetDisbursementRepo
   List<BudgetDisbursement> findByAllocationIdOrderByIdAsc(Long allocationId);
 
   List<BudgetDisbursement> findByBudgetYearOrderByIdDesc(Integer budgetYear);
+
+  @Query(
+      "SELECT COUNT(d), "
+          + "COALESCE(SUM(CASE WHEN (d.voucherNo IS NOT NULL AND TRIM(d.voucherNo) <> '') "
+          + "  OR (d.treasuryRefCode IS NOT NULL AND TRIM(d.treasuryRefCode) <> '') THEN 1 ELSE 0 END), 0) "
+          + "FROM BudgetDisbursement d "
+          + "WHERE (:budgetYear IS NULL OR d.budgetYear = :budgetYear) "
+          + "AND (:unitCode IS NULL OR UPPER(COALESCE(d.nodeCode, '')) = UPPER(:unitCode) "
+          + "     OR CAST(d.nodeId AS string) = :unitCode) "
+          + "AND (:appCode IS NULL OR d.appCode = :appCode)")
+  List<Object[]> summarizeInternalAnalytics(
+      @Param("budgetYear") Integer budgetYear,
+      @Param("unitCode") String unitCode,
+      @Param("appCode") String appCode);
 }

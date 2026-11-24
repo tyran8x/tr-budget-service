@@ -3,6 +3,7 @@ package vn.tr.budget.business;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -262,7 +263,7 @@ class BudgetBusinessFlowTest {
                 .settledAmount(new BigDecimal("250000000"))
                 .build());
 
-    when(budgetEstimateItemRepo.findAll()).thenReturn(items);
+    when(budgetEstimateItemRepo.findByYearAndAppCodeOrdered(eq(2026), any())).thenReturn(items);
     when(budgetAllocationRepo.findByBudgetYearOrderByIdAsc(2026)).thenReturn(allocs);
 
     List<Map<String, Object>> tree = dashboardBusiness.getRevenueExpenditureTree(2026);

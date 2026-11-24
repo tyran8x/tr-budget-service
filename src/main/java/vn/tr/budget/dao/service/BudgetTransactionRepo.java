@@ -54,4 +54,16 @@ public interface BudgetTransactionRepo
   List<BudgetTransaction> findByAllocationIdOrderByIdAsc(Long allocationId);
 
   List<BudgetTransaction> findByBudgetYearOrderByIdDesc(Integer budgetYear);
+
+  @Query(
+      "SELECT COUNT(t) FROM BudgetTransaction t "
+          + "WHERE (:budgetYear IS NULL OR t.budgetYear = :budgetYear) "
+          + "AND (:unitCode IS NULL OR UPPER(COALESCE(t.nodeCode, '')) = UPPER(:unitCode) "
+          + "     OR UPPER(COALESCE(t.domainCode, '')) = UPPER(:unitCode) "
+          + "     OR CAST(t.nodeId AS string) = :unitCode) "
+          + "AND (:appCode IS NULL OR t.appCode = :appCode)")
+  long countInternalAnalytics(
+      @Param("budgetYear") Integer budgetYear,
+      @Param("unitCode") String unitCode,
+      @Param("appCode") String appCode);
 }

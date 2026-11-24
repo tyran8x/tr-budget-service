@@ -46,6 +46,7 @@ import vn.tr.budget.dao.service.BudgetCategoryRepo;
 import vn.tr.budget.dao.service.BudgetDisbursementRepo;
 import vn.tr.budget.dao.service.BudgetEstimateItemRepo;
 import vn.tr.budget.dao.service.BudgetUnitConfigRepo;
+import vn.tr.budget.kafka.BudgetFactMetricPublisher;
 import vn.tr.common.core.exception.base.BaseException;
 
 /**
@@ -83,8 +84,15 @@ public class BudgetDisbursementBusiness implements WorkflowBusinessSupport<Budge
   @Autowired(required = false)
   private BudgetDisbursementRepo budgetDisbursementRepo;
 
+  @Autowired(required = false)
+  private BudgetFactMetricPublisher factMetricPublisher;
+
   public void setBudgetDisbursementRepo(BudgetDisbursementRepo budgetDisbursementRepo) {
     this.budgetDisbursementRepo = budgetDisbursementRepo;
+  }
+
+  public void setFactMetricPublisher(BudgetFactMetricPublisher factMetricPublisher) {
+    this.factMetricPublisher = factMetricPublisher;
   }
 
   public JpaRepository<BudgetDisbursement, Long> getInjectedRepo() {
@@ -460,6 +468,9 @@ public class BudgetDisbursementBusiness implements WorkflowBusinessSupport<Budge
             "Giải ngân dự toán [" + saved.getCode() + "] " + saved.getName());
       }
     }
+    if (factMetricPublisher != null) {
+      factMetricPublisher.publishDisbursementSnapshot(saved, updatedAlloc, "DISBURSEMENT_APPROVED");
+    }
     return enrichData(budgetDisbursementMapper.toData(saved));
   }
 
@@ -502,6 +513,9 @@ public class BudgetDisbursementBusiness implements WorkflowBusinessSupport<Budge
             saved.getCode(),
             "Quyết toán chứng từ Kho bạc [" + saved.getVoucherNo() + "]");
       }
+    }
+    if (factMetricPublisher != null) {
+      factMetricPublisher.publishDisbursementSnapshot(saved, updatedAlloc, "DISBURSEMENT_SETTLED");
     }
     return enrichData(budgetDisbursementMapper.toData(saved));
   }
@@ -901,6 +915,10 @@ public class BudgetDisbursementBusiness implements WorkflowBusinessSupport<Budge
             "Đối soát tự động qua Kafka payment-events [" + paymentTxCode + "]");
       }
     }
+    if (factMetricPublisher != null) {
+      factMetricPublisher.publishDisbursementSnapshot(
+          saved, updatedAlloc, "DISBURSEMENT_KAFKA_SETTLED");
+    }
     return Map.of(
         "settled", true,
         "idempotent", false,
@@ -981,6 +999,10 @@ public class BudgetDisbursementBusiness implements WorkflowBusinessSupport<Budge
             saved.getCode(),
             "Đối soát tự động qua Webhook Thanh toán [" + paymentTxCode + "]");
       }
+    }
+    if (factMetricPublisher != null) {
+      factMetricPublisher.publishDisbursementSnapshot(
+          saved, updatedAlloc, "DISBURSEMENT_WEBHOOK_SETTLED");
     }
 
     return Map.of(

@@ -62,4 +62,53 @@ public interface BudgetAllocationRepo
   List<BudgetAllocation> findByLinkedPlanCodeIgnoreCaseOrderByIdAsc(String linkedPlanCode);
 
   List<BudgetAllocation> findByLinkedPlanIdOrderByIdAsc(Long linkedPlanId);
+
+  @Query(
+      "SELECT COUNT(a), "
+          + "COALESCE(SUM(CASE WHEN UPPER(COALESCE(a.workflowStatus, '')) IN ('APPROVED', 'EXECUTING') THEN 1 ELSE 0 END), 0), "
+          + "COALESCE(SUM(CASE WHEN UPPER(COALESCE(a.workflowStatus, '')) = 'SUBMITTED' THEN 1 ELSE 0 END), 0), "
+          + "COALESCE(SUM(CASE WHEN UPPER(COALESCE(a.itemType, '')) = 'REVENUE' THEN a.effectiveAmount ELSE 0 END), 0), "
+          + "COALESCE(SUM(CASE WHEN UPPER(COALESCE(a.itemType, '')) = 'REVENUE' THEN a.disbursedAmount ELSE 0 END), 0), "
+          + "COALESCE(SUM(CASE WHEN UPPER(COALESCE(a.itemType, 'EXPENDITURE')) <> 'REVENUE' THEN a.initialAmount ELSE 0 END), 0), "
+          + "COALESCE(SUM(CASE WHEN UPPER(COALESCE(a.itemType, 'EXPENDITURE')) <> 'REVENUE' THEN a.effectiveAmount ELSE 0 END), 0), "
+          + "COALESCE(SUM(CASE WHEN UPPER(COALESCE(a.itemType, 'EXPENDITURE')) <> 'REVENUE' THEN a.committedAmount ELSE 0 END), 0), "
+          + "COALESCE(SUM(CASE WHEN UPPER(COALESCE(a.itemType, 'EXPENDITURE')) <> 'REVENUE' THEN a.disbursedAmount ELSE 0 END), 0), "
+          + "COALESCE(SUM(CASE WHEN UPPER(COALESCE(a.itemType, 'EXPENDITURE')) <> 'REVENUE' THEN a.settledAmount ELSE 0 END), 0), "
+          + "COALESCE(SUM(CASE WHEN UPPER(COALESCE(a.itemType, 'EXPENDITURE')) <> 'REVENUE' THEN a.availableAmount ELSE 0 END), 0) "
+          + "FROM BudgetAllocation a "
+          + "WHERE (:budgetYear IS NULL OR a.budgetYear = :budgetYear) "
+          + "AND (:periodType IS NULL OR UPPER(COALESCE(a.periodType, '')) = UPPER(:periodType)) "
+          + "AND (:unitCode IS NULL OR UPPER(COALESCE(a.nodeCode, '')) = UPPER(:unitCode) "
+          + "     OR UPPER(COALESCE(a.domainCode, '')) = UPPER(:unitCode) "
+          + "     OR CAST(a.nodeId AS string) = :unitCode) "
+          + "AND (:appCode IS NULL OR a.appCode = :appCode)")
+  List<Object[]> summarizeInternalAnalytics(
+      @Param("budgetYear") Integer budgetYear,
+      @Param("periodType") String periodType,
+      @Param("unitCode") String unitCode,
+      @Param("appCode") String appCode);
+
+  @Query(
+      "SELECT COALESCE(a.nodeCode, CONCAT('NODE_', CAST(a.nodeId AS string))), "
+          + "COALESCE(a.nodeName, a.nodeCode, 'GENERAL'), "
+          + "COUNT(a), "
+          + "COALESCE(SUM(a.initialAmount), 0), "
+          + "COALESCE(SUM(a.effectiveAmount), 0), "
+          + "COALESCE(SUM(a.disbursedAmount), 0), "
+          + "COALESCE(SUM(a.settledAmount), 0), "
+          + "COALESCE(SUM(a.availableAmount), 0) "
+          + "FROM BudgetAllocation a "
+          + "WHERE UPPER(COALESCE(a.itemType, 'EXPENDITURE')) <> 'REVENUE' "
+          + "AND (:budgetYear IS NULL OR a.budgetYear = :budgetYear) "
+          + "AND (:periodType IS NULL OR UPPER(COALESCE(a.periodType, '')) = UPPER(:periodType)) "
+          + "AND (:unitCode IS NULL OR UPPER(COALESCE(a.nodeCode, '')) = UPPER(:unitCode) "
+          + "     OR UPPER(COALESCE(a.domainCode, '')) = UPPER(:unitCode) "
+          + "     OR CAST(a.nodeId AS string) = :unitCode) "
+          + "AND (:appCode IS NULL OR a.appCode = :appCode) "
+          + "GROUP BY a.nodeCode, a.nodeId, a.nodeName")
+  List<Object[]> aggregateInternalAnalyticsByUnit(
+      @Param("budgetYear") Integer budgetYear,
+      @Param("periodType") String periodType,
+      @Param("unitCode") String unitCode,
+      @Param("appCode") String appCode);
 }

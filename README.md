@@ -53,7 +53,7 @@ tr-budget-service/
 | **Mã quyền `@SaCheckPermission`** | **107** | Quyền truy cập bảo vệ API theo chuẩn `{EntityName}{Action}` |
 | **Business / Service / Repo** | **11** / **21** / **7** | Kèm **7** lớp Dynamic Specifications |
 | **DTOs / Criteria / Mappers / Validators** | **15** / **7** / **7** / **8** | Lớp truyền tải dữ liệu, bộ lọc, ánh xạ MapStruct & kiểm tra hợp lệ |
-| **Enums / Unit Tests** | **6** / **6** | Danh mục liệt kê & kịch bản kiểm thử tự động |
+| **Enums / Unit Tests** | **6** / **7** | Danh mục liệt kê & kịch bản kiểm thử tự động |
 | **Phụ thuộc `tr-common-*`** | **13** | `tr-common-core`, `tr-common-jpa`, `tr-common-web`, `tr-common-redis`, `tr-common-kafka`, `tr-common-log`, `tr-common-security`, `tr-common-satoken`, `tr-common-encrypt`, `tr-common-feign`, `tr-common-excel`, `tr-common-ratelimiter`, `tr-common-doc` |
 
 ### 2. Danh mục Thực thể CSDL (`7` Entities)
@@ -95,7 +95,7 @@ tr-budget-service/
 | **Mappers (`data.mapper.*`)** | 7 | `BudgetAllocationMapper`, `BudgetCategoryMapper`, `BudgetDisbursementMapper`, `BudgetEstimateItemMapper`, `BudgetReportMapper`, `BudgetTransactionMapper`, `BudgetUnitConfigMapper` |
 | **Validators (`data.validator.*`)** | 8 | `BudgetAllocationValidator`, `BudgetCategoryValidator`, `BudgetDisbursementValidator`, `BudgetEstimateFormulaValidator`, `BudgetEstimateItemValidator`, `BudgetReportValidator`, `BudgetTransactionValidator`, `BudgetUnitConfigValidator` |
 | **Enums (`data.enums.*`)** | 6 | `BudgetApprovalScope`, `BudgetAutonomyType`, `BudgetDisbursementType`, `BudgetPeriodType`, `BudgetTransactionType`, `BudgetWorkflowStatus` |
-| **Unit / Integration Tests** | 6 | `BudgetAuditRemediationTest`, `BudgetBusinessFlowTest`, `BudgetDashboardAndWebhookTest`, `BudgetTargetScopeValidatorTest`, `BudgetTreeBuilderAndBatchTest`, `BudgetWorkflowEngineTest` |
+| **Unit / Integration Tests** | 7 | `BudgetAuditRemediationTest`, `BudgetBusinessFlowTest`, `BudgetDashboardAndWebhookTest`, `BudgetInternalAnalyticsAndFactPublishTest`, `BudgetTargetScopeValidatorTest`, `BudgetTreeBuilderAndBatchTest`, `BudgetWorkflowEngineTest` |
 
 <!-- AUTO-GENERATED-BE-README:END -->
 
@@ -129,4 +129,4 @@ mvn spring-boot:run -f tr-business-services/tr-budget-service/pom.xml -Dspring-b
 
 ---
 
-Cập nhật lần cuối: 2026-11-21
+Cập nhật lần cuối: 2026-11-24
