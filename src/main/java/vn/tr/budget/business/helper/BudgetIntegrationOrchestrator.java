@@ -509,7 +509,7 @@ public class BudgetIntegrationOrchestrator {
               .actionType("SUBMIT")
               .variables(vars)
               .build();
-      R<Long> res = wfClient.startWorkflow(req);
+      R<Long> res = wfClient.startWorkflowInternal(req);
       return res != null ? res.getData() : null;
     } catch (Exception e) {
       workflowBackoffUntil = System.currentTimeMillis() + CIRCUIT_BACKOFF_MS;
@@ -531,9 +531,9 @@ public class BudgetIntegrationOrchestrator {
     }
     try {
       if ("WITHDRAW".equalsIgnoreCase(action)) {
-        wfClient.withdraw(appCode, entityId, comment);
+        wfClient.withdrawInternal(appCode, entityId, comment);
       } else {
-        wfClient.executeAction(
+        wfClient.executeActionInternal(
             WfActionRequest.builder()
                 .appCode(appCode)
                 .entityId(entityId)
@@ -569,7 +569,7 @@ public class BudgetIntegrationOrchestrator {
             : null;
     if (wfClient != null && alloc.getId() != null) {
       try {
-        R<WfEntityStatus> res = wfClient.getEntityStatus("BudgetAllocation", alloc.getId());
+        R<WfEntityStatus> res = wfClient.getEntityStatusInternal("BudgetAllocation", alloc.getId());
         if (res != null && res.getData() != null) {
           result.put("engineConnected", true);
           result.put("engineStatus", res.getData());
