@@ -17,17 +17,11 @@
             <id>nexus-releases</id>
             <username>tr-deloyment</username>
             <password>DnictPro@123</password>
-            <repositoryOrigins>
-                <repositoryOrigin>http://49.156.54.118</repositoryOrigin>
-            </repositoryOrigins>
         </server>
         <server>
             <id>nexus-snapshots</id>
             <username>tr-deloyment</username>
             <password>DnictPro@123</password>
-            <repositoryOrigins>
-                <repositoryOrigin>http://49.156.54.118</repositoryOrigin>
-            </repositoryOrigins>
         </server>
     </servers>
 
