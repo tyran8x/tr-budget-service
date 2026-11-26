@@ -5,6 +5,8 @@ FROM maven:3.10.0-eclipse-temurin-25-alpine AS builder
 LABEL maintainer="tyran8x" \
       org.opencontainers.image.authors="tyran8x@gmail.com"
 
+ARG SKIP_TESTS=false
+
 WORKDIR /app
 
 # Copy dependency files first for better caching
@@ -18,7 +20,7 @@ COPY target* ./target/
 RUN --mount=type=cache,target=/root/.m2 \
     if ! ls target/*.jar >/dev/null 2>&1; then \
         mvn -B -s settings.xml dependency:go-offline dependency:resolve-plugins && \
-        mvn -B -s settings.xml package spring-boot:repackage -DskipTests; \
+        mvn -B -s settings.xml package spring-boot:repackage -DskipTests=${SKIP_TESTS}; \
     fi && \
     java -Djarmode=tools -jar target/*.jar extract --layers --launcher --destination target/extracted
 
@@ -38,7 +40,7 @@ ENV APP_HOME=/app \
 
 WORKDIR $APP_HOME
 
-# Create user and setup directories in single layer
+# Create non-root user and setup directories in single layer
 RUN adduser -D -h ${APP_HOME} -s /bin/sh appuser && \
     apk update && apk add --no-cache curl tzdata && \
     rm -rf /var/cache/apk/* && \

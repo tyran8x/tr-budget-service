@@ -4,10 +4,15 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.TreeSet;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -15,7 +20,6 @@ import org.springframework.transaction.annotation.Transactional;
 import vn.tr.budget.dao.model.BudgetAllocation;
 import vn.tr.budget.dao.model.BudgetCategory;
 import vn.tr.budget.dao.model.BudgetDisbursement;
-import vn.tr.budget.dao.model.BudgetEstimateItem;
 import vn.tr.budget.dao.model.BudgetTransaction;
 import vn.tr.budget.dao.model.BudgetUnitConfig;
 import vn.tr.budget.dao.service.BudgetAllocationRepo;
@@ -25,11 +29,16 @@ import vn.tr.budget.dao.service.BudgetEstimateItemRepo;
 import vn.tr.budget.dao.service.BudgetTransactionRepo;
 import vn.tr.budget.dao.service.BudgetUnitConfigRepo;
 import vn.tr.common.core.enums.LifecycleStatus;
+import vn.tr.common.core.exception.base.BaseException;
 
 /**
- * Động cơ tính toán Cân đối Dự toán Kinh phí Đa kỳ, Kiểm tra Ma trận Tự chủ Tài chính Đơn vị,
- * Sổ cái Bút toán kép (Giao đầu năm, Bổ sung, Chuyển nguồn liên năm N -> N+1, Điều chuyển nội bộ)
- * và Kiểm soát Giải ngân Kho bạc.
+ * Động cơ tính toán Cân đối Dự toán Kinh phí Đa kỳ, Kiểm tra Ma trận Tự chủ Tài chính Đơn vị, Sổ
+ * cái Bút toán kép (Giao đầu năm, Bổ sung, Chuyển nguồn liên năm N -> N+1, Điều chuyển nội bộ) và
+ * Kiểm soát Giải ngân Kho bạc.
+ *
+ * <p>Cưỡng chế khóa bi quan theo thứ tự ID tăng dần ({@link #lockAllocationsInDeterministicOrder})
+ * chống TOCTOU double-spend & AB-BA deadlock, tính số dư theo whitelist trạng thái đã duyệt, và
+ * chuẩn hóa làm tròn tiền tệ {@code BigDecimal.setScale(2, RoundingMode.HALF_UP)}.
  *
  * @author tyran8x
  */
@@ -37,6 +46,12 @@ import vn.tr.common.core.enums.LifecycleStatus;
 @RequiredArgsConstructor
 @Slf4j
 public class BudgetWorkflowEngineHelper {
+
+  private static final Set<String> EFFECTIVE_TX_STATUSES =
+      Set.of("APPROVED", "SELF_APPROVED", "SETTLED", "EXECUTING", "LOCKED_SETTLED");
+
+  private static final Set<String> EFFECTIVE_DISB_STATUSES =
+      Set.of("COMMITTED", "APPROVED", "APPROVED_DISBURSED", "SETTLED", "EXECUTING", "LOCKED_SETTLED");
 
   private final BudgetAllocationRepo budgetAllocationRepo;
   private final BudgetTransactionRepo budgetTransactionRepo;
@@ -46,8 +61,45 @@ public class BudgetWorkflowEngineHelper {
   private final BudgetEstimateItemRepo budgetEstimateItemRepo;
 
   /**
-   * Kiểm tra cấu hình tự chủ tài chính của Đơn vị / Phòng ban.
+   * Khóa bi quan ({@code PESSIMISTIC_WRITE / SELECT ... FOR UPDATE}) các bản ghi {@link
+   * BudgetAllocation} theo thứ tự ID tăng dần tất định nhằm loại bỏ hoàn toàn AB-BA deadlock và
+   * TOCTOU double-spend.
    */
+  @Transactional
+  public Map<Long, BudgetAllocation> lockAllocationsInDeterministicOrder(Long... allocationIds) {
+    if (allocationIds == null || allocationIds.length == 0) {
+      return Collections.emptyMap();
+    }
+    TreeSet<Long> sortedUniqueIds = new TreeSet<>();
+    for (Long id : allocationIds) {
+      if (id != null) {
+        sortedUniqueIds.add(id);
+      }
+    }
+    Map<Long, BudgetAllocation> locked = new LinkedHashMap<>();
+    for (Long id : sortedUniqueIds) {
+      Optional<BudgetAllocation> opt = budgetAllocationRepo.findByIdForUpdate(id);
+      if (opt == null || opt.isEmpty()) {
+        opt = budgetAllocationRepo.findById(id);
+      }
+      if (opt != null && opt.isPresent()) {
+        locked.put(id, opt.get());
+      }
+    }
+    return locked;
+  }
+
+  /** Khóa bi quan một bản ghi {@link BudgetAllocation} trước khi kiểm tra số dư khả dụng. */
+  @Transactional
+  public Optional<BudgetAllocation> lockAllocation(Long allocationId) {
+    if (allocationId == null) {
+      return Optional.empty();
+    }
+    Map<Long, BudgetAllocation> locked = lockAllocationsInDeterministicOrder(allocationId);
+    return Optional.ofNullable(locked.get(allocationId));
+  }
+
+  /** Kiểm tra cấu hình tự chủ tài chính của Đơn vị / Phòng ban. */
   @Transactional(readOnly = true)
   public Map<String, Object> checkUnitAutonomy(
       Long nodeId, String categoryCode, BigDecimal proposedAmount) {
@@ -61,7 +113,7 @@ public class BudgetWorkflowEngineHelper {
     if (categoryCode != null && !categoryCode.isBlank()) {
       List<BudgetCategory> cats =
           budgetCategoryRepo.findAllByCodeIgnoreCaseIncludingDeletedSorted(categoryCode);
-      if (!cats.isEmpty() && cats.getFirst().getAllowCarryOver() != null) {
+      if (cats != null && !cats.isEmpty() && cats.getFirst().getAllowCarryOver() != null) {
         allowCarryOver = cats.getFirst().getAllowCarryOver();
       }
     }
@@ -72,7 +124,7 @@ public class BudgetWorkflowEngineHelper {
       result.put("canSelfTransfer", false);
       result.put("canCarryOver", allowCarryOver);
       result.put("canSelfApprove", false);
-      result.put("recommendedApprovalScope", "DIRECTORATE");
+      result.put("recommendedApprovalScope", "SUPERIOR_APPROVAL");
       return result;
     }
 
@@ -110,11 +162,14 @@ public class BudgetWorkflowEngineHelper {
         && proposedAmount.compareTo(limit) > 0) {
       canSelfApprove = false;
       denialReason =
-          "Số tiền đề xuất vượt hạn mức tự phê duyệt (" + limit.toPlainString() + " VNĐ) của đơn vị.";
+          "Số tiền đề xuất vượt hạn mức tự phê duyệt ("
+              + scaleMoney(limit).toPlainString()
+              + " VNĐ) của đơn vị.";
     }
 
     result.put("configured", true);
     result.put("unitConfigId", cfg.getId());
+    result.put("unitType", cfg.getUnitType());
     result.put("categoryAllowed", categoryAllowed);
     result.put("canSelfAllocate", canSelfAllocate);
     result.put("canSelfTransfer", canSelfTransfer);
@@ -122,7 +177,9 @@ public class BudgetWorkflowEngineHelper {
     result.put("canSelfApprove", canSelfApprove);
     result.put("selfApproveLimitAmount", limit);
     result.put("treasuryAccountNo", cfg.getTreasuryAccountNo());
-    result.put("recommendedApprovalScope", canSelfApprove ? "UNIT_SELF" : "DIRECTORATE");
+    result.put(
+        "recommendedApprovalScope",
+        canSelfApprove ? "UNIT_SELF_APPROVAL" : "SUPERIOR_APPROVAL");
     if (denialReason != null) {
       result.put("reason", denialReason);
       result.put("autonomyDenialReason", denialReason);
@@ -147,18 +204,16 @@ public class BudgetWorkflowEngineHelper {
   }
 
   /**
-   * Tính toán lại toàn bộ chỉ số Sổ cái Kinh phí và Giải ngân của một Phân bổ Dự toán (BudgetAllocation).
+   * Tính toán lại toàn bộ chỉ số Sổ cái Kinh phí và Giải ngân của một Phân bổ Dự toán
+   * ({@link BudgetAllocation}) theo danh sách trắng trạng thái đã duyệt.
    */
   @Transactional
   public BudgetAllocation recalculateAllocationMetrics(Long allocationId) {
     if (allocationId == null) {
       return null;
     }
-    Optional<BudgetAllocation> opt = budgetAllocationRepo.findByIdForUpdate(allocationId);
-    if (opt == null || opt.isEmpty()) {
-      opt = budgetAllocationRepo.findById(allocationId);
-    }
-    if (opt == null || opt.isEmpty()) {
+    Optional<BudgetAllocation> opt = lockAllocation(allocationId);
+    if (opt.isEmpty()) {
       return null;
     }
     BudgetAllocation alloc = opt.get();
@@ -173,92 +228,100 @@ public class BudgetWorkflowEngineHelper {
     BigDecimal txReduction = BigDecimal.ZERO;
     BigDecimal txExpiredCancelled = BigDecimal.ZERO;
     BigDecimal txHeld = BigDecimal.ZERO;
+    BigDecimal txFundDistributed = BigDecimal.ZERO;
     boolean hasInitialTx = false;
     boolean hasWithdrawalTx = false;
     boolean hasHoldTx = false;
 
-    for (BudgetTransaction tx : txs) {
-      String approvalStatus =
-          tx.getApprovalStatus() != null ? tx.getApprovalStatus().toUpperCase() : "";
-      if ("REJECTED".equals(approvalStatus)
-          || "PENDING".equals(approvalStatus)
-          || "PENDING_APPROVAL".equals(approvalStatus)
-          || "DRAFT".equals(approvalStatus)
-          || "CANCELLED".equals(approvalStatus)) {
-        continue;
-      }
-      BigDecimal amt = safe(tx.getAmount());
-      String type = tx.getTxType() != null ? tx.getTxType().toUpperCase() : "";
-      switch (type) {
-        case "INITIAL_ALLOCATION" -> {
-          txInitial = txInitial.add(amt);
-          hasInitialTx = true;
+    if (txs != null) {
+      for (BudgetTransaction tx : txs) {
+        String approvalStatus =
+            tx.getApprovalStatus() != null ? tx.getApprovalStatus().trim().toUpperCase() : "";
+        if (!EFFECTIVE_TX_STATUSES.contains(approvalStatus)) {
+          continue;
         }
-        case "SUPPLEMENT", "ADDITIONAL", "BATCH_PAYROLL_INDEXATION" -> txSupplement =
-            txSupplement.add(amt.abs());
-        case "TRANCHE_RELEASE" -> {
-          txHeld = txHeld.subtract(amt.abs());
-          hasHoldTx = true;
-        }
-        case "WITHDRAWAL" -> {
-          txExpiredCancelled = txExpiredCancelled.add(amt.abs());
-          hasWithdrawalTx = true;
-        }
-        case "AUTONOMY_FUND_DISTRIBUTION" -> {
-          // Phân bổ nội bộ từ quỹ tự chủ không làm phình Tổng dự toán được giao (effectiveAmount)
-        }
-        case "ADJUSTMENT" -> {
-          if (amt.compareTo(BigDecimal.ZERO) >= 0) {
-            txSupplement = txSupplement.add(amt);
-          } else {
-            txReduction = txReduction.add(amt.abs());
+        BigDecimal amt = safe(tx.getAmount());
+        String type = tx.getTxType() != null ? tx.getTxType().trim().toUpperCase() : "";
+        switch (type) {
+          case "INITIAL_ALLOCATION" -> {
+            txInitial = txInitial.add(amt);
+            hasInitialTx = true;
           }
-        }
-        case "CARRY_OVER_IN" -> txCarryIn = txCarryIn.add(amt.abs());
-        case "CARRY_OVER_OUT" -> txCarryOut = txCarryOut.add(amt.abs());
-        case "TRANSFER_IN" -> txTransferNet = txTransferNet.add(amt.abs());
-        case "TRANSFER_OUT" -> txTransferNet = txTransferNet.subtract(amt.abs());
-        case "INTERNAL_TRANSFER" -> {
-          if ("CREDIT".equalsIgnoreCase(tx.getEntryDirection())) {
-            txTransferNet = txTransferNet.add(amt.abs());
-          } else if ("DEBIT".equalsIgnoreCase(tx.getEntryDirection())) {
-            txTransferNet = txTransferNet.subtract(amt.abs());
-          } else {
-            txTransferNet = txTransferNet.add(amt);
+          case "SUPPLEMENT", "ADDITIONAL", "BATCH_PAYROLL_INDEXATION" -> {
+            // Không ép .abs(): hỗ trợ cả bổ sung dương và điều chỉnh giảm biên chế âm (TD-C07)
+            if (amt.compareTo(BigDecimal.ZERO) >= 0) {
+              txSupplement = txSupplement.add(amt);
+            } else {
+              txReduction = txReduction.add(amt.abs());
+            }
           }
+          case "TRANCHE_RELEASE" -> {
+            txHeld = txHeld.subtract(amt.abs());
+            hasHoldTx = true;
+          }
+          case "WITHDRAWAL", "EXPIRED_CANCEL" -> {
+            txExpiredCancelled = txExpiredCancelled.add(amt.abs());
+            hasWithdrawalTx = true;
+          }
+          case "AUTONOMY_FUND_DISTRIBUTION" -> {
+            // Trừ số dư thặng dư đã trích lập quỹ tự chủ khỏi khả dụng để chống phân phối vô hạn (DX-04)
+            txFundDistributed = txFundDistributed.add(amt.abs());
+          }
+          case "ADJUSTMENT" -> {
+            if (amt.compareTo(BigDecimal.ZERO) >= 0) {
+              txSupplement = txSupplement.add(amt);
+            } else {
+              txReduction = txReduction.add(amt.abs());
+            }
+          }
+          case "CARRY_OVER_IN" -> txCarryIn = txCarryIn.add(amt.abs());
+          case "CARRY_OVER_OUT" -> txCarryOut = txCarryOut.add(amt.abs());
+          case "TRANSFER_IN" -> txTransferNet = txTransferNet.add(amt.abs());
+          case "TRANSFER_OUT" -> txTransferNet = txTransferNet.subtract(amt.abs());
+          case "INTERNAL_TRANSFER" -> {
+            if ("CREDIT".equalsIgnoreCase(tx.getEntryDirection())) {
+              txTransferNet = txTransferNet.add(amt.abs());
+            } else if ("DEBIT".equalsIgnoreCase(tx.getEntryDirection())) {
+              txTransferNet = txTransferNet.subtract(amt.abs());
+            } else {
+              txTransferNet = txTransferNet.add(amt);
+            }
+          }
+          case "REDUCTION", "SAVING_REDUCTION" -> txReduction = txReduction.add(amt.abs());
+          case "EARMARK_HOLD" -> {
+            txHeld = txHeld.add(amt.abs());
+            hasHoldTx = true;
+          }
+          case "EARMARK_RELEASE" -> {
+            txHeld = txHeld.subtract(amt.abs());
+            hasHoldTx = true;
+          }
+          default -> {}
         }
-        case "REDUCTION", "SAVING_REDUCTION" -> txReduction = txReduction.add(amt.abs());
-        case "EARMARK_HOLD" -> {
-          txHeld = txHeld.add(amt.abs());
-          hasHoldTx = true;
-        }
-        case "RELEASE_HOLD" -> {
-          txHeld = txHeld.subtract(amt.abs());
-          hasHoldTx = true;
-        }
-        default -> {}
       }
     }
 
     BigDecimal initial =
-        hasInitialTx && txInitial.compareTo(BigDecimal.ZERO) > 0
-            ? txInitial
-            : safe(alloc.getInitialAmount());
-    BigDecimal supplement = txSupplement;
-    BigDecimal carryIn = txCarryIn;
-    BigDecimal carryOut = txCarryOut;
-    BigDecimal transferNet = txTransferNet;
-    BigDecimal reduction = txReduction;
+        scaleMoney(
+            hasInitialTx && txInitial.compareTo(BigDecimal.ZERO) > 0
+                ? txInitial
+                : safe(alloc.getInitialAmount()));
+    BigDecimal supplement = scaleMoney(txSupplement);
+    BigDecimal carryIn = scaleMoney(txCarryIn);
+    BigDecimal carryOut = scaleMoney(txCarryOut);
+    BigDecimal transferNet = scaleMoney(txTransferNet);
+    BigDecimal reduction = scaleMoney(txReduction);
 
     BigDecimal effective =
-        initial
-            .add(supplement)
-            .add(carryIn)
-            .subtract(carryOut)
-            .add(transferNet)
-            .subtract(reduction);
+        scaleMoney(
+            initial
+                .add(supplement)
+                .add(carryIn)
+                .subtract(carryOut)
+                .add(transferNet)
+                .subtract(reduction));
     if (effective.compareTo(BigDecimal.ZERO) < 0) {
-      effective = BigDecimal.ZERO;
+      effective = scaleMoney(BigDecimal.ZERO);
     }
 
     List<BudgetDisbursement> disbs =
@@ -269,49 +332,54 @@ public class BudgetWorkflowEngineHelper {
     BigDecimal disbursed = BigDecimal.ZERO;
     BigDecimal settled = BigDecimal.ZERO;
 
-    for (BudgetDisbursement d : disbs) {
-      String status = d.getApprovalStatus() != null ? d.getApprovalStatus().toUpperCase() : "";
-      if ("REJECTED".equals(status) || "DRAFT".equals(status) || "CANCELLED".equals(status)) {
-        continue;
-      }
-      BigDecimal amt = safe(d.getAmount());
-      BigDecimal sAmt =
-          d.getSettledAmount() != null && d.getSettledAmount().compareTo(BigDecimal.ZERO) > 0
-              ? d.getSettledAmount()
-              : amt;
-      String dtype = d.getDisbursementType() != null ? d.getDisbursementType().toUpperCase() : "";
-      switch (dtype) {
-        case "COMMITMENT" -> committed = committed.add(amt);
-        case "ADVANCE" -> {
-          disbursed = disbursed.add(amt);
-          if ("SETTLED".equals(status)) {
-            settled = settled.add(sAmt);
-            if (amt.compareTo(sAmt) > 0) {
-              advanced = advanced.add(amt.subtract(sAmt));
+    if (disbs != null) {
+      for (BudgetDisbursement d : disbs) {
+        String status =
+            d.getApprovalStatus() != null ? d.getApprovalStatus().trim().toUpperCase() : "";
+        if (!EFFECTIVE_DISB_STATUSES.contains(status)) {
+          continue;
+        }
+        BigDecimal amt = safe(d.getAmount());
+        BigDecimal sAmt =
+            d.getSettledAmount() != null && d.getSettledAmount().compareTo(BigDecimal.ZERO) > 0
+                ? d.getSettledAmount()
+                : amt;
+        String dtype =
+            d.getDisbursementType() != null ? d.getDisbursementType().trim().toUpperCase() : "";
+        switch (dtype) {
+          case "COMMITMENT" -> committed = committed.add(amt);
+          case "ADVANCE" -> {
+            disbursed = disbursed.add(amt);
+            if ("SETTLED".equals(status)) {
+              settled = settled.add(sAmt);
+              if (amt.compareTo(sAmt) > 0) {
+                advanced = advanced.add(amt.subtract(sAmt));
+              }
+            } else {
+              advanced = advanced.add(amt);
             }
-          } else {
-            advanced = advanced.add(amt);
           }
-        }
-        case "DIRECT_PAYMENT", "DISBURSEMENT" -> {
-          disbursed = disbursed.add(amt);
-          if ("SETTLED".equals(status)) {
+          case "DIRECT_PAYMENT", "DISBURSEMENT" -> {
+            disbursed = disbursed.add(amt);
+            if ("SETTLED".equals(status)) {
+              settled = settled.add(sAmt);
+            }
+          }
+          case "ADVANCE_SETTLEMENT" -> {
+            // Thanh toán hoàn tạm ứng KHÔNG cộng trùng vào disbursed vì khoản ADVANCE gốc đã tính
+            // vào disbursed; chỉ ghi nhận nghiệm thu (settled) và khấu trừ dư tạm ứng (advanced).
+            settled = settled.add(sAmt);
+            advanceSettlementDeduction = advanceSettlementDeduction.add(sAmt);
+          }
+          case "SETTLEMENT" -> {
+            disbursed = disbursed.add(amt);
             settled = settled.add(sAmt);
           }
-        }
-        case "ADVANCE_SETTLEMENT" -> {
-          disbursed = disbursed.add(amt);
-          settled = settled.add(sAmt);
-          advanceSettlementDeduction = advanceSettlementDeduction.add(sAmt);
-        }
-        case "SETTLEMENT" -> {
-          disbursed = disbursed.add(amt);
-          settled = settled.add(sAmt);
-        }
-        default -> {
-          disbursed = disbursed.add(amt);
-          if ("SETTLED".equals(status)) {
-            settled = settled.add(sAmt);
+          default -> {
+            disbursed = disbursed.add(amt);
+            if ("SETTLED".equals(status)) {
+              settled = settled.add(sAmt);
+            }
           }
         }
       }
@@ -326,15 +394,26 @@ public class BudgetWorkflowEngineHelper {
     }
 
     BigDecimal expiredCancelled =
-        hasWithdrawalTx ? txExpiredCancelled : safe(alloc.getExpiredCancelledAmount());
+        scaleMoney(hasWithdrawalTx ? txExpiredCancelled : safe(alloc.getExpiredCancelledAmount()));
+    committed = scaleMoney(committed);
+    advanced = scaleMoney(advanced);
+    disbursed = scaleMoney(disbursed);
+    settled = scaleMoney(settled);
+    txFundDistributed = scaleMoney(txFundDistributed);
+
     BigDecimal available =
-        effective.subtract(committed).subtract(disbursed).subtract(expiredCancelled);
+        scaleMoney(
+            effective
+                .subtract(committed)
+                .subtract(disbursed)
+                .subtract(expiredCancelled)
+                .subtract(txFundDistributed));
     BigDecimal rate =
         effective.compareTo(BigDecimal.ZERO) > 0
             ? disbursed
                 .multiply(new BigDecimal("100"))
                 .divide(effective, 2, RoundingMode.HALF_UP)
-            : BigDecimal.ZERO;
+            : scaleMoney(BigDecimal.ZERO);
 
     alloc.setInitialAmount(initial);
     alloc.setSupplementAmount(supplement);
@@ -355,24 +434,80 @@ public class BudgetWorkflowEngineHelper {
   }
 
   /**
-   * Thực thi bút toán kép khi Chuyển nguồn liên năm (N -> N+1) hoặc Điều chuyển nội bộ.
+   * Tính tổng số dư đang bị tạm giữ (EARMARK_HOLD trừ EARMARK_RELEASE/TRANCHE_RELEASE) đã duyệt của
+   * một Phân bổ.
+   */
+  @Transactional(readOnly = true)
+  public BigDecimal computeCurrentEarmarkHeldAmount(Long allocationId) {
+    if (allocationId == null) {
+      return scaleMoney(BigDecimal.ZERO);
+    }
+    List<BudgetTransaction> txs =
+        budgetTransactionRepo.findByAllocationIdOrderByIdAsc(allocationId);
+    BigDecimal held = BigDecimal.ZERO;
+    if (txs != null) {
+      for (BudgetTransaction tx : txs) {
+        String st = tx.getApprovalStatus() != null ? tx.getApprovalStatus().trim().toUpperCase() : "";
+        if (!EFFECTIVE_TX_STATUSES.contains(st)) {
+          continue;
+        }
+        String type = tx.getTxType() != null ? tx.getTxType().trim().toUpperCase() : "";
+        BigDecimal amt = safe(tx.getAmount()).abs();
+        if ("EARMARK_HOLD".equals(type)) {
+          held = held.add(amt);
+        } else if ("EARMARK_RELEASE".equals(type) || "TRANCHE_RELEASE".equals(type)) {
+          held = held.subtract(amt);
+        }
+      }
+    }
+    return scaleMoney(held.max(BigDecimal.ZERO));
+  }
+
+  /**
+   * Thực thi bút toán kép khi Chuyển nguồn liên năm (N -> N+1) hoặc Điều chuyển nội bộ. Khóa bi
+   * quan cả phân bổ nguồn và phân bổ đích theo thứ tự ID tăng dần trước khi đối chiếu số dư và ghi
+   * sổ cái.
    */
   @Transactional
   public void executeDoubleEntryLedger(BudgetTransaction tx) {
     if (tx == null || tx.getAllocationId() == null) {
       return;
     }
-    Optional<BudgetAllocation> optSource = budgetAllocationRepo.findById(tx.getAllocationId());
-    if (optSource.isEmpty()) {
+    Map<Long, BudgetAllocation> lockedAllocs =
+        lockAllocationsInDeterministicOrder(tx.getAllocationId(), tx.getCounterpartAllocationId());
+    BudgetAllocation source = lockedAllocs.get(tx.getAllocationId());
+    if (source == null) {
       return;
     }
-    BudgetAllocation source = optSource.get();
+
+    String type = tx.getTxType() != null ? tx.getTxType().trim().toUpperCase() : "";
+    BigDecimal sourceAvailable =
+        source.getAvailableAmount() != null
+            ? scaleMoney(source.getAvailableAmount())
+            : scaleMoney(source.getEffectiveAmount());
+    BigDecimal txAbs = scaleMoney(safe(tx.getAmount()).abs());
+
+    // Bảo vệ bất biến số dư dương khi ghi nợ (DEBIT) từ phân bổ nguồn
+    if (("CARRY_OVER_OUT".equals(type)
+            || "INTERNAL_TRANSFER".equals(type)
+            || "TRANSFER_OUT".equals(type)
+            || "WITHDRAWAL".equals(type)
+            || "REDUCTION".equals(type)
+            || "EARMARK_HOLD".equals(type)
+            || "AUTONOMY_FUND_DISTRIBUTION".equals(type))
+        && txAbs.compareTo(sourceAvailable) > 0) {
+      throw new BaseException(
+          "Số tiền biến động ("
+              + txAbs.toPlainString()
+              + " VNĐ) vượt quá số dư khả dụng còn lại ("
+              + sourceAvailable.toPlainString()
+              + " VNĐ) của phân bổ ["
+              + source.getCode()
+              + "].");
+    }
+
     BigDecimal sourceBalanceBefore =
-        tx.getBalanceBeforeAmount() != null
-            ? tx.getBalanceBeforeAmount()
-            : (source.getAvailableAmount() != null
-                ? source.getAvailableAmount()
-                : safe(source.getEffectiveAmount()));
+        tx.getBalanceBeforeAmount() != null ? scaleMoney(tx.getBalanceBeforeAmount()) : sourceAvailable;
     int prevVer = source.getCurrentVersion() != null ? source.getCurrentVersion() : 1;
     source.setCurrentVersion(prevVer + 1);
     budgetAllocationRepo.save(source);
@@ -380,25 +515,32 @@ public class BudgetWorkflowEngineHelper {
     tx.setPreviousVersion(prevVer);
     tx.setNewVersion(prevVer + 1);
 
-    String type = tx.getTxType() != null ? tx.getTxType().toUpperCase() : "";
     if ("CARRY_OVER_OUT".equals(type)) {
       tx.setEntryDirection("DEBIT");
-      int targetYear =
-          tx.getTargetBudgetYear() != null
-              ? tx.getTargetBudgetYear()
-              : (source.getBudgetYear() != null ? source.getBudgetYear() + 1 : LocalDate.now().getYear() + 1);
+      int sourceYear = source.getBudgetYear() != null ? source.getBudgetYear() : LocalDate.now().getYear();
+      int targetYear = tx.getTargetBudgetYear() != null ? tx.getTargetBudgetYear() : (sourceYear + 1);
+      if (targetYear <= sourceYear) {
+        throw new BaseException(
+            "Năm đích chuyển nguồn ("
+                + targetYear
+                + ") phải lớn hơn năm ngân sách nguồn ("
+                + sourceYear
+                + ").");
+      }
       tx.setTargetBudgetYear(targetYear);
 
-      BudgetAllocation targetAlloc = null;
-      if (tx.getCounterpartAllocationId() != null) {
-        targetAlloc = budgetAllocationRepo.findById(tx.getCounterpartAllocationId()).orElse(null);
-      }
+      BudgetAllocation targetAlloc =
+          tx.getCounterpartAllocationId() != null
+              ? lockedAllocs.get(tx.getCounterpartAllocationId())
+              : null;
       if (targetAlloc == null) {
         String newCode = source.getCode() + "-CN" + targetYear;
         List<BudgetAllocation> existingNextYear =
             budgetAllocationRepo.findAllByCodeIgnoreCaseIncludingDeletedSorted(newCode);
-        if (!existingNextYear.isEmpty()) {
-          targetAlloc = existingNextYear.getFirst();
+        if (existingNextYear != null && !existingNextYear.isEmpty()) {
+          targetAlloc =
+              lockAllocation(existingNextYear.getFirst().getId())
+                  .orElse(existingNextYear.getFirst());
         } else {
           String targetDomainCode =
               tx.getDomainCode() != null && !tx.getDomainCode().isBlank()
@@ -420,7 +562,11 @@ public class BudgetWorkflowEngineHelper {
               budgetAllocationRepo.save(
                   BudgetAllocation.builder()
                       .code(newCode)
-                      .name(source.getName() + " (Nhận chuyển nguồn năm " + source.getBudgetYear() + ")")
+                      .name(
+                          source.getName()
+                              + " (Nhận chuyển nguồn năm "
+                              + source.getBudgetYear()
+                              + ")")
                       .description("Phân bổ nhận chuyển nguồn tự động từ " + source.getCode())
                       .budgetYear(targetYear)
                       .periodType("ANNUAL")
@@ -445,23 +591,23 @@ public class BudgetWorkflowEngineHelper {
                       .subItemCode(source.getSubItemCode())
                       .fundingSourceCode(source.getFundingSourceCode())
                       .fundingSourceName(source.getFundingSourceName())
-                      .approvalScope(source.getApprovalScope())
+                      .approvalScope(normalizeApprovalScope(source.getApprovalScope()))
                       .workflowStatus("APPROVED")
                       .currentVersion(1)
-                      .proposedAmount(tx.getAmount())
-                      .initialAmount(BigDecimal.ZERO)
-                      .supplementAmount(BigDecimal.ZERO)
-                      .carryOverInAmount(tx.getAmount())
-                      .carryOverOutAmount(BigDecimal.ZERO)
-                      .transferNetAmount(BigDecimal.ZERO)
-                      .reductionAmount(BigDecimal.ZERO)
-                      .effectiveAmount(tx.getAmount())
-                      .committedAmount(BigDecimal.ZERO)
-                      .advancedAmount(BigDecimal.ZERO)
-                      .disbursedAmount(BigDecimal.ZERO)
-                      .settledAmount(BigDecimal.ZERO)
-                      .availableAmount(tx.getAmount().abs())
-                      .disbursementRatePercent(BigDecimal.ZERO)
+                      .proposedAmount(txAbs)
+                      .initialAmount(scaleMoney(BigDecimal.ZERO))
+                      .supplementAmount(scaleMoney(BigDecimal.ZERO))
+                      .carryOverInAmount(txAbs)
+                      .carryOverOutAmount(scaleMoney(BigDecimal.ZERO))
+                      .transferNetAmount(scaleMoney(BigDecimal.ZERO))
+                      .reductionAmount(scaleMoney(BigDecimal.ZERO))
+                      .effectiveAmount(txAbs)
+                      .committedAmount(scaleMoney(BigDecimal.ZERO))
+                      .advancedAmount(scaleMoney(BigDecimal.ZERO))
+                      .disbursedAmount(scaleMoney(BigDecimal.ZERO))
+                      .settledAmount(scaleMoney(BigDecimal.ZERO))
+                      .availableAmount(txAbs)
+                      .disbursementRatePercent(scaleMoney(BigDecimal.ZERO))
                       .status(LifecycleStatus.ACTIVE)
                       .build());
         }
@@ -471,7 +617,7 @@ public class BudgetWorkflowEngineHelper {
       tx.setCounterpartAllocationCode(targetAlloc.getCode());
       tx.setCounterpartAllocationName(targetAlloc.getName());
 
-      BigDecimal targetBefore = safe(targetAlloc.getAvailableAmount());
+      BigDecimal targetBefore = scaleMoney(safe(targetAlloc.getAvailableAmount()));
       String carryInCode = tx.getCode() + "-IN";
       BudgetTransaction carryInTx = null;
       if (!budgetTransactionRepo.existsByCodeIgnoreCase(carryInCode)) {
@@ -479,7 +625,11 @@ public class BudgetWorkflowEngineHelper {
             budgetTransactionRepo.save(
                 BudgetTransaction.builder()
                     .code(carryInCode)
-                    .name("Nhận chuyển nguồn từ năm " + source.getBudgetYear() + ": " + tx.getName())
+                    .name(
+                        "Nhận chuyển nguồn từ năm "
+                            + source.getBudgetYear()
+                            + ": "
+                            + tx.getName())
                     .description(tx.getDescription())
                     .allocationId(targetAlloc.getId())
                     .allocationCode(targetAlloc.getCode())
@@ -503,7 +653,7 @@ public class BudgetWorkflowEngineHelper {
                     .txType("CARRY_OVER_IN")
                     .entryDirection("CREDIT")
                     .budgetYear(targetYear)
-                    .amount(tx.getAmount().abs())
+                    .amount(txAbs)
                     .balanceBeforeAmount(targetBefore)
                     .counterpartAllocationId(source.getId())
                     .counterpartAllocationCode(source.getCode())
@@ -534,14 +684,11 @@ public class BudgetWorkflowEngineHelper {
         }
       }
     } else if ("INTERNAL_TRANSFER".equals(type) && tx.getCounterpartAllocationId() != null) {
-      BigDecimal signedAbs = safe(tx.getAmount()).abs();
       tx.setEntryDirection("DEBIT");
-      tx.setAmount(signedAbs.negate());
-      Optional<BudgetAllocation> optTarget =
-          budgetAllocationRepo.findById(tx.getCounterpartAllocationId());
-      if (optTarget.isPresent()) {
-        BudgetAllocation target = optTarget.get();
-        BigDecimal targetBefore = safe(target.getAvailableAmount());
+      tx.setAmount(txAbs.negate());
+      BudgetAllocation target = lockedAllocs.get(tx.getCounterpartAllocationId());
+      if (target != null) {
+        BigDecimal targetBefore = scaleMoney(safe(target.getAvailableAmount()));
         String transferInCode = tx.getCode() + "-RECV";
         BudgetTransaction recvTx = null;
         if (!budgetTransactionRepo.existsByCodeIgnoreCase(transferInCode)) {
@@ -568,7 +715,7 @@ public class BudgetWorkflowEngineHelper {
                       .txType("TRANSFER_IN")
                       .entryDirection("CREDIT")
                       .budgetYear(target.getBudgetYear())
-                      .amount(signedAbs)
+                      .amount(txAbs)
                       .balanceBeforeAmount(targetBefore)
                       .counterpartAllocationId(source.getId())
                       .counterpartAllocationCode(source.getCode())
@@ -612,9 +759,7 @@ public class BudgetWorkflowEngineHelper {
     budgetTransactionRepo.save(tx);
   }
 
-  /**
-   * Kiểm tra xem đầu mục dự toán có bắt buộc chứng từ/hóa đơn khi giải ngân không.
-   */
+  /** Kiểm tra xem đầu mục dự toán có bắt buộc chứng từ/hóa đơn khi giải ngân không. */
   @Transactional(readOnly = true)
   public boolean isVoucherRequired(Long estimateItemId) {
     if (estimateItemId == null) {
@@ -668,9 +813,13 @@ public class BudgetWorkflowEngineHelper {
             .txType("INITIAL_ALLOCATION")
             .entryDirection("CREDIT")
             .budgetYear(alloc.getBudgetYear())
-            .amount(alloc.getInitialAmount())
-            .balanceBeforeAmount(BigDecimal.ZERO)
-            .balanceAfterAmount(alloc.getEffectiveAmount() != null ? alloc.getEffectiveAmount() : alloc.getInitialAmount())
+            .amount(scaleMoney(alloc.getInitialAmount()))
+            .balanceBeforeAmount(scaleMoney(BigDecimal.ZERO))
+            .balanceAfterAmount(
+                scaleMoney(
+                    alloc.getEffectiveAmount() != null
+                        ? alloc.getEffectiveAmount()
+                        : alloc.getInitialAmount()))
             .txDate(LocalDate.now())
             .reason("Tự động ghi nhận bút toán giao dự toán đầu năm khi phê duyệt phân bổ")
             .previousVersion(1)
@@ -680,6 +829,24 @@ public class BudgetWorkflowEngineHelper {
             .approvalStatus("APPROVED")
             .status(LifecycleStatus.ACTIVE)
             .build());
+  }
+
+  public String normalizeApprovalScope(String scope) {
+    if (scope == null || scope.isBlank()) {
+      return "SUPERIOR_APPROVAL";
+    }
+    String upper = scope.trim().toUpperCase();
+    if ("UNIT_SELF".equals(upper)) {
+      return "UNIT_SELF_APPROVAL";
+    }
+    if ("DIRECTORATE".equals(upper)) {
+      return "SUPERIOR_APPROVAL";
+    }
+    return upper;
+  }
+
+  public BigDecimal scaleMoney(BigDecimal val) {
+    return safe(val).setScale(2, RoundingMode.HALF_UP);
   }
 
   public BigDecimal safe(BigDecimal val) {

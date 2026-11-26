@@ -31,23 +31,34 @@ public interface BudgetEstimateItemRepo
   boolean existsByNameIgnoreCase(String name);
 
   @Query(
-      "SELECT a FROM BudgetEstimateItem a WHERE a.code = :code ORDER BY a.deletedAt ASC NULLS FIRST, a.updatedAt DESC")
-  List<BudgetEstimateItem> findAllByCodeIgnoreCaseIncludingDeletedSorted(@Param("code") String code);
+      value =
+          "SELECT * FROM budget_estimate_item WHERE LOWER(code) = LOWER(:code) AND app_code = :appCode "
+              + "ORDER BY deleted_at ASC NULLS FIRST, updated_at DESC",
+      nativeQuery = true)
+  List<BudgetEstimateItem> findAllByCodeIgnoreCaseIncludingDeletedSorted(
+      @Param("code") String code, @Param("appCode") String appCode);
+
+  default List<BudgetEstimateItem> findAllByCodeIgnoreCaseIncludingDeletedSorted(String code) {
+    return findAllByCodeIgnoreCaseIncludingDeletedSorted(
+        code, BudgetQueryHelper.resolveCurrentAppCode());
+  }
 
   @Modifying(clearAutomatically = true)
   @Query(
-      "UPDATE BudgetEstimateItem a SET a.deletedAt = CURRENT_TIMESTAMP, a.version = (a.version + 1) WHERE a.id IN :ids")
-  void softDeleteByIds(@Param("ids") Collection<Long> ids);
-
-  @Query(value = "SELECT * FROM budget_estimate_item WHERE id = :id LIMIT 1", nativeQuery = true)
-  Optional<BudgetEstimateItem> findByIdIncludingDeleted(@Param("id") Long id);
+      "UPDATE BudgetEstimateItem a SET a.deletedAt = CURRENT_TIMESTAMP, a.version = (a.version + 1) "
+          + "WHERE a.id IN :ids AND a.appCode = :appCode")
+  void softDeleteByIds(@Param("ids") Collection<Long> ids, @Param("appCode") String appCode);
 
   @Query(
       value =
-          "SELECT * FROM budget_estimate_item WHERE id = :id AND (app_code = :appCode OR :appCode IS NULL) LIMIT 1",
+          "SELECT * FROM budget_estimate_item WHERE id = :id AND app_code = :appCode LIMIT 1",
       nativeQuery = true)
   Optional<BudgetEstimateItem> findByIdIncludingDeletedByAppCode(
       @Param("id") Long id, @Param("appCode") String appCode);
+
+  default Optional<BudgetEstimateItem> findByIdIncludingDeleted(Long id) {
+    return findByIdIncludingDeletedByAppCode(id, BudgetQueryHelper.resolveCurrentAppCode());
+  }
 
   List<BudgetEstimateItem> findByParentIdOrderByIdAsc(Long parentId);
 
@@ -64,12 +75,21 @@ public interface BudgetEstimateItemRepo
       @Param("excludeId") Long excludeId);
 
   @Query(
-      "SELECT e FROM BudgetEstimateItem e "
-          + "WHERE UPPER(e.code) = UPPER(:code) "
-          + "AND COALESCE(e.budgetYear, 0) = COALESCE(:budgetYear, 0) "
-          + "ORDER BY e.deletedAt ASC NULLS FIRST, e.updatedAt DESC")
+      value =
+          "SELECT * FROM budget_estimate_item "
+              + "WHERE LOWER(code) = LOWER(:code) "
+              + "AND COALESCE(budget_year, 0) = COALESCE(:budgetYear, 0) "
+              + "AND app_code = :appCode "
+              + "ORDER BY deleted_at ASC NULLS FIRST, updated_at DESC",
+      nativeQuery = true)
   List<BudgetEstimateItem> findByCodeInYearSorted(
-      @Param("code") String code, @Param("budgetYear") Integer budgetYear);
+      @Param("code") String code,
+      @Param("budgetYear") Integer budgetYear,
+      @Param("appCode") String appCode);
+
+  default List<BudgetEstimateItem> findByCodeInYearSorted(String code, Integer budgetYear) {
+    return findByCodeInYearSorted(code, budgetYear, BudgetQueryHelper.resolveCurrentAppCode());
+  }
 
   @Query(
       "SELECT e FROM BudgetEstimateItem e "

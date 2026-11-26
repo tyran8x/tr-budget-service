@@ -31,29 +31,42 @@ public interface BudgetTransactionRepo
   boolean existsByNameIgnoreCase(String name);
 
   @Query(
-      "SELECT a FROM BudgetTransaction a WHERE a.code = :code ORDER BY a.deletedAt ASC NULLS FIRST, a.updatedAt DESC")
-  List<BudgetTransaction> findAllByCodeIgnoreCaseIncludingDeletedSorted(@Param("code") String code);
+      value =
+          "SELECT * FROM budget_transaction WHERE LOWER(code) = LOWER(:code) AND app_code = :appCode "
+              + "ORDER BY deleted_at ASC NULLS FIRST, updated_at DESC",
+      nativeQuery = true)
+  List<BudgetTransaction> findAllByCodeIgnoreCaseIncludingDeletedSorted(
+      @Param("code") String code, @Param("appCode") String appCode);
+
+  default List<BudgetTransaction> findAllByCodeIgnoreCaseIncludingDeletedSorted(String code) {
+    return findAllByCodeIgnoreCaseIncludingDeletedSorted(
+        code, BudgetQueryHelper.resolveCurrentAppCode());
+  }
 
   @Modifying(clearAutomatically = true)
   @Query(
-      "UPDATE BudgetTransaction a SET a.deletedAt = CURRENT_TIMESTAMP, a.version = (a.version + 1) WHERE a.id IN :ids")
-  void softDeleteByIds(@Param("ids") Collection<Long> ids);
-
-  @Query(value = "SELECT * FROM budget_transaction WHERE id = :id LIMIT 1", nativeQuery = true)
-  Optional<BudgetTransaction> findByIdIncludingDeleted(@Param("id") Long id);
+      "UPDATE BudgetTransaction a SET a.deletedAt = CURRENT_TIMESTAMP, a.version = (a.version + 1) "
+          + "WHERE a.id IN :ids AND a.appCode = :appCode")
+  void softDeleteByIds(@Param("ids") Collection<Long> ids, @Param("appCode") String appCode);
 
   @Query(
       value =
-          "SELECT * FROM budget_transaction WHERE id = :id AND (app_code = :appCode OR :appCode IS NULL) LIMIT 1",
+          "SELECT * FROM budget_transaction WHERE id = :id AND app_code = :appCode LIMIT 1",
       nativeQuery = true)
   Optional<BudgetTransaction> findByIdIncludingDeletedByAppCode(
       @Param("id") Long id, @Param("appCode") String appCode);
+
+  default Optional<BudgetTransaction> findByIdIncludingDeleted(Long id) {
+    return findByIdIncludingDeletedByAppCode(id, BudgetQueryHelper.resolveCurrentAppCode());
+  }
 
   List<BudgetTransaction> findByCounterpartTxId(Long counterpartTxId);
 
   List<BudgetTransaction> findByAllocationIdOrderByIdAsc(Long allocationId);
 
   List<BudgetTransaction> findByBudgetYearOrderByIdDesc(Integer budgetYear);
+
+  List<BudgetTransaction> findByBudgetYearAndNodeIdOrderByIdDesc(Integer budgetYear, Long nodeId);
 
   @Query(
       "SELECT COUNT(t) FROM BudgetTransaction t "

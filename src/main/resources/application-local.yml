@@ -40,6 +40,8 @@ spring:
     open-in-view: false
     hibernate:
       ddl-auto: update
+  flyway:
+    enabled: false
   cache:
     type: simple
 
@@ -57,7 +59,13 @@ client:
   planning-service:
     url: ${CLIENT_PLANNING_SERVICE_URL:http://localhost:8306}
 
+budget:
+  seed:
+    enabled: ${BUDGET_SEED_ENABLED:true}
+
 tr:
   kafka:
     payment-listener:
+      enabled: false
+    plan-sync-listener:
       enabled: false

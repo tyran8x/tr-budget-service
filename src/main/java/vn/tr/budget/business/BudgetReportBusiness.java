@@ -4,18 +4,43 @@ import cn.hutool.core.util.StrUtil;
 import cn.hutool.json.JSONArray;
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.YearMonth;
+import java.time.format.DateTimeParseException;
+import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import vn.tr.budget.business.helper.BudgetIntegrationOrchestrator;
+import vn.tr.budget.business.helper.BudgetSecurityGuardHelper;
+import vn.tr.budget.business.helper.BudgetStateMachine;
+import vn.tr.budget.dao.model.BudgetAllocation;
+import vn.tr.budget.dao.model.BudgetCategory;
+import vn.tr.budget.dao.model.BudgetDisbursement;
 import vn.tr.budget.dao.model.BudgetReport;
+import vn.tr.budget.dao.model.BudgetTransaction;
+import vn.tr.budget.dao.model.BudgetUnitConfig;
+import vn.tr.budget.dao.service.BudgetAllocationRepo;
+import vn.tr.budget.dao.service.BudgetCategoryRepo;
+import vn.tr.budget.dao.service.BudgetDisbursementRepo;
 import vn.tr.budget.dao.service.BudgetReportService;
+import vn.tr.budget.dao.service.BudgetTransactionRepo;
+import vn.tr.budget.dao.service.BudgetUnitConfigRepo;
 import vn.tr.budget.data.criteria.BudgetReportSearchCriteria;
 import vn.tr.budget.data.dto.BudgetReportData;
 import vn.tr.budget.data.mapper.BudgetReportMapper;
@@ -24,8 +49,11 @@ import vn.tr.common.core.domain.data.PagedData;
 import vn.tr.common.core.domain.data.RefData;
 import vn.tr.common.core.enums.LifecycleStatus;
 import vn.tr.common.core.exception.base.EntityNotFoundException;
+import vn.tr.common.core.exception.base.InvalidDataException;
 import vn.tr.common.jpa.audit.AuditRollbackHelper;
 import vn.tr.common.jpa.helper.GenericUpsertHelper;
+import vn.tr.common.security.abac.OrgSubtreeAuthorizationHelper;
+import vn.tr.common.web.core.BaseBusinessHelper;
 import vn.tr.common.web.data.dto.BulkOperationResult;
 import vn.tr.common.web.data.dto.BulkSortOrderData;
 import vn.tr.common.web.utils.BusinessLogicHelper;
@@ -33,25 +61,6 @@ import vn.tr.common.web.utils.CoreUtils;
 import vn.tr.common.web.utils.LookupOptionsHelper;
 import vn.tr.common.web.workflow.WorkflowBusinessSupport;
 import vn.tr.common.web.workflow.WorkflowCallbackPayload;
-import java.math.BigDecimal;
-import java.math.RoundingMode;
-import java.time.LocalDate;
-import java.time.LocalDateTime;
-import java.time.YearMonth;
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
-import org.springframework.beans.factory.annotation.Autowired;
-import vn.tr.budget.business.helper.BudgetIntegrationOrchestrator;
-import vn.tr.budget.dao.model.BudgetAllocation;
-import vn.tr.budget.dao.model.BudgetCategory;
-import vn.tr.budget.dao.model.BudgetDisbursement;
-import vn.tr.budget.dao.model.BudgetTransaction;
-import vn.tr.budget.dao.model.BudgetUnitConfig;
-import vn.tr.budget.dao.service.BudgetAllocationRepo;
-import vn.tr.budget.dao.service.BudgetCategoryRepo;
-import vn.tr.budget.dao.service.BudgetDisbursementRepo;
-import vn.tr.budget.dao.service.BudgetTransactionRepo;
-import vn.tr.budget.dao.service.BudgetUnitConfigRepo;
 
 /**
  * Lớp điều phối nghiệp vụ cho BudgetReport.
@@ -87,15 +96,61 @@ public class BudgetReportBusiness implements WorkflowBusinessSupport<BudgetRepor
   @Autowired(required = false)
   private BudgetIntegrationOrchestrator integrationOrchestrator;
 
+  @Autowired(required = false)
+  private BudgetStateMachine stateMachine;
+
+  @Autowired(required = false)
+  private BudgetSecurityGuardHelper securityGuard;
+
   public void setBudgetTransactionRepo(BudgetTransactionRepo budgetTransactionRepo) {
     this.budgetTransactionRepo = budgetTransactionRepo;
   }
+
+  public void setBudgetDisbursementRepo(BudgetDisbursementRepo budgetDisbursementRepo) {
+    this.budgetDisbursementRepo = budgetDisbursementRepo;
+  }
+
+  public void setBudgetUnitConfigRepo(BudgetUnitConfigRepo budgetUnitConfigRepo) {
+    this.budgetUnitConfigRepo = budgetUnitConfigRepo;
+  }
+
+  public void setIntegrationOrchestrator(BudgetIntegrationOrchestrator integrationOrchestrator) {
+    this.integrationOrchestrator = integrationOrchestrator;
+  }
+
+  public void setStateMachine(BudgetStateMachine stateMachine) {
+    this.stateMachine = stateMachine;
+  }
+
+  public void setSecurityGuard(BudgetSecurityGuardHelper securityGuard) {
+    this.securityGuard = securityGuard;
+  }
+
+  private BudgetStateMachine sm() {
+    if (stateMachine == null) {
+      stateMachine = new BudgetStateMachine();
+    }
+    return stateMachine;
+  }
+
+  private BudgetSecurityGuardHelper guard() {
+    if (securityGuard == null) {
+      securityGuard = new BudgetSecurityGuardHelper();
+    }
+    return securityGuard;
+  }
+
+  private static final Set<String> EFFECTIVE_TX_STATUSES =
+      Set.of("APPROVED", "SELF_APPROVED", "SETTLED", "EXECUTING", "LOCKED_SETTLED");
+
+  private static final Set<String> EFFECTIVE_DISB_STATUSES =
+      Set.of("COMMITTED", "APPROVED", "APPROVED_DISBURSED", "SETTLED", "EXECUTING", "LOCKED_SETTLED");
 
   public JpaRepository<BudgetReport, Long> getInjectedRepo() {
     return budgetReportService.getRepository();
   }
 
-  /** Tạo mới BudgetReport. */
+  /** Tạo mới BudgetReport (luôn ép DRAFT, kiểm tra ABAC và khử Mass Assignment). */
   public BudgetReportData create(BudgetReportData data) {
     data.setId(null);
     validateData(data);
@@ -114,63 +169,92 @@ public class BudgetReportBusiness implements WorkflowBusinessSupport<BudgetRepor
     if (data.getReportDate() == null) {
       data.setReportDate(LocalDate.now());
     }
-    if (StrUtil.isBlank(data.getWorkflowStatus())) {
-      data.setWorkflowStatus("DRAFT");
+    data.setWorkflowStatus("DRAFT");
+    Long authPersonId = resolveAuthenticatedPersonId();
+    if (authPersonId != null) {
+      data.setPreparedByPersonId(authPersonId);
+      data.setPreparedByPersonName(resolveAuthenticatedActorName());
     }
     syncReportSnapshots(data);
+    guard().assertNodeAccessIfPresent(data.getNodeId(), data.getNodeCode());
     BudgetReport entity =
         genericUpsertHelper.upsert(
             data,
             () -> budgetReportService.findByCodeIgnoreCaseIncludingDeleted(data.getCode()),
-            () -> budgetReportMapper.toEntity(data),
-            budgetReportMapper::updateEntityFromData,
+            () -> {
+              BudgetReport created = budgetReportMapper.toEntity(data);
+              guard().sanitizeReportForCreate(created);
+              return created;
+            },
+            (src, target) -> {
+              sm().assertMutableReport(target.getWorkflowStatus(), "ghi đè", target.getCode());
+              budgetReportMapper.updateEntityFromData(src, target);
+              guard().sanitizeReportForCreate(target);
+            },
             budgetReportService.getRepository());
 
     return enrichData(budgetReportMapper.toData(entity));
   }
 
-  /** Cập nhật BudgetReport. */
+  /** Cập nhật BudgetReport (chặn sửa báo cáo đã phê duyệt / chốt sổ & khử Mass Assignment). */
   public BudgetReportData update(Long id, BudgetReportData data) {
     BudgetReport existing =
         budgetReportService
             .findById(id)
             .orElseThrow(() -> new EntityNotFoundException(BudgetReport.class, id));
+    guard().assertNodeAccessIfPresent(existing.getNodeId(), existing.getNodeCode());
+    sm().assertMutableReport(existing.getWorkflowStatus(), "cập nhật", existing.getCode());
+
     data.setId(id);
     validateData(data);
     syncReportSnapshots(data);
+    guard().assertNodeAccessIfPresent(data.getNodeId(), data.getNodeCode());
+
+    BudgetReport snapshot = existing.toBuilder().build();
     budgetReportMapper.updateEntityFromData(data, existing);
+    guard().sanitizeReportForUpdate(existing, snapshot);
+
     BudgetReport saved = budgetReportService.save(existing);
     return enrichData(budgetReportMapper.toData(saved));
   }
 
-  /** Xoá mềm BudgetReport. */
+  /** Xoá mềm BudgetReport (chặn xóa báo cáo đã phê duyệt). */
   public void delete(Long id) {
-    budgetReportService
-        .findById(id)
-        .orElseThrow(() -> new EntityNotFoundException(BudgetReport.class, id));
+    BudgetReport existing =
+        budgetReportService
+            .findById(id)
+            .orElseThrow(() -> new EntityNotFoundException(BudgetReport.class, id));
+    guard().assertNodeAccessIfPresent(existing.getNodeId(), existing.getNodeCode());
+    sm().assertMutableReport(existing.getWorkflowStatus(), "xóa", existing.getCode());
     budgetReportService.delete(id);
   }
 
-  /** Xoá mềm hàng loạt BudgetReport. */
+  /** Xoá mềm hàng loạt BudgetReport (kiểm tra ABAC và khóa trạng thái đã phê duyệt). */
   public BulkOperationResult<Long> bulkDelete(Collection<Long> ids) {
+    if (ids != null && !ids.isEmpty()) {
+      for (BudgetReport rpt : budgetReportService.findAllByIds(ids)) {
+        guard().assertNodeAccessIfPresent(rpt.getNodeId(), rpt.getNodeCode());
+      }
+    }
     return businessLogicHelper.executeBulkDelete(
         ids,
         budgetReportService::findAllByIds,
         BudgetReport::getId,
-        null,
-        null,
+        rpt -> guard().assertNodeAccessIfPresent(rpt.getNodeId(), rpt.getNodeCode()),
+        rpt -> sm().assertMutableReport(rpt.getWorkflowStatus(), "xóa", rpt.getCode()),
         budgetReportService::deleteByIds,
         "budget.budgetReport.not.found");
   }
 
-  /** Lấy chi tiết BudgetReport theo ID. */
+  /** Lấy chi tiết BudgetReport theo ID (kiểm tra ABAC). */
   @Transactional(readOnly = true)
   public BudgetReportData findById(Long id) {
-    return budgetReportService
-        .findById(id)
-        .map(budgetReportMapper::toData)
-        .map(this::enrichData)
-        .orElseThrow(() -> new EntityNotFoundException(BudgetReport.class, id));
+    BudgetReport entity =
+        budgetReportService
+            .findById(id)
+            .orElseThrow(() -> new EntityNotFoundException(BudgetReport.class, id));
+    guard().assertNodeAccessIfPresent(entity.getNodeId(), entity.getNodeCode());
+    return enrichData(budgetReportMapper.toData(entity));
   }
 
   /** Tìm kiếm BudgetReport phân trang. */
@@ -257,6 +341,7 @@ public class BudgetReportBusiness implements WorkflowBusinessSupport<BudgetRepor
         budgetReportService
             .findById(id)
             .orElseThrow(() -> new EntityNotFoundException(BudgetReport.class, id));
+    guard().assertNodeAccessIfPresent(source.getNodeId(), source.getNodeCode());
     BudgetReportData clonedData = budgetReportMapper.toData(source);
     clonedData.setId(null);
     clonedData.setCode(source.getCode() + "_COPY_" + System.currentTimeMillis() % 10000);
@@ -264,9 +349,16 @@ public class BudgetReportBusiness implements WorkflowBusinessSupport<BudgetRepor
     return create(clonedData);
   }
 
-  /** Khôi phục phiên bản lịch sử JaVers. */
+  /** Khôi phục phiên bản lịch sử JaVers (chặn rollback báo cáo đã phê duyệt). */
   @Transactional
   public BudgetReportData rollback(Long id, Long version) {
+    BudgetReport existing =
+        budgetReportService
+            .findById(id)
+            .orElseThrow(() -> new EntityNotFoundException(BudgetReport.class, id));
+    guard().assertNodeAccessIfPresent(existing.getNodeId(), existing.getNodeCode());
+    sm().assertMutableReport(existing.getWorkflowStatus(), "khôi phục phiên bản", existing.getCode());
+
     return auditRollbackHelper.executeRollback(
         BudgetReport.class,
         id,
@@ -290,6 +382,7 @@ public class BudgetReportBusiness implements WorkflowBusinessSupport<BudgetRepor
           .findById(item.getId())
           .ifPresent(
               entity -> {
+                guard().assertNodeAccessIfPresent(entity.getNodeId(), entity.getNodeCode());
                 entity.setSortOrder(item.getSortOrder());
                 budgetReportService.save(entity);
               });
@@ -297,44 +390,44 @@ public class BudgetReportBusiness implements WorkflowBusinessSupport<BudgetRepor
   }
 
   private void validateData(BudgetReportData data) {
-    vn.tr.common.web.core.BaseBusinessHelper.validateOrThrow(
-        budgetReportValidator, data, "budgetReportData");
+    BaseBusinessHelper.validateOrThrow(budgetReportValidator, data, "budgetReportData");
   }
 
   /** Tổng hợp tự động Báo cáo Thực hiện Thu - Chi & Quyết toán định kỳ từ Sổ cái Phân bổ. */
   public BudgetReportData generateConsolidatedReport(Map<String, Object> body) {
-    int year =
-        body != null && body.get("budgetYear") != null
-            ? Integer.parseInt(body.get("budgetYear").toString())
-            : LocalDate.now().getYear();
+    int year = parseIntParam(body, "budgetYear", LocalDate.now().getYear());
     String reportPeriod =
         body != null && body.get("reportPeriod") != null
-            ? String.valueOf(body.get("reportPeriod")).toUpperCase()
+            ? String.valueOf(body.get("reportPeriod")).trim().toUpperCase()
             : "QUARTER";
-    int periodNumber =
-        body != null && body.get("periodNumber") != null
-            ? Integer.parseInt(body.get("periodNumber").toString())
-            : 1;
-    Long nodeId =
-        body != null && body.get("nodeId") != null
-            ? Long.parseLong(body.get("nodeId").toString())
-            : null;
+    int periodNumber = parseIntParam(body, "periodNumber", 1);
+    Long nodeId = parseLongParam(body, "nodeId");
+    if (nodeId != null) {
+      guard().assertNodeAccess(nodeId, null);
+    }
 
     LocalDate[] range = resolvePeriodRange(year, reportPeriod, periodNumber, body);
     LocalDate fromDate = range[0];
     LocalDate toDate = range[1];
 
-    List<BudgetAllocation> allocs =
+    OrgSubtreeAuthorizationHelper.OrgSubtreeScope callerScope = guard().resolveCurrentScope();
+    List<BudgetAllocation> rawAllocs =
         nodeId != null
             ? budgetAllocationRepo.findByNodeIdAndBudgetYearOrderByIdAsc(nodeId, year)
             : budgetAllocationRepo.findByBudgetYearOrderByIdAsc(year);
+    List<BudgetAllocation> allocs = filterAllocationsByScope(rawAllocs, callerScope);
+
     List<BudgetTransaction> yearTxs =
         budgetTransactionRepo != null
-            ? budgetTransactionRepo.findByBudgetYearOrderByIdDesc(year)
+            ? (nodeId != null
+                ? budgetTransactionRepo.findByBudgetYearAndNodeIdOrderByIdDesc(year, nodeId)
+                : budgetTransactionRepo.findByBudgetYearOrderByIdDesc(year))
             : List.of();
     List<BudgetDisbursement> yearDisbs =
         budgetDisbursementRepo != null
-            ? budgetDisbursementRepo.findByBudgetYearOrderByIdDesc(year)
+            ? (nodeId != null
+                ? budgetDisbursementRepo.findByBudgetYearAndNodeIdOrderByIdDesc(year, nodeId)
+                : budgetDisbursementRepo.findByBudgetYearOrderByIdDesc(year))
             : List.of();
 
     List<BudgetTransaction> periodTxs = new ArrayList<>();
@@ -342,8 +435,11 @@ public class BudgetReportBusiness implements WorkflowBusinessSupport<BudgetRepor
       if (nodeId != null && !nodeId.equals(tx.getNodeId())) {
         continue;
       }
-      if ("DRAFT".equalsIgnoreCase(tx.getApprovalStatus())
-          || "REJECTED".equalsIgnoreCase(tx.getApprovalStatus())) {
+      if (!isAllowedByScope(callerScope, tx.getNodeId(), tx.getNodeCode())) {
+        continue;
+      }
+      String txStatus = StrUtil.nullToEmpty(tx.getApprovalStatus()).trim().toUpperCase();
+      if (!EFFECTIVE_TX_STATUSES.contains(txStatus)) {
         continue;
       }
       LocalDate txDate =
@@ -360,9 +456,11 @@ public class BudgetReportBusiness implements WorkflowBusinessSupport<BudgetRepor
       if (nodeId != null && !nodeId.equals(d.getNodeId())) {
         continue;
       }
-      if ("DRAFT".equalsIgnoreCase(d.getApprovalStatus())
-          || "REJECTED".equalsIgnoreCase(d.getApprovalStatus())
-          || "CANCELLED".equalsIgnoreCase(d.getApprovalStatus())) {
+      if (!isAllowedByScope(callerScope, d.getNodeId(), d.getNodeCode())) {
+        continue;
+      }
+      String dStatus = StrUtil.nullToEmpty(d.getApprovalStatus()).trim().toUpperCase();
+      if (!EFFECTIVE_DISB_STATUSES.contains(dStatus)) {
         continue;
       }
       LocalDate dDate =
@@ -414,9 +512,10 @@ public class BudgetReportBusiness implements WorkflowBusinessSupport<BudgetRepor
                   safeDec(a.getSupplementAmount())
                       .add(safeDec(a.getTransferNetAmount()))
                       .subtract(safeDec(a.getReductionAmount())));
+          // Chuyển nguồn ròng = nhận chuyển nguồn (in) - chuyển nguồn sang năm sau (out) (TD-H06)
           carryOver =
               carryOver.add(
-                  safeDec(a.getCarryOverInAmount()).add(safeDec(a.getCarryOverOutAmount())));
+                  safeDec(a.getCarryOverInAmount()).subtract(safeDec(a.getCarryOverOutAmount())));
           expComm = expComm.add(safeDec(a.getCommittedAmount()));
           expAdv = expAdv.add(safeDec(a.getAdvancedAmount()));
           expAct = expAct.add(safeDec(a.getDisbursedAmount()));
@@ -430,7 +529,8 @@ public class BudgetReportBusiness implements WorkflowBusinessSupport<BudgetRepor
         String type = StrUtil.blankToDefault(tx.getTxType(), "").toUpperCase();
         BigDecimal amt = safeDec(tx.getAmount());
         switch (type) {
-          case "SUPPLEMENT", "ADDITIONAL", "TRANSFER_IN" -> expAdj = expAdj.add(amt.abs());
+          case "SUPPLEMENT", "ADDITIONAL", "BATCH_PAYROLL_INDEXATION" -> expAdj = expAdj.add(amt);
+          case "TRANSFER_IN" -> expAdj = expAdj.add(amt.abs());
           case "REDUCTION", "TRANSFER_OUT" -> expAdj = expAdj.subtract(amt.abs());
           case "INTERNAL_TRANSFER" ->
               expAdj =
@@ -442,27 +542,61 @@ public class BudgetReportBusiness implements WorkflowBusinessSupport<BudgetRepor
           default -> {}
         }
       }
+      BigDecimal advSettlementDeduction = BigDecimal.ZERO;
       for (BudgetDisbursement d : periodDisbs) {
         BigDecimal amt = safeDec(d.getAmount());
+        BigDecimal sAmt =
+            d.getSettledAmount() != null && d.getSettledAmount().compareTo(BigDecimal.ZERO) > 0
+                ? d.getSettledAmount()
+                : amt;
         String status = StrUtil.blankToDefault(d.getApprovalStatus(), "").toUpperCase();
-        if ("COMMITTED".equals(status)) {
+        String dtype = StrUtil.blankToDefault(d.getDisbursementType(), "").toUpperCase();
+        if ("COMMITMENT".equals(dtype) || "COMMITTED".equals(status)) {
           expComm = expComm.add(amt);
-        } else if ("ADVANCED".equals(status)) {
-          expAdv = expAdv.add(amt);
+        } else if ("ADVANCE".equals(dtype)) {
+          expAct = expAct.add(amt);
+          if ("SETTLED".equals(status)) {
+            expSettled = expSettled.add(sAmt);
+            if (amt.compareTo(sAmt) > 0) {
+              expAdv = expAdv.add(amt.subtract(sAmt));
+            }
+          } else {
+            expAdv = expAdv.add(amt);
+          }
+        } else if ("ADVANCE_SETTLEMENT".equals(dtype)) {
+          // Không cộng trùng vào expAct; ghi nhận quyết toán và khấu trừ dư tạm ứng
+          expSettled = expSettled.add(sAmt);
+          advSettlementDeduction = advSettlementDeduction.add(sAmt);
         } else if ("SETTLED".equals(status)) {
-          expSettled = expSettled.add(amt);
+          expSettled = expSettled.add(sAmt);
           expAct = expAct.add(amt);
         } else {
           expAct = expAct.add(amt);
         }
       }
+      if (advSettlementDeduction.compareTo(BigDecimal.ZERO) > 0) {
+        expAdv = expAdv.subtract(advSettlementDeduction).max(BigDecimal.ZERO);
+      }
     }
+
+    revEst = scaleMoney(revEst);
+    revAct = scaleMoney(revAct);
+    expInit = scaleMoney(expInit);
+    expAdj = scaleMoney(expAdj);
+    expEff = scaleMoney(expEff);
+    expComm = scaleMoney(expComm);
+    expAdv = scaleMoney(expAdv);
+    expAct = scaleMoney(expAct);
+    expSettled = scaleMoney(expSettled);
+    carryOver = scaleMoney(carryOver);
+    remaining = scaleMoney(remaining);
+    expiredCancelled = scaleMoney(expiredCancelled);
 
     BigDecimal rate =
         expEff.compareTo(BigDecimal.ZERO) > 0
             ? expAct.multiply(new BigDecimal("100")).divide(expEff, 2, RoundingMode.HALF_UP)
-            : BigDecimal.ZERO;
-    BigDecimal saving = expEff.subtract(expAct).max(BigDecimal.ZERO);
+            : scaleMoney(BigDecimal.ZERO);
+    BigDecimal saving = scaleMoney(expEff.subtract(expAct).max(BigDecimal.ZERO));
 
     String code =
         "BCKP-"
@@ -473,16 +607,8 @@ public class BudgetReportBusiness implements WorkflowBusinessSupport<BudgetRepor
             + "-"
             + (nodeId != null ? "DV" + nodeId : "TOANSO");
 
-    String actorName =
-        integrationOrchestrator != null
-            ? integrationOrchestrator.resolveCurrentActorName(
-                body, "actorName", "submittedByPersonName", "reviewedByPersonName")
-            : "Cán bộ Tài chính - Kế toán";
-    Long actorPersonId =
-        integrationOrchestrator != null
-            ? integrationOrchestrator.resolveCurrentPersonId(
-                body, "submittedByPersonId", "reviewedByPersonId")
-            : null;
+    String actorName = resolveAuthenticatedActorName();
+    Long actorPersonId = resolveAuthenticatedPersonId();
 
     BudgetReportData data =
         BudgetReportData.builder()
@@ -526,8 +652,8 @@ public class BudgetReportBusiness implements WorkflowBusinessSupport<BudgetRepor
             .totalRemainingBalance(remaining)
             .totalExpiredCancelled(expiredCancelled)
             .disbursementRatePercent(rate)
-            .submittedByPersonId(actorPersonId)
-            .submittedByPersonName(actorName)
+            .preparedByPersonId(actorPersonId)
+            .preparedByPersonName(actorName)
             .workflowStatus("DRAFT")
             .status(LifecycleStatus.ACTIVE)
             .build();
@@ -536,59 +662,71 @@ public class BudgetReportBusiness implements WorkflowBusinessSupport<BudgetRepor
 
   private LocalDate[] resolvePeriodRange(
       int year, String reportPeriod, int periodNumber, Map<String, Object> body) {
-    if (body != null && body.get("fromDate") != null && body.get("toDate") != null) {
-      return new LocalDate[] {
-        LocalDate.parse(body.get("fromDate").toString()),
-        LocalDate.parse(body.get("toDate").toString())
-      };
+    try {
+      if (body != null && body.get("fromDate") != null && body.get("toDate") != null) {
+        return new LocalDate[] {
+          LocalDate.parse(body.get("fromDate").toString().trim()),
+          LocalDate.parse(body.get("toDate").toString().trim())
+        };
+      }
+      if ("MONTH".equalsIgnoreCase(reportPeriod)) {
+        int m = Math.max(1, Math.min(12, periodNumber));
+        YearMonth ym = YearMonth.of(year, m);
+        return new LocalDate[] {ym.atDay(1), ym.atEndOfMonth()};
+      }
+      if ("QUARTER".equalsIgnoreCase(reportPeriod)) {
+        int q = Math.max(1, Math.min(4, periodNumber));
+        int startMonth = (q - 1) * 3 + 1;
+        YearMonth start = YearMonth.of(year, startMonth);
+        YearMonth end = YearMonth.of(year, startMonth + 2);
+        return new LocalDate[] {start.atDay(1), end.atEndOfMonth()};
+      }
+      if ("SIX_MONTH".equalsIgnoreCase(reportPeriod) || "HALF_YEAR".equalsIgnoreCase(reportPeriod)) {
+        boolean secondHalf = periodNumber >= 2;
+        return secondHalf
+            ? new LocalDate[] {LocalDate.of(year, 7, 1), LocalDate.of(year, 12, 31)}
+            : new LocalDate[] {LocalDate.of(year, 1, 1), LocalDate.of(year, 6, 30)};
+      }
+      LocalDate cutoff =
+          body != null && body.get("dataCutoffDate") != null
+              ? LocalDate.parse(body.get("dataCutoffDate").toString().trim())
+              : LocalDate.of(year, 12, 31);
+      return new LocalDate[] {LocalDate.of(year, 1, 1), cutoff};
+    } catch (DateTimeParseException e) {
+      throw new InvalidDataException(
+          "Định dạng ngày kỳ báo cáo không hợp lệ (chuẩn yyyy-MM-dd).", null);
     }
-    if ("MONTH".equalsIgnoreCase(reportPeriod)) {
-      int m = Math.max(1, Math.min(12, periodNumber));
-      YearMonth ym = YearMonth.of(year, m);
-      return new LocalDate[] {ym.atDay(1), ym.atEndOfMonth()};
-    }
-    if ("QUARTER".equalsIgnoreCase(reportPeriod)) {
-      int q = Math.max(1, Math.min(4, periodNumber));
-      int startMonth = (q - 1) * 3 + 1;
-      YearMonth start = YearMonth.of(year, startMonth);
-      YearMonth end = YearMonth.of(year, startMonth + 2);
-      return new LocalDate[] {start.atDay(1), end.atEndOfMonth()};
-    }
-    if ("SIX_MONTH".equalsIgnoreCase(reportPeriod)) {
-      boolean secondHalf = periodNumber >= 2;
-      return secondHalf
-          ? new LocalDate[] {LocalDate.of(year, 7, 1), LocalDate.of(year, 12, 31)}
-          : new LocalDate[] {LocalDate.of(year, 1, 1), LocalDate.of(year, 6, 30)};
-    }
-    LocalDate cutoff =
-        body != null && body.get("dataCutoffDate") != null
-            ? LocalDate.parse(body.get("dataCutoffDate").toString())
-            : LocalDate.of(year, 12, 31);
-    return new LocalDate[] {LocalDate.of(year, 1, 1), cutoff};
   }
 
-  /** Trình duyệt báo cáo quyết toán định kỳ. */
+  /** Trình duyệt báo cáo quyết toán định kỳ (kích hoạt BPMN Workflow). */
   public BudgetReportData submitReport(Long id, Map<String, Object> body) {
     BudgetReport rpt =
         budgetReportService
             .findById(id)
             .orElseThrow(() -> new EntityNotFoundException(BudgetReport.class, id));
+    guard().assertNodeAccessIfPresent(rpt.getNodeId(), rpt.getNodeCode());
+    sm().assertReportTransition(rpt.getWorkflowStatus(), "PENDING_APPROVAL", rpt.getCode());
+
     rpt.setWorkflowStatus("PENDING_APPROVAL");
     rpt.setSubmittedDate(LocalDateTime.now());
-    String actorName =
-        integrationOrchestrator != null
-            ? integrationOrchestrator.resolveCurrentActorName(
-                body, "actorName", "submittedByPersonName")
-            : "Cán bộ Tài chính - Kế toán";
-    Long actorId =
-        integrationOrchestrator != null
-            ? integrationOrchestrator.resolveCurrentPersonId(body, "submittedByPersonId", "actorId")
-            : null;
+    String actorName = resolveAuthenticatedActorName();
+    Long actorId = resolveAuthenticatedPersonId();
     if (actorId != null) {
       rpt.setSubmittedByPersonId(actorId);
     }
     rpt.setSubmittedByPersonName(actorName);
-    return enrichData(budgetReportMapper.toData(budgetReportService.save(rpt)));
+    BudgetReport saved = budgetReportService.save(rpt);
+    if (integrationOrchestrator != null) {
+      Long wfId = integrationOrchestrator.startReportWorkflow(saved);
+      if (wfId != null) {
+        saved.setWfInstanceId(wfId);
+        if (StrUtil.isBlank(saved.getWfProcessCode())) {
+          saved.setWfProcessCode(BudgetIntegrationOrchestrator.WF_PROCESS_REPORT);
+        }
+        saved = budgetReportService.save(saved);
+      }
+    }
+    return enrichData(budgetReportMapper.toData(saved));
   }
 
   /** Từ chối / Trả lại báo cáo quyết toán định kỳ. */
@@ -597,21 +735,59 @@ public class BudgetReportBusiness implements WorkflowBusinessSupport<BudgetRepor
         budgetReportService
             .findById(id)
             .orElseThrow(() -> new EntityNotFoundException(BudgetReport.class, id));
+    guard().assertNodeAccessIfPresent(rpt.getNodeId(), rpt.getNodeCode());
+    sm().assertReportTransition(rpt.getWorkflowStatus(), "REJECTED", rpt.getCode());
+
     rpt.setWorkflowStatus("REJECTED");
+    String comment = "";
     if (body != null && body.get("comment") != null) {
-      rpt.setReviewComment(String.valueOf(body.get("comment")));
+      comment = String.valueOf(body.get("comment"));
+      rpt.setReviewComment(comment);
     } else if (body != null && body.get("reason") != null) {
-      rpt.setReviewComment(String.valueOf(body.get("reason")));
+      comment = String.valueOf(body.get("reason"));
+      rpt.setReviewComment(comment);
+    }
+    BudgetReport saved = budgetReportService.save(rpt);
+    if (integrationOrchestrator != null) {
+      integrationOrchestrator.executeWorkflowAction(getAppCode(), saved.getId(), "REJECT", comment);
+    }
+    return enrichData(budgetReportMapper.toData(saved));
+  }
+
+  /** Trả về chỉnh sửa (REWORK) báo cáo từ luồng BPMN Workflow. */
+  public BudgetReportData reworkReport(Long id, String comment) {
+    BudgetReport rpt =
+        budgetReportService
+            .findById(id)
+            .orElseThrow(() -> new EntityNotFoundException(BudgetReport.class, id));
+    guard().assertNodeAccessIfPresent(rpt.getNodeId(), rpt.getNodeCode());
+    sm().assertReportTransition(rpt.getWorkflowStatus(), "REWORK", rpt.getCode());
+
+    rpt.setWorkflowStatus("REWORK");
+    if (StrUtil.isNotBlank(comment)) {
+      rpt.setReviewComment(comment);
     }
     return enrichData(budgetReportMapper.toData(budgetReportService.save(rpt)));
   }
 
-  /** Lưu kết quả xác nhận đối chiếu số dư Kho bạc Nhà nước cho báo cáo kỳ. */
+  /**
+   * Lưu kết quả xác nhận đối chiếu số dư Kho bạc Nhà nước cho báo cáo kỳ (yêu cầu quyền
+   * {@code BudgetReportReconcile} và cưỡng chế SoD 4 mắt: người đối chiếu/thẩm định != người lập/trình).
+   */
   public BudgetReportData confirmTreasuryReconciliation(Long id, Map<String, Object> body) {
     BudgetReport rpt =
         budgetReportService
             .findById(id)
             .orElseThrow(() -> new EntityNotFoundException(BudgetReport.class, id));
+    guard().assertNodeAccessIfPresent(rpt.getNodeId(), rpt.getNodeCode());
+    Long creatorOrSubmitterId =
+        rpt.getSubmittedByPersonId() != null
+            ? rpt.getSubmittedByPersonId()
+            : rpt.getPreparedByPersonId();
+    guard()
+        .assertFourEyesReview(
+            "báo cáo quyết toán", rpt.getCode(), creatorOrSubmitterId, rpt.getCreatedBy());
+
     Integer q = rpt.getPeriodNumber() != null ? rpt.getPeriodNumber() : 4;
     Map<String, Object> statement =
         generateKbnnReconciliationStatement(rpt.getBudgetYear(), q, rpt.getNodeId());
@@ -622,56 +798,145 @@ public class BudgetReportBusiness implements WorkflowBusinessSupport<BudgetRepor
             : "KBNN-" + rpt.getBudgetYear() + "-Q" + q + "-" + rpt.getId();
     rpt.setTreasuryConfirmationCode(confirmCode);
     rpt.setTreasuryConfirmedDate(LocalDate.now());
+    Long reviewerId = resolveAuthenticatedPersonId();
+    if (reviewerId != null) {
+      rpt.setReviewedByPersonId(reviewerId);
+    }
+    rpt.setReviewedByPersonName(resolveAuthenticatedActorName());
     return enrichData(budgetReportMapper.toData(budgetReportService.save(rpt)));
   }
 
-  /** Phê duyệt báo cáo quyết toán định kỳ. */
+  /**
+   * Phê duyệt báo cáo quyết toán định kỳ (cưỡng chế SoD 4 mắt: {@code creator/submitter !=
+   * reviewer != approver}, tuyệt đối không ghi đè {@code reviewedByPersonId} bằng {@code
+   * approvedByPersonId}).
+   */
   public BudgetReportData approveReport(Long id, Map<String, Object> body) {
     BudgetReport rpt =
         budgetReportService
             .findById(id)
             .orElseThrow(() -> new EntityNotFoundException(BudgetReport.class, id));
+    guard().assertNodeAccessIfPresent(rpt.getNodeId(), rpt.getNodeCode());
+    sm().assertReportTransition(rpt.getWorkflowStatus(), "APPROVED", rpt.getCode());
+
+    Long creatorOrSubmitterId =
+        rpt.getSubmittedByPersonId() != null
+            ? rpt.getSubmittedByPersonId()
+            : rpt.getPreparedByPersonId();
+    guard()
+        .assertFourEyesApproval(
+            "báo cáo quyết toán",
+            rpt.getCode(),
+            creatorOrSubmitterId,
+            rpt.getCreatedBy(),
+            rpt.getReviewedByPersonId());
+
     rpt.setWorkflowStatus("APPROVED");
     rpt.setApprovedDate(LocalDateTime.now());
-    String actorName =
-        integrationOrchestrator != null
-            ? integrationOrchestrator.resolveCurrentActorName(
-                body, "actorName", "reviewedByPersonName", "approvedByPersonName")
-            : "Cán bộ Tài chính - Kế toán";
-    Long actorId =
-        integrationOrchestrator != null
-            ? integrationOrchestrator.resolveCurrentPersonId(
-                body, "reviewedByPersonId", "approvedByPersonId", "actorId")
-            : null;
+    String actorName = resolveAuthenticatedActorName();
+    Long actorId = resolveAuthenticatedPersonId();
     if (actorId != null) {
-      rpt.setReviewedByPersonId(actorId);
       rpt.setApprovedByPersonId(actorId);
     }
-    rpt.setReviewedByPersonName(actorName);
     rpt.setApprovedByPersonName(actorName);
-    return enrichData(budgetReportMapper.toData(budgetReportService.save(rpt)));
+    BudgetReport saved = budgetReportService.save(rpt);
+    if (integrationOrchestrator != null) {
+      integrationOrchestrator.executeWorkflowAction(getAppCode(), saved.getId(), "APPROVE", "");
+    }
+    return enrichData(budgetReportMapper.toData(saved));
   }
 
   /**
    * Kết xuất Biểu mẫu Đối chiếu Dự toán & Tình hình Sử dụng Kinh phí tại Kho bạc Nhà nước (Mẫu số
-   * 01a/SDKP-ĐVDT & Mẫu số 02/SDKP-ĐVDT theo NĐ 60/2021/NĐ-CP và TT 342/2016/TT-BTC) (UPG-03).
+   * 01a/SDKP-ĐVDT & Mẫu số 02/SDKP-ĐVDT). Đã tối ưu prefetch {@link BudgetUnitConfig} & gom nhóm
+   * {@link BudgetDisbursement} theo Map để triệt tiêu N+1 Query (TD-H12).
    */
   @Transactional(readOnly = true)
   public Map<String, Object> generateKbnnReconciliationStatement(
       Integer budgetYear, Integer quarter, Long nodeId) {
     int year = budgetYear != null ? budgetYear : LocalDate.now().getYear();
     int q = quarter != null && quarter >= 1 && quarter <= 4 ? quarter : 4;
+    if (nodeId != null) {
+      guard().assertNodeAccess(nodeId, null);
+    }
+    OrgSubtreeAuthorizationHelper.OrgSubtreeScope callerScope = guard().resolveCurrentScope();
 
     List<BudgetAllocation> allocs =
-        nodeId != null
-            ? budgetAllocationRepo.findByNodeIdAndBudgetYearOrderByIdAsc(nodeId, year)
-            : budgetAllocationRepo.findByBudgetYearOrderByIdAsc(year);
+        filterAllocationsByScope(
+            nodeId != null
+                ? budgetAllocationRepo.findByNodeIdAndBudgetYearOrderByIdAsc(nodeId, year)
+                : budgetAllocationRepo.findByBudgetYearOrderByIdAsc(year),
+            callerScope);
     List<BudgetDisbursement> disbs =
         budgetDisbursementRepo != null
-            ? budgetDisbursementRepo.findByBudgetYearOrderByIdDesc(year)
+            ? (nodeId != null
+                ? budgetDisbursementRepo.findByBudgetYearAndNodeIdOrderByIdDesc(year, nodeId)
+                : budgetDisbursementRepo.findByBudgetYearOrderByIdDesc(year))
             : List.of();
 
-    List< Map<String, Object>> form01aRows = new ArrayList<>();
+    // Prefetch BudgetUnitConfig một lần cho toàn bộ nodeIds (chống N+1 query)
+    Set<Long> nodeIds = new LinkedHashSet<>();
+    if (nodeId != null) {
+      nodeIds.add(nodeId);
+    }
+    for (BudgetAllocation a : allocs) {
+      if (a.getNodeId() != null) {
+        nodeIds.add(a.getNodeId());
+      }
+    }
+    Map<Long, BudgetUnitConfig> unitConfigByNodeId = new HashMap<>();
+    if (budgetUnitConfigRepo != null && !nodeIds.isEmpty()) {
+      List<BudgetUnitConfig> configs = budgetUnitConfigRepo.findByNodeIdIn(nodeIds);
+      if (configs != null) {
+        for (BudgetUnitConfig cfg : configs) {
+          if (cfg.getNodeId() != null) {
+            unitConfigByNodeId.merge(
+                cfg.getNodeId(),
+                cfg,
+                (prev, curr) ->
+                    (curr.getId() != null
+                            && (prev.getId() == null || curr.getId() > prev.getId()))
+                        ? curr
+                        : prev);
+          }
+        }
+      }
+    }
+
+    // Gom nhóm giải ngân theo allocationId & allocationCode một lần (O(N+M) thay vì O(N*M))
+    Map<Long, List<BudgetDisbursement>> disbsByAllocId = new HashMap<>();
+    Map<String, List<BudgetDisbursement>> disbsByAllocCode = new HashMap<>();
+    int matchedVouchers = 0;
+    int pendingVouchers = 0;
+    for (BudgetDisbursement d : disbs) {
+      if (!isAllowedByScope(callerScope, d.getNodeId(), d.getNodeCode())) {
+        continue;
+      }
+      if ("REJECTED".equalsIgnoreCase(d.getApprovalStatus())
+          || "CANCELLED".equalsIgnoreCase(d.getApprovalStatus())
+          || "DRAFT".equalsIgnoreCase(d.getApprovalStatus())) {
+        continue;
+      }
+      if (quarter != null && !matchesDisbursementQuarter(d, quarter)) {
+        continue;
+      }
+      if (d.getAllocationId() != null) {
+        disbsByAllocId.computeIfAbsent(d.getAllocationId(), k -> new ArrayList<>()).add(d);
+      } else if (StrUtil.isNotBlank(d.getAllocationCode())) {
+        disbsByAllocCode
+            .computeIfAbsent(d.getAllocationCode().trim().toUpperCase(), k -> new ArrayList<>())
+            .add(d);
+      }
+      if (nodeId == null || nodeId.equals(d.getNodeId())) {
+        if (StrUtil.isNotBlank(d.getTreasuryRefCode())) {
+          matchedVouchers++;
+        } else {
+          pendingVouchers++;
+        }
+      }
+    }
+
+    List<Map<String, Object>> form01aRows = new ArrayList<>();
     BigDecimal totalInit = BigDecimal.ZERO;
     BigDecimal totalSupplement = BigDecimal.ZERO;
     BigDecimal totalCarryOver = BigDecimal.ZERO;
@@ -695,22 +960,25 @@ public class BudgetReportBusiness implements WorkflowBusinessSupport<BudgetRepor
       if (resolvedUnitNodeId == null && a.getNodeId() != null) {
         resolvedUnitNodeId = a.getNodeId();
       }
-      BigDecimal init = safeDec(a.getInitialAmount());
+      BigDecimal init = scaleMoney(safeDec(a.getInitialAmount()));
       BigDecimal supp =
-          safeDec(a.getSupplementAmount())
-              .add(safeDec(a.getTransferNetAmount()))
-              .subtract(safeDec(a.getReductionAmount()));
+          scaleMoney(
+              safeDec(a.getSupplementAmount())
+                  .add(safeDec(a.getTransferNetAmount()))
+                  .subtract(safeDec(a.getReductionAmount())));
       BigDecimal co =
-          safeDec(a.getCarryOverInAmount()).subtract(safeDec(a.getCarryOverOutAmount()));
-      BigDecimal eff = safeDec(a.getEffectiveAmount());
-      BigDecimal comm = safeDec(a.getCommittedAmount());
-      BigDecimal adv = safeDec(a.getAdvancedAmount());
-      BigDecimal disb = safeDec(a.getDisbursedAmount());
+          scaleMoney(
+              safeDec(a.getCarryOverInAmount()).subtract(safeDec(a.getCarryOverOutAmount())));
+      BigDecimal eff = scaleMoney(safeDec(a.getEffectiveAmount()));
+      BigDecimal comm = scaleMoney(safeDec(a.getCommittedAmount()));
+      BigDecimal adv = scaleMoney(safeDec(a.getAdvancedAmount()));
+      BigDecimal disb = scaleMoney(safeDec(a.getDisbursedAmount()));
       BigDecimal settled =
-          safeDec(a.getSettledAmount()).compareTo(BigDecimal.ZERO) > 0
-              ? safeDec(a.getSettledAmount())
-              : disb;
-      BigDecimal avail = safeDec(a.getAvailableAmount());
+          scaleMoney(
+              safeDec(a.getSettledAmount()).compareTo(BigDecimal.ZERO) > 0
+                  ? safeDec(a.getSettledAmount())
+                  : disb);
+      BigDecimal avail = scaleMoney(safeDec(a.getAvailableAmount()));
 
       totalInit = totalInit.add(init);
       totalSupplement = totalSupplement.add(supp);
@@ -723,13 +991,38 @@ public class BudgetReportBusiness implements WorkflowBusinessSupport<BudgetRepor
       totalAvailable = totalAvailable.add(avail);
 
       String unitChapterCode = "423";
-      if (budgetUnitConfigRepo != null && a.getNodeId() != null) {
-        BudgetUnitConfig uCfg =
-            budgetUnitConfigRepo.findFirstByNodeIdOrderByIdDesc(a.getNodeId()).orElse(null);
-        if (uCfg != null && StrUtil.isNotBlank(uCfg.getDefaultChapterCode())) {
-          unitChapterCode = uCfg.getDefaultChapterCode();
+      BudgetUnitConfig uCfg = a.getNodeId() != null ? unitConfigByNodeId.get(a.getNodeId()) : null;
+      if (uCfg == null && budgetUnitConfigRepo != null && a.getNodeId() != null) {
+        uCfg = budgetUnitConfigRepo.findFirstByNodeIdOrderByIdDesc(a.getNodeId()).orElse(null);
+      }
+      if (uCfg != null && StrUtil.isNotBlank(uCfg.getDefaultChapterCode())) {
+        unitChapterCode = uCfg.getDefaultChapterCode();
+      }
+
+      List<BudgetDisbursement> allocDisbs = new ArrayList<>();
+      if (a.getId() != null && disbsByAllocId.containsKey(a.getId())) {
+        allocDisbs.addAll(disbsByAllocId.get(a.getId()));
+      }
+      if (StrUtil.isNotBlank(a.getCode())) {
+        List<BudgetDisbursement> byCode =
+            disbsByAllocCode.get(a.getCode().trim().toUpperCase());
+        if (byCode != null) {
+          allocDisbs.addAll(byCode);
         }
       }
+      int allocMatched = 0;
+      int allocPending = 0;
+      for (BudgetDisbursement d : allocDisbs) {
+        if (StrUtil.isNotBlank(d.getTreasuryRefCode())) {
+          allocMatched++;
+        } else {
+          allocPending++;
+        }
+      }
+      String rowReconciledStatus =
+          (allocMatched + allocPending) == 0
+              ? "NO_DISBURSEMENT"
+              : (allocPending == 0 ? "MATCHED_KBNN" : "PENDING_RECONCILIATION");
 
       Map<String, Object> row = new LinkedHashMap<>();
       row.put("allocationCode", a.getCode());
@@ -754,77 +1047,21 @@ public class BudgetReportBusiness implements WorkflowBusinessSupport<BudgetRepor
       row.put("settledActualExpenditure", settled);
       row.put("remainingBalance", avail);
       row.put("remainingEstimateBalance", avail);
-      int allocMatched = 0;
-      int allocPending = 0;
-      for (BudgetDisbursement d : disbs) {
-        if ("REJECTED".equalsIgnoreCase(d.getApprovalStatus())
-            || "CANCELLED".equalsIgnoreCase(d.getApprovalStatus())) {
-          continue;
-        }
-        boolean matchesAlloc =
-            (d.getAllocationId() != null && d.getAllocationId().equals(a.getId()))
-                || (StrUtil.isNotBlank(a.getCode())
-                    && a.getCode().equalsIgnoreCase(d.getAllocationCode()));
-        if (!matchesAlloc) {
-          continue;
-        }
-        if (quarter != null) {
-          if (d.getBudgetQuarter() != null && !quarter.equals(d.getBudgetQuarter())) {
-            continue;
-          }
-          if (d.getBudgetQuarter() == null
-              && d.getVoucherDate() != null
-              && ((d.getVoucherDate().getMonthValue() - 1) / 3 + 1) != quarter) {
-            continue;
-          }
-        }
-        if (StrUtil.isNotBlank(d.getTreasuryRefCode())) {
-          allocMatched++;
-        } else {
-          allocPending++;
-        }
-      }
-      String rowReconciledStatus =
-          (allocMatched + allocPending) == 0
-              ? "NO_DISBURSEMENT"
-              : (allocPending == 0 ? "MATCHED_KBNN" : "PENDING_RECONCILIATION");
       row.put("matchedVoucherCount", allocMatched);
       row.put("pendingVoucherCount", allocPending);
       row.put("reconciledStatus", rowReconciledStatus);
       form01aRows.add(row);
     }
 
-    int matchedVouchers = 0;
-    int pendingVouchers = 0;
-    for (BudgetDisbursement d : disbs) {
-      if (nodeId != null && !nodeId.equals(d.getNodeId())) {
-        continue;
-      }
-      if (quarter != null) {
-        if (d.getBudgetQuarter() != null && !quarter.equals(d.getBudgetQuarter())) {
-          continue;
-        }
-        if (d.getBudgetQuarter() == null && d.getVoucherDate() != null) {
-          int voucherQuarter = (d.getVoucherDate().getMonthValue() - 1) / 3 + 1;
-          if (voucherQuarter != quarter) {
-            continue;
-          }
-        }
-      }
-      if (StrUtil.isNotBlank(d.getTreasuryRefCode())) {
-        matchedVouchers++;
-      } else {
-        pendingVouchers++;
-      }
-    }
-
     String treasuryAgencyName = "Kho bạc Nhà nước Thành phố Đà Nẵng";
-    if (budgetUnitConfigRepo != null && resolvedUnitNodeId != null) {
-      BudgetUnitConfig uCfg =
+    BudgetUnitConfig headerCfg =
+        resolvedUnitNodeId != null ? unitConfigByNodeId.get(resolvedUnitNodeId) : null;
+    if (headerCfg == null && budgetUnitConfigRepo != null && resolvedUnitNodeId != null) {
+      headerCfg =
           budgetUnitConfigRepo.findFirstByNodeIdOrderByIdDesc(resolvedUnitNodeId).orElse(null);
-      if (uCfg != null && StrUtil.isNotBlank(uCfg.getTreasuryBranchName())) {
-        treasuryAgencyName = uCfg.getTreasuryBranchName();
-      }
+    }
+    if (headerCfg != null && StrUtil.isNotBlank(headerCfg.getTreasuryBranchName())) {
+      treasuryAgencyName = headerCfg.getTreasuryBranchName();
     }
 
     Map<String, Object> statement = new LinkedHashMap<>();
@@ -835,27 +1072,38 @@ public class BudgetReportBusiness implements WorkflowBusinessSupport<BudgetRepor
     statement.put("generatedDate", LocalDate.now().toString());
     statement.put("treasuryAgency", treasuryAgencyName);
     statement.put("treasuryAgencyName", treasuryAgencyName);
-    statement.put("totalInitialEstimate", totalInit);
-    statement.put("totalSupplementAndAdjustment", totalSupplement);
-    statement.put("totalCarryOverNet", totalCarryOver);
-    statement.put("totalEffectiveEstimate", totalEffective);
-    statement.put("totalCommittedAmount", totalCommitted);
-    statement.put("totalDisbursedAdvanceBalance", totalAdvanced);
-    statement.put("totalDisbursedAtTreasury", totalDisbursed);
-    statement.put("totalSettledActualExpenditure", totalSettled);
-    statement.put("totalRemainingBalance", totalAvailable);
+    statement.put("totalInitialEstimate", scaleMoney(totalInit));
+    statement.put("totalSupplementAndAdjustment", scaleMoney(totalSupplement));
+    statement.put("totalCarryOverNet", scaleMoney(totalCarryOver));
+    statement.put("totalEffectiveEstimate", scaleMoney(totalEffective));
+    statement.put("totalCommittedAmount", scaleMoney(totalCommitted));
+    statement.put("totalDisbursedAdvanceBalance", scaleMoney(totalAdvanced));
+    statement.put("totalDisbursedAtTreasury", scaleMoney(totalDisbursed));
+    statement.put("totalSettledActualExpenditure", scaleMoney(totalSettled));
+    statement.put("totalRemainingBalance", scaleMoney(totalAvailable));
     statement.put("matchedVoucherCount", matchedVouchers);
     statement.put("pendingVoucherCount", pendingVouchers);
     statement.put("rows", form01aRows);
     return statement;
   }
 
+  private boolean matchesDisbursementQuarter(BudgetDisbursement d, Integer quarter) {
+    if (quarter == null) {
+      return true;
+    }
+    if (d.getBudgetQuarter() != null) {
+      return quarter.equals(d.getBudgetQuarter());
+    }
+    if (d.getVoucherDate() != null) {
+      return ((d.getVoucherDate().getMonthValue() - 1) / 3 + 1) == quarter;
+    }
+    return true;
+  }
+
   /**
    * Kết xuất Ma trận Động Đa chiều theo Lĩnh vực / Nhóm lĩnh vực / Loại-Khoản (Dynamic Domain/Group
-   * Matrix). Không gắn cứng cột hay đơn vị: tự động phát hiện danh sách cột từ cấu hình Lĩnh vực /
-   * Nhóm lĩnh vực của từng cơ quan, hỗ trợ chốt số liệu tính đến ngày cụ thể (asOfDate), chuyển đổi
-   * chế độ hiển thị Khối Giao đầu năm (SEPARATE_INITIAL vs CUMULATIVE_EFFECTIVE) và liệt kê chi
-   * tiết các đợt bổ sung/điều chỉnh giảm/điều chuyển chéo theo từng đơn vị.
+   * Matrix). Bỏ nhánh hardcode {@code isSnapshotOct23}: mặc định dùng {@code CUMULATIVE_EFFECTIVE}
+   * trừ khi caller truyền {@code viewMode} tường minh (TD-H06).
    */
   @Transactional(readOnly = true)
   public Map<String, Object> generateDynamicDomainMatrix(
@@ -865,24 +1113,35 @@ public class BudgetReportBusiness implements WorkflowBusinessSupport<BudgetRepor
       String viewMode,
       Long nodeId) {
     int year = budgetYear != null ? budgetYear : LocalDate.now().getYear();
+    if (nodeId != null) {
+      guard().assertNodeAccess(nodeId, null);
+    }
+    OrgSubtreeAuthorizationHelper.OrgSubtreeScope callerScope = guard().resolveCurrentScope();
     String dimension =
         StrUtil.isNotBlank(groupByDimension) ? groupByDimension.trim().toUpperCase() : "DOMAIN";
     String resolvedDate =
-        StrUtil.isNotBlank(asOfDate) ? asOfDate.trim() : year + "-10-30";
-    boolean isSnapshotOct23 = resolvedDate.endsWith("10-23") || resolvedDate.startsWith("23/10");
+        StrUtil.isNotBlank(asOfDate) ? asOfDate.trim() : LocalDate.now().toString();
     String resolvedViewMode =
-        StrUtil.isNotBlank(viewMode)
-            ? viewMode.trim().toUpperCase()
-            : (isSnapshotOct23 ? "SEPARATE_INITIAL" : "CUMULATIVE_EFFECTIVE");
+        StrUtil.isNotBlank(viewMode) ? viewMode.trim().toUpperCase() : "CUMULATIVE_EFFECTIVE";
 
     List<BudgetAllocation> allocs =
-        nodeId != null
-            ? budgetAllocationRepo.findByNodeIdAndBudgetYearOrderByIdAsc(nodeId, year)
-            : budgetAllocationRepo.findByBudgetYearOrderByIdAsc(year);
-    List<BudgetTransaction> txs =
+        filterAllocationsByScope(
+            nodeId != null
+                ? budgetAllocationRepo.findByNodeIdAndBudgetYearOrderByIdAsc(nodeId, year)
+                : budgetAllocationRepo.findByBudgetYearOrderByIdAsc(year),
+            callerScope);
+    List<BudgetTransaction> rawTxs =
         budgetTransactionRepo != null
-            ? budgetTransactionRepo.findByBudgetYearOrderByIdDesc(year)
+            ? (nodeId != null
+                ? budgetTransactionRepo.findByBudgetYearAndNodeIdOrderByIdDesc(year, nodeId)
+                : budgetTransactionRepo.findByBudgetYearOrderByIdDesc(year))
             : List.of();
+    List<BudgetTransaction> txs = new ArrayList<>();
+    for (BudgetTransaction tx : rawTxs) {
+      if (isAllowedByScope(callerScope, tx.getNodeId(), tx.getNodeCode())) {
+        txs.add(tx);
+      }
+    }
 
     LocalDate cutoffDate = null;
     try {
@@ -1477,6 +1736,69 @@ public class BudgetReportBusiness implements WorkflowBusinessSupport<BudgetRepor
     return v != null ? v : BigDecimal.ZERO;
   }
 
+  private BigDecimal scaleMoney(BigDecimal v) {
+    return safeDec(v).setScale(2, RoundingMode.HALF_UP);
+  }
+
+  private int parseIntParam(Map<String, Object> body, String key, int defaultValue) {
+    if (body == null || body.get(key) == null || StrUtil.isBlank(body.get(key).toString())) {
+      return defaultValue;
+    }
+    try {
+      return Integer.parseInt(body.get(key).toString().trim());
+    } catch (NumberFormatException e) {
+      throw new InvalidDataException("Tham số '" + key + "' không phải số nguyên hợp lệ.", null);
+    }
+  }
+
+  private Long parseLongParam(Map<String, Object> body, String key) {
+    if (body == null || body.get(key) == null || StrUtil.isBlank(body.get(key).toString())) {
+      return null;
+    }
+    try {
+      return Long.parseLong(body.get(key).toString().trim());
+    } catch (NumberFormatException e) {
+      throw new InvalidDataException("Tham số '" + key + "' không phải định danh số hợp lệ.", null);
+    }
+  }
+
+  private Long resolveAuthenticatedPersonId() {
+    Long id = guard().resolveAuthenticatedPersonId();
+    if (id == null && integrationOrchestrator != null) {
+      id = integrationOrchestrator.resolveCurrentPersonId(null);
+    }
+    return id;
+  }
+
+  private String resolveAuthenticatedActorName() {
+    if (integrationOrchestrator != null) {
+      return integrationOrchestrator.resolveCurrentActorName(null);
+    }
+    return guard().resolveAuthenticatedActorName();
+  }
+
+  private List<BudgetAllocation> filterAllocationsByScope(
+      List<BudgetAllocation> allocs, OrgSubtreeAuthorizationHelper.OrgSubtreeScope scope) {
+    if (allocs == null || allocs.isEmpty() || scope == null || !scope.restricted()) {
+      return allocs != null ? allocs : List.of();
+    }
+    List<BudgetAllocation> filtered = new ArrayList<>();
+    for (BudgetAllocation a : allocs) {
+      if (isAllowedByScope(scope, a.getNodeId(), a.getNodeCode())) {
+        filtered.add(a);
+      }
+    }
+    return filtered;
+  }
+
+  private boolean isAllowedByScope(
+      OrgSubtreeAuthorizationHelper.OrgSubtreeScope scope, Long nodeId, String nodeCode) {
+    if (scope == null || !scope.restricted()) {
+      return true;
+    }
+    return scope.allowsTarget(nodeId, null, nodeCode, null);
+  }
+
   private BigDecimal calcPercent(BigDecimal numerator, BigDecimal denominator) {
     if (denominator == null || denominator.compareTo(BigDecimal.ZERO) <= 0 || numerator == null) {
       return BigDecimal.ZERO;
@@ -1516,12 +1838,12 @@ public class BudgetReportBusiness implements WorkflowBusinessSupport<BudgetRepor
 
   @Override
   public String getProcessCode() {
-    return "budget_report_approval";
+    return BudgetIntegrationOrchestrator.WF_PROCESS_REPORT;
   }
 
   @Override
   public String getCallbackUrl() {
-    return "/api/v1/budget/reports/workflow-callback";
+    return "/workflow/callback";
   }
 
   @Override
@@ -1535,8 +1857,13 @@ public class BudgetReportBusiness implements WorkflowBusinessSupport<BudgetRepor
         budgetReportService
             .findById(id)
             .orElseThrow(() -> new EntityNotFoundException(BudgetReport.class, id));
+    guard().assertNodeAccessIfPresent(rpt.getNodeId(), rpt.getNodeCode());
+    sm().assertReportTransition(rpt.getWorkflowStatus(), "DRAFT", rpt.getCode());
     rpt.setWorkflowStatus("DRAFT");
     budgetReportService.save(rpt);
+    if (integrationOrchestrator != null) {
+      integrationOrchestrator.executeWorkflowAction(getAppCode(), id, "WITHDRAW", "Hủy trình duyệt");
+    }
   }
 
   @Override
@@ -1545,10 +1872,13 @@ public class BudgetReportBusiness implements WorkflowBusinessSupport<BudgetRepor
       return;
     }
     String decision = StrUtil.blankToDefault(payload.getDecision(), "").toUpperCase();
+    String comment = StrUtil.nullToEmpty(payload.getComment());
     if ("APPROVE".equals(decision) || "APPROVED".equals(decision)) {
-      approveReport(payload.getEntityId(), Map.of("comment", StrUtil.nullToEmpty(payload.getComment())));
+      approveReport(payload.getEntityId(), Map.of("comment", comment));
+    } else if ("REWORK".equals(decision) || "RETURN".equals(decision)) {
+      reworkReport(payload.getEntityId(), comment);
     } else if ("REJECT".equals(decision) || "REJECTED".equals(decision)) {
-      rejectReport(payload.getEntityId(), Map.of("comment", StrUtil.nullToEmpty(payload.getComment())));
+      rejectReport(payload.getEntityId(), Map.of("comment", comment));
     }
   }
 
@@ -1558,6 +1888,7 @@ public class BudgetReportBusiness implements WorkflowBusinessSupport<BudgetRepor
         budgetReportService
             .findById(id)
             .orElseThrow(() -> new EntityNotFoundException(BudgetReport.class, id));
+    guard().assertNodeAccessIfPresent(rpt.getNodeId(), rpt.getNodeCode());
     rpt.setStatus(targetStatus);
     if (StrUtil.isNotBlank(comment)) {
       rpt.setReviewComment(comment);

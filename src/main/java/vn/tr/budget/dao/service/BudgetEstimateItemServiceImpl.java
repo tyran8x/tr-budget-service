@@ -63,7 +63,7 @@ public class BudgetEstimateItemServiceImpl implements BudgetEstimateItemService 
   @Transactional
   public void deleteByIds(Collection<Long> ids) {
     if (ObjectUtil.isNotEmpty(ids)) {
-      repo.softDeleteByIds(ids);
+      repo.softDeleteByIds(ids, BudgetQueryHelper.resolveCurrentAppCode());
     }
   }
 
@@ -93,7 +93,9 @@ public class BudgetEstimateItemServiceImpl implements BudgetEstimateItemService 
 
   @Override
   public Optional<BudgetEstimateItem> findByCodeIgnoreCaseIncludingDeleted(String code) {
-    List<BudgetEstimateItem> results = repo.findAllByCodeIgnoreCaseIncludingDeletedSorted(code);
+    List<BudgetEstimateItem> results =
+        repo.findAllByCodeIgnoreCaseIncludingDeletedSorted(
+            code, BudgetQueryHelper.resolveCurrentAppCode());
     return ServiceUtils.checkDuplicateAndReturnFirst(log, "BudgetEstimateItem", code, results, BudgetEstimateItem::getId);
   }
 

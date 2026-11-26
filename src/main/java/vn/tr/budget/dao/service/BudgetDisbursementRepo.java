@@ -31,23 +31,34 @@ public interface BudgetDisbursementRepo
   boolean existsByNameIgnoreCase(String name);
 
   @Query(
-      "SELECT a FROM BudgetDisbursement a WHERE a.code = :code ORDER BY a.deletedAt ASC NULLS FIRST, a.updatedAt DESC")
-  List<BudgetDisbursement> findAllByCodeIgnoreCaseIncludingDeletedSorted(@Param("code") String code);
+      value =
+          "SELECT * FROM budget_disbursement WHERE LOWER(code) = LOWER(:code) AND app_code = :appCode "
+              + "ORDER BY deleted_at ASC NULLS FIRST, updated_at DESC",
+      nativeQuery = true)
+  List<BudgetDisbursement> findAllByCodeIgnoreCaseIncludingDeletedSorted(
+      @Param("code") String code, @Param("appCode") String appCode);
+
+  default List<BudgetDisbursement> findAllByCodeIgnoreCaseIncludingDeletedSorted(String code) {
+    return findAllByCodeIgnoreCaseIncludingDeletedSorted(
+        code, BudgetQueryHelper.resolveCurrentAppCode());
+  }
 
   @Modifying(clearAutomatically = true)
   @Query(
-      "UPDATE BudgetDisbursement a SET a.deletedAt = CURRENT_TIMESTAMP, a.version = (a.version + 1) WHERE a.id IN :ids")
-  void softDeleteByIds(@Param("ids") Collection<Long> ids);
-
-  @Query(value = "SELECT * FROM budget_disbursement WHERE id = :id LIMIT 1", nativeQuery = true)
-  Optional<BudgetDisbursement> findByIdIncludingDeleted(@Param("id") Long id);
+      "UPDATE BudgetDisbursement a SET a.deletedAt = CURRENT_TIMESTAMP, a.version = (a.version + 1) "
+          + "WHERE a.id IN :ids AND a.appCode = :appCode")
+  void softDeleteByIds(@Param("ids") Collection<Long> ids, @Param("appCode") String appCode);
 
   @Query(
       value =
-          "SELECT * FROM budget_disbursement WHERE id = :id AND (app_code = :appCode OR :appCode IS NULL) LIMIT 1",
+          "SELECT * FROM budget_disbursement WHERE id = :id AND app_code = :appCode LIMIT 1",
       nativeQuery = true)
   Optional<BudgetDisbursement> findByIdIncludingDeletedByAppCode(
       @Param("id") Long id, @Param("appCode") String appCode);
+
+  default Optional<BudgetDisbursement> findByIdIncludingDeleted(Long id) {
+    return findByIdIncludingDeletedByAppCode(id, BudgetQueryHelper.resolveCurrentAppCode());
+  }
 
   Optional<BudgetDisbursement> findFirstByPaymentTxCodeIgnoreCase(String paymentTxCode);
 
@@ -56,6 +67,26 @@ public interface BudgetDisbursementRepo
   List<BudgetDisbursement> findByAllocationIdOrderByIdAsc(Long allocationId);
 
   List<BudgetDisbursement> findByBudgetYearOrderByIdDesc(Integer budgetYear);
+
+  List<BudgetDisbursement> findByBudgetYearAndNodeIdOrderByIdDesc(Integer budgetYear, Long nodeId);
+
+  @Query(
+      value =
+          "SELECT DISTINCT app_code FROM budget_disbursement "
+              + "WHERE deleted_at IS NULL AND app_code IS NOT NULL",
+      nativeQuery = true)
+  List<String> findDistinctActiveAppCodes();
+
+  @Query(
+      value =
+          "SELECT * FROM budget_disbursement "
+              + "WHERE deleted_at IS NULL AND app_code = :appCode "
+              + "AND sla_due_date IS NOT NULL "
+              + "AND COALESCE(is_overdue_warning_sent, FALSE) = FALSE "
+              + "AND UPPER(COALESCE(approval_status, '')) NOT IN ('SETTLED', 'REJECTED', 'CANCELLED', 'DRAFT') "
+              + "ORDER BY sla_due_date ASC",
+      nativeQuery = true)
+  List<BudgetDisbursement> findPendingSlaDisbursementsByAppCode(@Param("appCode") String appCode);
 
   @Query(
       "SELECT COUNT(d), "

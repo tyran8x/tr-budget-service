@@ -172,7 +172,7 @@ public class LocalStandaloneConfig implements WebMvcConfigurer {
                     return true;
                   }
                   rawToken =
-                      isNormalRole ? "normal-local-budget-token" : "local-huydq1-budget-token";
+                      isNormalRole ? "normal-local-budget-token" : "local-admin-budget-token";
                 } else if (isNormalRole && !rawToken.startsWith("normal-")) {
                   rawToken = "normal-" + rawToken;
                 }
@@ -199,9 +199,9 @@ public class LocalStandaloneConfig implements WebMvcConfigurer {
                               "sgtvt", Set.of("EvalSelfView"),
                               "budget", Set.of("EvalSelfView")));
                     } else {
-                      user.setUserId("12");
-                      user.setUsername("huydq1@danang.gov.vn");
-                      user.setFullName("Đinh Quang Huy");
+                      user.setUserId("10001");
+                      user.setUsername("budget_local_admin@demo.local");
+                      user.setFullName("Quản trị viên Ngân sách (Local Dev)");
                       user.setUserType("INTERNAL");
                       user.setAppCodes(
                           Set.of(

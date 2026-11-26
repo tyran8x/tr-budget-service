@@ -31,6 +31,8 @@ import vn.tr.common.core.domain.data.PagedData;
 import vn.tr.common.core.domain.data.RefData;
 import vn.tr.common.log.annotation.Log;
 import vn.tr.common.log.enums.BusinessType;
+import vn.tr.common.ratelimiter.annotation.RateLimiter;
+import vn.tr.common.ratelimiter.enums.LimitType;
 import vn.tr.common.web.core.BaseController;
 import vn.tr.common.web.data.dto.BulkOperationResult;
 import vn.tr.common.web.data.dto.BulkSortOrderData;
@@ -144,11 +146,12 @@ public class BudgetTransactionController extends BaseController {
   @PutMapping("/sort-order")
   @Operation(summary = "Cập nhật thứ tự hàng loạt")
   @Log(title = "[BudgetTransaction] Batch Update Sort Order", businessType = BusinessType.UPDATE)
-  public R<Void> bulkUpdateSortOrder(@RequestBody BulkSortOrderData data) {
+  public R<Void> bulkUpdateSortOrder(@Valid @RequestBody BulkSortOrderData data) {
     budgetTransactionBusiness.bulkUpdateSortOrder(data);
     return success();
   }
 
+  @RateLimiter(time = 60, count = 20, limitType = LimitType.IP)
   @SaCheckPermission("BudgetTransactionExport")
   @GetMapping("/export")
   @Operation(summary = "Xuất file Excel Sổ cái Biến động Nguồn Kinh phí Bút toán kép")
@@ -171,6 +174,7 @@ public class BudgetTransactionController extends BaseController {
     budgetTransactionExcelService.importTemplate(response);
   }
 
+  @RateLimiter(time = 60, count = 15, limitType = LimitType.IP)
   @SaCheckPermission("BudgetTransactionImport")
   @PostMapping("/import/validate")
   @Operation(summary = "Validate file Excel Import")
@@ -180,12 +184,13 @@ public class BudgetTransactionController extends BaseController {
             file, budgetTransactionExcelService, budgetTransactionMapper));
   }
 
+  @RateLimiter(time = 60, count = 15, limitType = LimitType.IP)
   @SaCheckPermission("BudgetTransactionImport")
   @PostMapping("/import")
   @Operation(summary = "Import dữ liệu Sổ cái Biến động Nguồn Kinh phí Bút toán kép từ JSON")
   @Log(title = "[BudgetTransaction] Import Commit", businessType = BusinessType.IMPORT)
   public R<Map<String, Object>> importData(
-      @RequestBody Map<String, List<BudgetTransactionData>> body) {
+      @Valid @RequestBody Map<String, List<BudgetTransactionData>> body) {
     return success(
         BudgetExcelControllerHelper.importData(
             body.get("data"),
@@ -312,6 +317,7 @@ public class BudgetTransactionController extends BaseController {
     return success(budgetTransactionBusiness.executeTrancheRelease(body));
   }
 
+  @RateLimiter(time = 60, count = 15, limitType = LimitType.IP)
   @SaCheckPermission("BudgetTransactionApprove")
   @PostMapping("/batch-payroll-indexation")
   @Operation(
@@ -323,11 +329,12 @@ public class BudgetTransactionController extends BaseController {
     return success(budgetTransactionBusiness.executeBatchPayrollIndexation(body));
   }
 
+  @RateLimiter(time = 60, count = 20, limitType = LimitType.IP)
   @SaCheckPermission("BudgetTransactionCreate")
   @PostMapping("/batch")
   @Operation(summary = "Nhập hàng loạt Bút toán Sổ cái từ lưới Spreadsheet / Paste Excel")
   @Log(title = "[BudgetTransaction] Batch Create", businessType = BusinessType.INSERT)
-  public R<Map<String, Object>> batchCreate(@RequestBody List<BudgetTransactionData> items) {
+  public R<Map<String, Object>> batchCreate(@Valid @RequestBody List<BudgetTransactionData> items) {
     return success(budgetBatchEntryBusiness.batchSaveTransactions(items));
   }
 

@@ -30,6 +30,8 @@ import vn.tr.common.core.domain.data.PagedData;
 import vn.tr.common.core.domain.data.RefData;
 import vn.tr.common.log.annotation.Log;
 import vn.tr.common.log.enums.BusinessType;
+import vn.tr.common.ratelimiter.annotation.RateLimiter;
+import vn.tr.common.ratelimiter.enums.LimitType;
 import vn.tr.common.web.core.BaseController;
 import vn.tr.common.web.data.dto.BulkOperationResult;
 import vn.tr.common.web.data.dto.BulkSortOrderData;
@@ -137,11 +139,12 @@ public class BudgetReportController extends BaseController {
   @PutMapping("/sort-order")
   @Operation(summary = "Cập nhật thứ tự hàng loạt")
   @Log(title = "[BudgetReport] Batch Update Sort Order", businessType = BusinessType.UPDATE)
-  public R<Void> bulkUpdateSortOrder(@RequestBody BulkSortOrderData data) {
+  public R<Void> bulkUpdateSortOrder(@Valid @RequestBody BulkSortOrderData data) {
     budgetReportBusiness.bulkUpdateSortOrder(data);
     return success();
   }
 
+  @RateLimiter(time = 60, count = 20, limitType = LimitType.IP)
   @SaCheckPermission("BudgetReportExport")
   @GetMapping("/export")
   @Operation(summary = "Xuất file Excel Báo cáo Thực hiện Thu - Chi & Tổng hợp Quyết toán Định kỳ")
@@ -165,6 +168,7 @@ public class BudgetReportController extends BaseController {
     budgetReportExcelService.importTemplate(response);
   }
 
+  @RateLimiter(time = 60, count = 15, limitType = LimitType.IP)
   @SaCheckPermission("BudgetReportImport")
   @PostMapping("/import/validate")
   @Operation(summary = "Validate file Excel Import")
@@ -174,12 +178,14 @@ public class BudgetReportController extends BaseController {
             file, budgetReportExcelService, budgetReportMapper));
   }
 
+  @RateLimiter(time = 60, count = 15, limitType = LimitType.IP)
   @SaCheckPermission("BudgetReportImport")
   @PostMapping("/import")
   @Operation(
       summary = "Import dữ liệu Báo cáo Thực hiện Thu - Chi & Tổng hợp Quyết toán Định kỳ từ JSON")
   @Log(title = "[BudgetReport] Import Commit", businessType = BusinessType.IMPORT)
-  public R<Map<String, Object>> importData(@RequestBody Map<String, List<BudgetReportData>> body) {
+  public R<Map<String, Object>> importData(
+      @Valid @RequestBody Map<String, List<BudgetReportData>> body) {
     return success(
         BudgetExcelControllerHelper.importData(
             body.get("data"),
@@ -189,6 +195,7 @@ public class BudgetReportController extends BaseController {
             budgetReportBusiness::update));
   }
 
+  @RateLimiter(time = 60, count = 20, limitType = LimitType.IP)
   @SaCheckPermission("BudgetReportConsolidate")
   @PostMapping("/generate-consolidated")
   @Operation(
@@ -209,7 +216,7 @@ public class BudgetReportController extends BaseController {
     return success(budgetReportBusiness.submitReport(id, body));
   }
 
-  @SaCheckPermission("BudgetReportSubmit")
+  @SaCheckPermission("BudgetReportReconcile")
   @PostMapping("/{id}/treasury-reconciliation")
   @Operation(summary = "Lưu kết quả xác nhận đối chiếu số dư Kho bạc Nhà nước cho báo cáo kỳ")
   @Log(title = "[BudgetReport] Confirm KBNN Reconciliation", businessType = BusinessType.UPDATE)

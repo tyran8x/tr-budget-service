@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Optional;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
@@ -17,6 +18,7 @@ import org.springframework.transaction.annotation.Transactional;
 import vn.tr.budget.dao.model.BudgetReport;
 import vn.tr.budget.data.criteria.BudgetReportSearchCriteria;
 import vn.tr.common.core.utils.ServiceUtils;
+import vn.tr.common.security.abac.OrgSubtreeAuthorizationHelper;
 
 /**
  * Triển khai Service cho BudgetReport.
@@ -29,6 +31,9 @@ import vn.tr.common.core.utils.ServiceUtils;
 public class BudgetReportServiceImpl implements BudgetReportService {
 
   private final BudgetReportRepo repo;
+
+  @Autowired(required = false)
+  private OrgSubtreeAuthorizationHelper orgSubtreeAuthorizationHelper;
 
   @Override
   public Optional<BudgetReport> findById(Long id) {
@@ -63,7 +68,7 @@ public class BudgetReportServiceImpl implements BudgetReportService {
   @Transactional
   public void deleteByIds(Collection<Long> ids) {
     if (ObjectUtil.isNotEmpty(ids)) {
-      repo.softDeleteByIds(ids);
+      repo.softDeleteByIds(ids, BudgetQueryHelper.resolveCurrentAppCode());
     }
   }
 
@@ -71,7 +76,11 @@ public class BudgetReportServiceImpl implements BudgetReportService {
   public Page<BudgetReport> findAll(BudgetReportSearchCriteria searchCriteria, Pageable pageable) {
     BudgetReportSearchCriteria criteria =
         ObjectUtil.defaultIfNull(searchCriteria, new BudgetReportSearchCriteria());
-    Specification<BudgetReport> spec = BudgetReportSpecifications.quickSearch(criteria);
+    OrgSubtreeAuthorizationHelper.OrgSubtreeScope scope =
+        orgSubtreeAuthorizationHelper != null
+            ? orgSubtreeAuthorizationHelper.resolveCurrentCallerScope()
+            : null;
+    Specification<BudgetReport> spec = BudgetReportSpecifications.quickSearch(criteria, scope);
     if (pageable == null || pageable.isUnpaged()) {
       Sort sort =
           BudgetQueryHelper.buildSafeSort(
@@ -90,7 +99,9 @@ public class BudgetReportServiceImpl implements BudgetReportService {
 
   @Override
   public Optional<BudgetReport> findByCodeIgnoreCaseIncludingDeleted(String code) {
-    List<BudgetReport> results = repo.findAllByCodeIgnoreCaseIncludingDeletedSorted(code);
+    List<BudgetReport> results =
+        repo.findAllByCodeIgnoreCaseIncludingDeletedSorted(
+            code, BudgetQueryHelper.resolveCurrentAppCode());
     return ServiceUtils.checkDuplicateAndReturnFirst(log, "BudgetReport", code, results, BudgetReport::getId);
   }
 

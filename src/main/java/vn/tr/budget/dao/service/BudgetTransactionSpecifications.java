@@ -5,10 +5,11 @@ import org.springframework.data.jpa.domain.Specification;
 import vn.tr.budget.dao.model.BudgetTransaction;
 import vn.tr.budget.data.criteria.BudgetTransactionSearchCriteria;
 import vn.tr.common.jpa.helper.CriteriaBuilderHelper;
+import vn.tr.common.security.abac.OrgSubtreeAuthorizationHelper;
 import vn.tr.common.web.utils.LookupOptionsHelper;
 
 /**
- * JPA Specification cho BudgetTransaction.
+ * JPA Specification cho BudgetTransaction (hỗ trợ ABAC Org-Subtree & Fail-Closed).
  *
  * @author tyran8x
  */
@@ -16,14 +17,30 @@ public final class BudgetTransactionSpecifications {
 
   private BudgetTransactionSpecifications() {}
 
-  public static Specification<BudgetTransaction> quickSearch(final BudgetTransactionSearchCriteria criteria) {
+  public static Specification<BudgetTransaction> quickSearch(
+      final BudgetTransactionSearchCriteria criteria) {
+    return quickSearch(criteria, null);
+  }
+
+  public static Specification<BudgetTransaction> quickSearch(
+      final BudgetTransactionSearchCriteria criteria,
+      final OrgSubtreeAuthorizationHelper.OrgSubtreeScope scope) {
     return (root, query, cb) -> {
       if (criteria == null) {
-        return null;
+        return cb.disjunction();
       }
       Predicate textSearchCondition =
           CriteriaBuilderHelper.createOrUnaccentedLike(
-              cb, root, criteria.getSearch(), "name", "code", "allocationCode", "nodeName", "txType", "decisionNo", "reason");
+              cb,
+              root,
+              criteria.getSearch(),
+              "name",
+              "code",
+              "allocationCode",
+              "nodeName",
+              "txType",
+              "decisionNo",
+              "reason");
       Predicate statusCondition =
           LookupOptionsHelper.hasExplicitIds(criteria)
               ? null
@@ -31,12 +48,22 @@ public final class BudgetTransactionSpecifications {
       Predicate idsCondition = CriteriaBuilderHelper.createIn(cb, root, "id", criteria.getIds());
       Predicate codesCondition =
           CriteriaBuilderHelper.createIn(cb, root, "code", criteria.getCodes());
-      Predicate allocationIdCondition = CriteriaBuilderHelper.createEquals(cb, root, "allocationId", criteria.getAllocationId());
-      Predicate nodeIdCondition = CriteriaBuilderHelper.createEquals(cb, root, "nodeId", criteria.getNodeId());
-      Predicate txTypeCondition = CriteriaBuilderHelper.createEquals(cb, root, "txType", criteria.getTxType());
-      Predicate budgetYearCondition = CriteriaBuilderHelper.createEquals(cb, root, "budgetYear", criteria.getBudgetYear());
-      Predicate fundingSourceCodeCondition = CriteriaBuilderHelper.createEquals(cb, root, "fundingSourceCode", criteria.getFundingSourceCode());
-      Predicate approvalStatusCondition = CriteriaBuilderHelper.createEquals(cb, root, "approvalStatus", criteria.getApprovalStatus());
+      Predicate allocationIdCondition =
+          CriteriaBuilderHelper.createEquals(cb, root, "allocationId", criteria.getAllocationId());
+      Predicate nodeIdCondition =
+          CriteriaBuilderHelper.createEquals(cb, root, "nodeId", criteria.getNodeId());
+      Predicate txTypeCondition =
+          CriteriaBuilderHelper.createEquals(cb, root, "txType", criteria.getTxType());
+      Predicate budgetYearCondition =
+          CriteriaBuilderHelper.createEquals(cb, root, "budgetYear", criteria.getBudgetYear());
+      Predicate fundingSourceCodeCondition =
+          CriteriaBuilderHelper.createEquals(
+              cb, root, "fundingSourceCode", criteria.getFundingSourceCode());
+      Predicate approvalStatusCondition =
+          CriteriaBuilderHelper.createEquals(
+              cb, root, "approvalStatus", criteria.getApprovalStatus());
+      Predicate orgScopeCondition =
+          BudgetQueryHelper.buildOrgSubtreePredicate(cb, root, scope, "nodeId", "nodeCode", false);
       return CriteriaBuilderHelper.and(
           cb,
           textSearchCondition,
@@ -48,7 +75,8 @@ public final class BudgetTransactionSpecifications {
           txTypeCondition,
           budgetYearCondition,
           fundingSourceCodeCondition,
-          approvalStatusCondition);
+          approvalStatusCondition,
+          orgScopeCondition);
     };
   }
 }

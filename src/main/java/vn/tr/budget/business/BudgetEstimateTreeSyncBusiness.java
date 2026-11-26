@@ -59,7 +59,9 @@ public class BudgetEstimateTreeSyncBusiness {
             : null;
     List<TreeNodePayload> roots = request.getNodes() != null ? request.getNodes() : List.of();
 
-    validateTreePayloadsRecursive(roots, new HashSet<>(), new HashSet<>());
+    Map<String, String> formulaByCode = new LinkedHashMap<>();
+    validateTreePayloadsRecursive(roots, new HashSet<>(), new HashSet<>(), formulaByCode);
+    BudgetEstimateFormulaValidator.validateFormulaGraphOrThrow(formulaByCode);
 
     BudgetEstimateItemRepo repo = estimateItemService.getRepo();
     List<BudgetEstimateItem> scopedExisting =
@@ -313,7 +315,10 @@ public class BudgetEstimateTreeSyncBusiness {
   }
 
   private void validateTreePayloadsRecursive(
-      List<TreeNodePayload> nodes, Set<String> seenCodes, Set<Long> seenIds) {
+      List<TreeNodePayload> nodes,
+      Set<String> seenCodes,
+      Set<Long> seenIds,
+      Map<String, String> formulaByCode) {
     for (TreeNodePayload node : nodes) {
       if (StrUtil.isBlank(node.getCode())) {
         throw new ServiceException("Mỗi chỉ tiêu trên cây bắt buộc phải có Mã chỉ tiêu.");
@@ -326,28 +331,58 @@ public class BudgetEstimateTreeSyncBusiness {
         throw new ServiceException("Phát hiện cấu trúc cây lặp ID node: " + node.getId());
       }
       BudgetEstimateFormulaValidator.validateOrThrow(node.getFormula(), node.getCode());
+      formulaByCode.put(key, node.getFormula());
       if (node.getNormStandardAmount() != null
           && node.getNormStandardAmount().compareTo(BigDecimal.ZERO) < 0) {
         throw new ServiceException("Định mức của [" + node.getCode() + "] không được âm.");
       }
       if (node.getChildren() != null && !node.getChildren().isEmpty()) {
-        validateTreePayloadsRecursive(node.getChildren(), seenCodes, seenIds);
+        validateTreePayloadsRecursive(node.getChildren(), seenCodes, seenIds, formulaByCode);
       }
     }
   }
 
   private void refreshDescendantPaths(BudgetEstimateItem parent, List<BudgetEstimateItem> all) {
-    for (BudgetEstimateItem child : all) {
-      if (Objects.equals(child.getParentId(), parent.getId())) {
-        int nextDepth = (parent.getLevelDepth() != null ? parent.getLevelDepth() : 1) + 1;
-        child.setLevelDepth(nextDepth);
-        child.setParentCode(parent.getCode());
-        child.setParentName(parent.getName());
-        child.setTreePath(
-            (parent.getTreePath() != null ? parent.getTreePath() : "") + "/" + child.getCode());
-        estimateItemService.save(child);
-        refreshDescendantPaths(child, all);
+    Map<Long, List<BudgetEstimateItem>> childrenByParent = new LinkedHashMap<>();
+    for (BudgetEstimateItem item : all) {
+      if (item.getParentId() != null && !Objects.equals(item.getId(), parent.getId())) {
+        childrenByParent
+            .computeIfAbsent(item.getParentId(), k -> new ArrayList<>())
+            .add(item);
       }
+    }
+    List<BudgetEstimateItem> dirty = new ArrayList<>();
+    Set<Long> visited = new HashSet<>();
+    if (parent.getId() != null) {
+      visited.add(parent.getId());
+    }
+    collectDescendantPathUpdates(parent, childrenByParent, visited, dirty);
+    if (!dirty.isEmpty()) {
+      estimateItemService.getRepo().saveAll(dirty);
+    }
+  }
+
+  private void collectDescendantPathUpdates(
+      BudgetEstimateItem parent,
+      Map<Long, List<BudgetEstimateItem>> childrenByParent,
+      Set<Long> visited,
+      List<BudgetEstimateItem> dirty) {
+    List<BudgetEstimateItem> children = childrenByParent.get(parent.getId());
+    if (children == null || children.isEmpty()) {
+      return;
+    }
+    int nextDepth = (parent.getLevelDepth() != null ? parent.getLevelDepth() : 1) + 1;
+    String parentPath = parent.getTreePath() != null ? parent.getTreePath() : "";
+    for (BudgetEstimateItem child : children) {
+      if (child.getId() != null && !visited.add(child.getId())) {
+        continue;
+      }
+      child.setLevelDepth(nextDepth);
+      child.setParentCode(parent.getCode());
+      child.setParentName(parent.getName());
+      child.setTreePath(parentPath + "/" + child.getCode());
+      dirty.add(child);
+      collectDescendantPathUpdates(child, childrenByParent, visited, dirty);
     }
   }
 

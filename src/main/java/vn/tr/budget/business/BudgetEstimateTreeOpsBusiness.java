@@ -133,9 +133,16 @@ public class BudgetEstimateTreeOpsBusiness {
     List<BudgetEstimateItem> scoped =
         filterByYearAndType(estimateItemService.getRepo().findAll(), year, null);
     Map<Long, List<BudgetEstimateItem>> childrenByParent = new LinkedHashMap<>();
+    Set<String> allCodes = new HashSet<>();
+    Map<String, String> formulaByCode = new LinkedHashMap<>();
     for (BudgetEstimateItem item : scoped) {
       if (item.getParentId() != null) {
         childrenByParent.computeIfAbsent(item.getParentId(), k -> new ArrayList<>()).add(item);
+      }
+      if (StrUtil.isNotBlank(item.getCode())) {
+        String upper = item.getCode().trim().toUpperCase(Locale.ROOT);
+        allCodes.add(upper);
+        formulaByCode.put(upper, item.getFormula());
       }
     }
 
@@ -169,7 +176,8 @@ public class BudgetEstimateTreeOpsBusiness {
         }
       }
       for (String formulaErr :
-          BudgetEstimateFormulaValidator.inspectFormula(item.getFormula(), item.getCode())) {
+          BudgetEstimateFormulaValidator.inspectFormula(
+              item.getFormula(), item.getCode(), allCodes)) {
         issues.add(issue("ERROR", "INVALID_FORMULA", item.getCode(), formulaErr));
       }
       if (item.getMaxCeilingAmount() != null) {
@@ -187,6 +195,10 @@ public class BudgetEstimateTreeOpsBusiness {
                       + "."));
         }
       }
+    }
+
+    for (String cycleErr : BudgetEstimateFormulaValidator.validateFormulaGraph(formulaByCode)) {
+      issues.add(issue("ERROR", "FORMULA_CYCLE", null, cycleErr));
     }
 
     Map<String, Object> summary = new LinkedHashMap<>();

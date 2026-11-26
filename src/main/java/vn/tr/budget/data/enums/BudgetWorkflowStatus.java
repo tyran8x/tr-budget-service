@@ -18,6 +18,7 @@ public enum BudgetWorkflowStatus {
   COMMITTED("COMMITTED", "Đã tạm giữ cam kết chi"),
   APPROVED_DISBURSED("APPROVED_DISBURSED", "Đã duyệt giải ngân KBNN"),
   SETTLED("SETTLED", "Đã nghiệm thu quyết toán"),
+  REWORK("REWORK", "Yêu cầu chỉnh sửa / Bổ sung"),
   REJECTED("REJECTED", "Từ chối / Trả lại"),
   CANCELLED("CANCELLED", "Đã huỷ");
 

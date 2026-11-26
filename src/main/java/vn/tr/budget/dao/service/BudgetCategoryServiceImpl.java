@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Optional;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
@@ -17,6 +18,7 @@ import org.springframework.transaction.annotation.Transactional;
 import vn.tr.budget.dao.model.BudgetCategory;
 import vn.tr.budget.data.criteria.BudgetCategorySearchCriteria;
 import vn.tr.common.core.utils.ServiceUtils;
+import vn.tr.common.security.abac.OrgSubtreeAuthorizationHelper;
 
 /**
  * Triển khai Service cho BudgetCategory.
@@ -29,6 +31,9 @@ import vn.tr.common.core.utils.ServiceUtils;
 public class BudgetCategoryServiceImpl implements BudgetCategoryService {
 
   private final BudgetCategoryRepo repo;
+
+  @Autowired(required = false)
+  private OrgSubtreeAuthorizationHelper orgSubtreeAuthorizationHelper;
 
   @Override
   public Optional<BudgetCategory> findById(Long id) {
@@ -63,7 +68,7 @@ public class BudgetCategoryServiceImpl implements BudgetCategoryService {
   @Transactional
   public void deleteByIds(Collection<Long> ids) {
     if (ObjectUtil.isNotEmpty(ids)) {
-      repo.softDeleteByIds(ids);
+      repo.softDeleteByIds(ids, BudgetQueryHelper.resolveCurrentAppCode());
     }
   }
 
@@ -71,7 +76,11 @@ public class BudgetCategoryServiceImpl implements BudgetCategoryService {
   public Page<BudgetCategory> findAll(BudgetCategorySearchCriteria searchCriteria, Pageable pageable) {
     BudgetCategorySearchCriteria criteria =
         ObjectUtil.defaultIfNull(searchCriteria, new BudgetCategorySearchCriteria());
-    Specification<BudgetCategory> spec = BudgetCategorySpecifications.quickSearch(criteria);
+    OrgSubtreeAuthorizationHelper.OrgSubtreeScope scope =
+        orgSubtreeAuthorizationHelper != null
+            ? orgSubtreeAuthorizationHelper.resolveCurrentCallerScope()
+            : null;
+    Specification<BudgetCategory> spec = BudgetCategorySpecifications.quickSearch(criteria, scope);
     if (pageable == null || pageable.isUnpaged()) {
       Sort sort =
           BudgetQueryHelper.buildSafeSort(
@@ -90,7 +99,9 @@ public class BudgetCategoryServiceImpl implements BudgetCategoryService {
 
   @Override
   public Optional<BudgetCategory> findByCodeIgnoreCaseIncludingDeleted(String code) {
-    List<BudgetCategory> results = repo.findAllByCodeIgnoreCaseIncludingDeletedSorted(code);
+    List<BudgetCategory> results =
+        repo.findAllByCodeIgnoreCaseIncludingDeletedSorted(
+            code, BudgetQueryHelper.resolveCurrentAppCode());
     return ServiceUtils.checkDuplicateAndReturnFirst(log, "BudgetCategory", code, results, BudgetCategory::getId);
   }
 

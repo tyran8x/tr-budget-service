@@ -31,23 +31,34 @@ public interface BudgetCategoryRepo
   boolean existsByNameIgnoreCase(String name);
 
   @Query(
-      "SELECT a FROM BudgetCategory a WHERE a.code = :code ORDER BY a.deletedAt ASC NULLS FIRST, a.updatedAt DESC")
-  List<BudgetCategory> findAllByCodeIgnoreCaseIncludingDeletedSorted(@Param("code") String code);
+      value =
+          "SELECT * FROM budget_category WHERE LOWER(code) = LOWER(:code) AND app_code = :appCode "
+              + "ORDER BY deleted_at ASC NULLS FIRST, updated_at DESC",
+      nativeQuery = true)
+  List<BudgetCategory> findAllByCodeIgnoreCaseIncludingDeletedSorted(
+      @Param("code") String code, @Param("appCode") String appCode);
+
+  default List<BudgetCategory> findAllByCodeIgnoreCaseIncludingDeletedSorted(String code) {
+    return findAllByCodeIgnoreCaseIncludingDeletedSorted(
+        code, BudgetQueryHelper.resolveCurrentAppCode());
+  }
 
   @Modifying(clearAutomatically = true)
   @Query(
-      "UPDATE BudgetCategory a SET a.deletedAt = CURRENT_TIMESTAMP, a.version = (a.version + 1) WHERE a.id IN :ids")
-  void softDeleteByIds(@Param("ids") Collection<Long> ids);
-
-  @Query(value = "SELECT * FROM budget_category WHERE id = :id LIMIT 1", nativeQuery = true)
-  Optional<BudgetCategory> findByIdIncludingDeleted(@Param("id") Long id);
+      "UPDATE BudgetCategory a SET a.deletedAt = CURRENT_TIMESTAMP, a.version = (a.version + 1) "
+          + "WHERE a.id IN :ids AND a.appCode = :appCode")
+  void softDeleteByIds(@Param("ids") Collection<Long> ids, @Param("appCode") String appCode);
 
   @Query(
       value =
-          "SELECT * FROM budget_category WHERE id = :id AND (app_code = :appCode OR :appCode IS NULL) LIMIT 1",
+          "SELECT * FROM budget_category WHERE id = :id AND app_code = :appCode LIMIT 1",
       nativeQuery = true)
   Optional<BudgetCategory> findByIdIncludingDeletedByAppCode(
       @Param("id") Long id, @Param("appCode") String appCode);
+
+  default Optional<BudgetCategory> findByIdIncludingDeleted(Long id) {
+    return findByIdIncludingDeletedByAppCode(id, BudgetQueryHelper.resolveCurrentAppCode());
+  }
 
   List<BudgetCategory> findByParentIdOrderByIdAsc(Long parentId);
 
@@ -56,4 +67,6 @@ public interface BudgetCategoryRepo
 
   List<BudgetCategory> findByCategoryGroupInOrderByBudgetYearAscSortOrderAscIdAsc(
       Collection<String> categoryGroups);
+
+  List<BudgetCategory> findByAppCodeAndCodeIn(String appCode, Collection<String> codes);
 }

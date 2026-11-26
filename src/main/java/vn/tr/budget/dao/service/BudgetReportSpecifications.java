@@ -5,10 +5,11 @@ import org.springframework.data.jpa.domain.Specification;
 import vn.tr.budget.dao.model.BudgetReport;
 import vn.tr.budget.data.criteria.BudgetReportSearchCriteria;
 import vn.tr.common.jpa.helper.CriteriaBuilderHelper;
+import vn.tr.common.security.abac.OrgSubtreeAuthorizationHelper;
 import vn.tr.common.web.utils.LookupOptionsHelper;
 
 /**
- * JPA Specification cho BudgetReport.
+ * JPA Specification cho BudgetReport (hỗ trợ ABAC Org-Subtree & Fail-Closed).
  *
  * @author tyran8x
  */
@@ -16,14 +17,29 @@ public final class BudgetReportSpecifications {
 
   private BudgetReportSpecifications() {}
 
-  public static Specification<BudgetReport> quickSearch(final BudgetReportSearchCriteria criteria) {
+  public static Specification<BudgetReport> quickSearch(
+      final BudgetReportSearchCriteria criteria) {
+    return quickSearch(criteria, null);
+  }
+
+  public static Specification<BudgetReport> quickSearch(
+      final BudgetReportSearchCriteria criteria,
+      final OrgSubtreeAuthorizationHelper.OrgSubtreeScope scope) {
     return (root, query, cb) -> {
       if (criteria == null) {
-        return null;
+        return cb.disjunction();
       }
       Predicate textSearchCondition =
           CriteriaBuilderHelper.createOrUnaccentedLike(
-              cb, root, criteria.getSearch(), "name", "code", "nodeCode", "nodeName", "reportPeriod", "reportScope");
+              cb,
+              root,
+              criteria.getSearch(),
+              "name",
+              "code",
+              "nodeCode",
+              "nodeName",
+              "reportPeriod",
+              "reportScope");
       Predicate statusCondition =
           LookupOptionsHelper.hasExplicitIds(criteria)
               ? null
@@ -31,12 +47,21 @@ public final class BudgetReportSpecifications {
       Predicate idsCondition = CriteriaBuilderHelper.createIn(cb, root, "id", criteria.getIds());
       Predicate codesCondition =
           CriteriaBuilderHelper.createIn(cb, root, "code", criteria.getCodes());
-      Predicate budgetYearCondition = CriteriaBuilderHelper.createEquals(cb, root, "budgetYear", criteria.getBudgetYear());
-      Predicate reportPeriodCondition = CriteriaBuilderHelper.createEquals(cb, root, "reportPeriod", criteria.getReportPeriod());
-      Predicate periodNumberCondition = CriteriaBuilderHelper.createEquals(cb, root, "periodNumber", criteria.getPeriodNumber());
-      Predicate reportScopeCondition = CriteriaBuilderHelper.createEquals(cb, root, "reportScope", criteria.getReportScope());
-      Predicate nodeIdCondition = CriteriaBuilderHelper.createEquals(cb, root, "nodeId", criteria.getNodeId());
-      Predicate workflowStatusCondition = CriteriaBuilderHelper.createEquals(cb, root, "workflowStatus", criteria.getWorkflowStatus());
+      Predicate budgetYearCondition =
+          CriteriaBuilderHelper.createEquals(cb, root, "budgetYear", criteria.getBudgetYear());
+      Predicate reportPeriodCondition =
+          CriteriaBuilderHelper.createEquals(cb, root, "reportPeriod", criteria.getReportPeriod());
+      Predicate periodNumberCondition =
+          CriteriaBuilderHelper.createEquals(cb, root, "periodNumber", criteria.getPeriodNumber());
+      Predicate reportScopeCondition =
+          CriteriaBuilderHelper.createEquals(cb, root, "reportScope", criteria.getReportScope());
+      Predicate nodeIdCondition =
+          CriteriaBuilderHelper.createEquals(cb, root, "nodeId", criteria.getNodeId());
+      Predicate workflowStatusCondition =
+          CriteriaBuilderHelper.createEquals(
+              cb, root, "workflowStatus", criteria.getWorkflowStatus());
+      Predicate orgScopeCondition =
+          BudgetQueryHelper.buildOrgSubtreePredicate(cb, root, scope, "nodeId", "nodeCode", false);
       return CriteriaBuilderHelper.and(
           cb,
           textSearchCondition,
@@ -48,7 +73,8 @@ public final class BudgetReportSpecifications {
           periodNumberCondition,
           reportScopeCondition,
           nodeIdCondition,
-          workflowStatusCondition);
+          workflowStatusCondition,
+          orgScopeCondition);
     };
   }
 }

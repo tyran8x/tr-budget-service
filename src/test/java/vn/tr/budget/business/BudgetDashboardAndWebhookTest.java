@@ -15,6 +15,7 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import cn.dev33.satoken.same.SaSameUtil;
 import cn.dev33.satoken.stp.StpUtil;
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -35,15 +36,18 @@ import vn.tr.budget.controller.BudgetInternalController;
 import vn.tr.budget.dao.model.BudgetAllocation;
 import vn.tr.budget.dao.model.BudgetDisbursement;
 import vn.tr.budget.dao.model.BudgetTransaction;
+import vn.tr.budget.dao.model.BudgetUnitConfig;
 import vn.tr.budget.dao.service.BudgetAllocationRepo;
 import vn.tr.budget.dao.service.BudgetDisbursementRepo;
 import vn.tr.budget.dao.service.BudgetDisbursementService;
 import vn.tr.budget.dao.service.BudgetEstimateItemRepo;
 import vn.tr.budget.dao.service.BudgetTransactionRepo;
+import vn.tr.budget.dao.service.BudgetUnitConfigRepo;
 import vn.tr.budget.data.dto.BudgetDisbursementData;
 import vn.tr.budget.data.mapper.BudgetDisbursementMapper;
 import vn.tr.budget.data.validator.BudgetDisbursementValidator;
 import vn.tr.common.core.exception.base.BaseException;
+import vn.tr.common.feign.budget.data.BudgetPaymentSettleData;
 import vn.tr.common.jpa.audit.AuditRollbackHelper;
 import vn.tr.common.jpa.helper.GenericUpsertHelper;
 import vn.tr.common.satoken.utils.LoginHelper;
@@ -192,6 +196,7 @@ class BudgetDashboardAndWebhookTest {
             .code("GN-2026-055")
             .name("Thanh toán hợp đồng phần mềm")
             .allocationId(1L)
+            .nodeId(101L)
             .nodeCode("VAN_PHONG_SO")
             .nodeName("Văn phòng Sở")
             .budgetYear(2026)
@@ -200,9 +205,38 @@ class BudgetDashboardAndWebhookTest {
             .netPaymentAmount(new BigDecimal("135000000"))
             .disbursementType("DISBURSEMENT")
             .approvalStatus("APPROVED_DISBURSED")
+            .beneficiaryName("Đơn vị Thụ hưởng Demo")
+            .beneficiaryBankAccount("118000012345")
+            .beneficiaryBankName("VietinBank - CN Đà Nẵng")
+            .treasuryRefCode("KBNN-DN-7788")
+            .voucherNo("UNC-2026-055")
             .build();
 
+    BudgetDisbursement draftDisb =
+        BudgetDisbursement.builder()
+            .id(56L)
+            .code("GN-2026-056")
+            .allocationId(1L)
+            .nodeId(101L)
+            .amount(new BigDecimal("20000000"))
+            .approvalStatus("DRAFT")
+            .build();
+
+    BudgetUnitConfigRepo unitConfigRepo = mock(BudgetUnitConfigRepo.class);
+    when(unitConfigRepo.findFirstByNodeIdOrderByIdDesc(101L))
+        .thenReturn(
+            Optional.of(
+                BudgetUnitConfig.builder()
+                    .id(1L)
+                    .nodeId(101L)
+                    .nodeCode("VAN_PHONG_SO")
+                    .treasuryAccountNo("3712.1.9990101.00000")
+                    .treasuryBranchName("KBNN Đà Nẵng")
+                    .taxCode("0000000101")
+                    .build()));
+
     when(budgetDisbursementService.findById(55L)).thenReturn(Optional.of(existing));
+    when(budgetDisbursementService.findById(56L)).thenReturn(Optional.of(draftDisb));
     when(budgetDisbursementService.save(any(BudgetDisbursement.class)))
         .thenAnswer(inv -> inv.getArgument(0));
     when(budgetDisbursementMapper.toData(any(BudgetDisbursement.class)))
@@ -212,9 +246,17 @@ class BudgetDashboardAndWebhookTest {
                 .code("GN-2026-055")
                 .approvalStatus("SETTLED")
                 .build());
-    when(workflowEngineHelper.safe(any()))
+    lenient()
+        .when(workflowEngineHelper.safe(any()))
+        .thenAnswer(inv -> inv.getArgument(0) != null ? inv.getArgument(0) : BigDecimal.ZERO);
+    lenient()
+        .when(workflowEngineHelper.scaleMoney(any()))
         .thenAnswer(
-            inv -> inv.getArgument(0) != null ? inv.getArgument(0) : BigDecimal.ZERO);
+            inv -> {
+              BigDecimal val = inv.getArgument(0);
+              return (val != null ? val : BigDecimal.ZERO)
+                  .setScale(2, java.math.RoundingMode.HALF_UP);
+            });
 
     BudgetDisbursementBusiness business =
         new BudgetDisbursementBusiness(
@@ -226,27 +268,33 @@ class BudgetDashboardAndWebhookTest {
             businessLogicHelper,
             workflowEngineHelper,
             budgetAllocationRepo);
+    business.setBudgetUnitConfigRepo(unitConfigRepo);
 
     Map<String, Object> res =
         business.settleFromPaymentWebhook(
             55L,
-            Map.of(
-                "paymentTxCode", "SEPAY-20261028-9988",
-                "treasuryRefCode", "KBNN-DN-7788",
-                "voucherNo", "UNC-2026-055"));
+            BudgetPaymentSettleData.builder()
+                .transactionCode("SEPAY-20261028-9988")
+                .paymentStatus("PAID")
+                .paidAmount(new BigDecimal("135000000"))
+                .build());
 
     assertEquals(true, res.get("settled"));
     assertEquals("SEPAY-20261028-9988", res.get("paymentTxCode"));
     assertEquals("KBNN-DN-7788", res.get("treasuryRefCode"));
     assertEquals("SETTLED", res.get("approvalStatus"));
 
-    // Kiểm tra kết xuất gói DVC KBNN / TABMIS (UPG-07)
+    // Kiểm tra kết xuất gói DVC KBNN / TABMIS (UPG-07) dùng tài khoản cấu hình thật
     Map<String, Object> dvcPkg = business.exportKbnnDvcPackage(55L);
     assertEquals("READY_FOR_VGCA_TOKEN_SIGNING", dvcPkg.get("digitalSignatureStatus"));
     assertTrue(String.valueOf(dvcPkg.get("xmlPayloadPreview")).contains("DVC_KBNN_PACKAGE"));
+    assertTrue(String.valueOf(dvcPkg.get("xmlPayloadPreview")).contains("3712.1.9990101.00000"));
 
-    // Kiểm tra xóa giải ngân tự động tính lại số dư dự toán
-    business.delete(55L);
+    // Chứng từ đã SETTLED bị bất biến -> chặn xóa (TD-C06)
+    assertThrows(BaseException.class, () -> business.delete(55L));
+
+    // Xóa giải ngân ở trạng thái DRAFT tự động tính lại số dư dự toán
+    business.delete(56L);
     verify(workflowEngineHelper, times(2)).recalculateAllocationMetrics(1L);
   }
 
@@ -388,51 +436,56 @@ class BudgetDashboardAndWebhookTest {
         new BudgetInternalController(
             allocBusiness, disbBusiness, mockTxBusiness, dashBusiness, objectMapper);
 
-    assertEquals(
-        "KH-2026-01",
-        internalController
-            .syncAllocationFromPlan(
-                vn.tr.common.feign.budget.data.BudgetPlanSyncRequestData.builder()
-                    .planCode("KH-2026-01")
-                    .build())
-            .getData()
-            .getLinkedPlanCode());
-    assertEquals(
-        "KH-2026-01",
-        internalController
-            .getBudgetSnapshotByPlanCode("KH-2026-01")
-            .getData()
-            .getLinkedPlanCode());
-    assertEquals(
-        true,
-        internalController
-            .reserveCommitment(
-                vn.tr.common.feign.budget.data.BudgetCommitmentReserveData.builder()
-                    .planItemCode("NV-01")
-                    .build())
-            .getData()
-            .get("committed"));
-    assertEquals(
-        true,
-        internalController
-            .settleDisbursementFromPaymentWebhook(
-                55L,
-                vn.tr.common.feign.budget.data.BudgetPaymentSettleData.builder()
-                    .transactionCode("TX-01")
-                    .build())
-            .getData()
-            .get("settled"));
-    assertEquals(
-        2026, internalController.getDashboardOverview(2026, 101L).getData().get("budgetYear"));
-    assertEquals(
-        true,
-        internalController
-            .recordPlanLedgerTransaction(
-                vn.tr.common.feign.budget.data.BudgetLedgerTransactionData.builder()
-                    .planCode("KH-2026-01")
-                    .build())
-            .getData()
-            .get("recorded"));
+    try (MockedStatic<SaSameUtil> sameMock = mockStatic(SaSameUtil.class)) {
+      assertEquals(
+          "KH-2026-01",
+          internalController
+              .syncAllocationFromPlan(
+                  vn.tr.common.feign.budget.data.BudgetPlanSyncRequestData.builder()
+                      .planCode("KH-2026-01")
+                      .build())
+              .getData()
+              .getLinkedPlanCode());
+      assertEquals(
+          "KH-2026-01",
+          internalController
+              .getBudgetSnapshotByPlanCode("KH-2026-01")
+              .getData()
+              .getLinkedPlanCode());
+      assertEquals(
+          true,
+          internalController
+              .reserveCommitment(
+                  vn.tr.common.feign.budget.data.BudgetCommitmentReserveData.builder()
+                      .planItemCode("NV-01")
+                      .build())
+              .getData()
+              .get("committed"));
+      assertEquals(
+          true,
+          internalController
+              .settleDisbursementFromPaymentWebhook(
+                  55L,
+                  vn.tr.common.feign.budget.data.BudgetPaymentSettleData.builder()
+                      .transactionCode("TX-01")
+                      .paymentStatus("PAID")
+                      .paidAmount(new BigDecimal("500"))
+                      .build())
+              .getData()
+              .get("settled"));
+      assertEquals(
+          2026, internalController.getDashboardOverview(2026, 101L).getData().get("budgetYear"));
+      assertEquals(
+          true,
+          internalController
+              .recordPlanLedgerTransaction(
+                  vn.tr.common.feign.budget.data.BudgetLedgerTransactionData.builder()
+                      .planCode("KH-2026-01")
+                      .build())
+              .getData()
+              .get("recorded"));
+      sameMock.verify(SaSameUtil::checkCurrentRequestToken, times(6));
+    }
   }
 
   @Test
@@ -543,12 +596,43 @@ class BudgetDashboardAndWebhookTest {
             .availableAmount(new BigDecimal("10000000000"))
             .build();
 
-    when(budgetAllocationRepo.findByBudgetYearOrderByIdAsc(anyInt()))
+    BudgetAllocation baseAlloc2025 =
+        BudgetAllocation.builder()
+            .id(2L)
+            .code("PB-2025-VP")
+            .name("Dự toán Văn phòng Sở năm 2025")
+            .budgetYear(2025)
+            .nodeId(101L)
+            .nodeCode("VAN_PHONG_SO")
+            .nodeName("Văn phòng Sở")
+            .itemType("EXPENDITURE")
+            .domainCode("TCDLCL")
+            .domainName("Tiêu chuẩn đo lường chất lượng")
+            .initialAmount(new BigDecimal("5000000000"))
+            .effectiveAmount(new BigDecimal("5000000000"))
+            .availableAmount(new BigDecimal("5000000000"))
+            .build();
+
+    lenient().when(budgetAllocationRepo.findByBudgetYearOrderByIdAsc(2025))
+        .thenReturn(List.of(baseAlloc2025));
+    lenient().when(budgetAllocationRepo.findByBudgetYearOrderByIdAsc(2026))
         .thenReturn(List.of(baseAlloc));
-    when(budgetAllocationRepo.findById(1L)).thenReturn(Optional.of(baseAlloc));
-    when(budgetAllocationRepo.save(any(BudgetAllocation.class)))
+    lenient().when(budgetAllocationRepo.findByNodeIdAndBudgetYearOrderByIdAsc(101L, 2025))
+        .thenReturn(List.of(baseAlloc2025));
+    lenient().when(budgetAllocationRepo.findByNodeIdAndBudgetYearOrderByIdAsc(101L, 2026))
+        .thenReturn(List.of(baseAlloc));
+    lenient().when(budgetAllocationRepo.findById(1L)).thenReturn(Optional.of(baseAlloc));
+    lenient().when(budgetAllocationRepo.findById(2L)).thenReturn(Optional.of(baseAlloc2025));
+    lenient().when(workflowEngineHelper.lockAllocation(1L)).thenReturn(Optional.of(baseAlloc));
+    lenient().when(workflowEngineHelper.lockAllocation(2L)).thenReturn(Optional.of(baseAlloc2025));
+    lenient()
+        .when(workflowEngineHelper.computeCurrentEarmarkHeldAmount(1L))
+        .thenReturn(new BigDecimal("5000000000"));
+    lenient()
+        .when(budgetAllocationRepo.save(any(BudgetAllocation.class)))
         .thenAnswer(inv -> inv.getArgument(0));
-    when(workflowEngineHelper.safe(any()))
+    lenient()
+        .when(workflowEngineHelper.safe(any()))
         .thenAnswer(inv -> inv.getArgument(0) != null ? inv.getArgument(0) : BigDecimal.ZERO);
 
     when(genericUpsertHelper.upsert(any(), any(), any(), any(), any()))
@@ -564,7 +648,8 @@ class BudgetDashboardAndWebhookTest {
                   .txType(d.getTxType())
                   .amount(d.getAmount())
                   .dynamicBreakdownJson(d.getDynamicBreakdownJson())
-                  .approvalStatus("APPROVED")
+                  .approvalStatus(
+                      d.getApprovalStatus() != null ? d.getApprovalStatus() : "PENDING_APPROVAL")
                   .build();
             });
     when(txMapper.toData(any(vn.tr.budget.dao.model.BudgetTransaction.class)))
@@ -624,6 +709,7 @@ class BudgetDashboardAndWebhookTest {
           txBusiness.supplementBudgetContent(
               Map.of(
                   "budgetYear", 2026,
+                  "nodeId", 101L,
                   "contentTitle", "Bổ sung kinh phí vận hành hạ tầng IOC",
                   "amount", "1502000000",
                   "domainCode", "CDS",
@@ -637,6 +723,7 @@ class BudgetDashboardAndWebhookTest {
               Map.of(
                   "fromYear", 2025,
                   "toYear", 2026,
+                  "nodeId", 101L,
                   "amount", "1512000000",
                   "sourceDomainCode", "TCDLCL"));
       assertEquals(true, carryRes.get("carriedOver"));
@@ -647,6 +734,7 @@ class BudgetDashboardAndWebhookTest {
           txBusiness.executeCrossDomainTransfer(
               Map.of(
                   "budgetYear", 2026,
+                  "nodeId", 101L,
                   "fromDomainCode", "KHCN",
                   "toDomainCode", "DMST",
                   "amount", "2655000000"));
@@ -659,6 +747,7 @@ class BudgetDashboardAndWebhookTest {
           txBusiness.executeSavingAndReduction(
               Map.of(
                   "budgetYear", 2026,
+                  "nodeId", 101L,
                   "reductionSubtype", "SAVING_NQ135",
                   "amount", "1481000000"));
       assertEquals(true, saveRes.get("reduced"));
@@ -668,7 +757,7 @@ class BudgetDashboardAndWebhookTest {
       currentRoles.set(List.of("TREASURY_RECONCILER"));
       Map<String, Object> cancelRes =
           txBusiness.cancelExpiredAllocation(
-              Map.of("budgetYear", 2026, "amount", "500000000"));
+              Map.of("budgetYear", 2026, "nodeId", 101L, "amount", "500000000"));
       assertEquals(true, cancelRes.get("cancelled"));
       assertEquals(new BigDecimal("500000000"), cancelRes.get("cancelledAmount"));
 
@@ -677,19 +766,20 @@ class BudgetDashboardAndWebhookTest {
       assertEquals(5, roleMatrix.get("totalRoles"));
       assertEquals(9, roleMatrix.get("totalOperations"));
 
-      // Kiểm tra phân tách nhiệm vụ: Kế toán đơn vị (ROLE_BUDGET_UNIT_ACCOUNTANT) lập NV-01 -> PENDING dù cố giả mạo actorRole
+      // Kiểm tra phân tách nhiệm vụ: Kế toán đơn vị (ROLE_BUDGET_UNIT_ACCOUNTANT) lập NV-01 -> PENDING_APPROVAL dù cố giả mạo actorRole
       currentRoles.set(List.of("ROLE_BUDGET_UNIT_ACCOUNTANT"));
       Map<String, Object> suppByAccountant =
           txBusiness.supplementBudgetContent(
               Map.of(
                   "budgetYear", 2026,
+                  "nodeId", 101L,
                   "contentTitle", "Tờ trình bổ sung của Kế toán đơn vị",
                   "amount", "200000000",
                   "actorRole", "STC_DIRECTOR"));
       @SuppressWarnings("unchecked")
       Map<String, Object> accMeta = (Map<String, Object>) suppByAccountant.get("roleExecutionMeta");
       assertEquals("UNIT_ACCOUNTANT", accMeta.get("actorRole"));
-      assertEquals("PENDING", accMeta.get("effectiveApprovalStatus"));
+      assertEquals("PENDING_APPROVAL", accMeta.get("effectiveApprovalStatus"));
       assertEquals("STC_DIRECTOR", accMeta.get("requiredApproverRole"));
 
       // Vai trò Kế toán đơn vị không được khởi tạo DX-01 -> bị chặn kể cả truyền actorRole trong body
@@ -699,6 +789,7 @@ class BudgetDashboardAndWebhookTest {
               txBusiness.executeEarmarkHold(
                   Map.of(
                       "budgetYear", 2026,
+                      "nodeId", 101L,
                       "holdAction", "HOLD",
                       "amount", "300000000",
                       "actorRole", "STC_DIRECTOR")));
@@ -709,6 +800,7 @@ class BudgetDashboardAndWebhookTest {
           txBusiness.executeEarmarkHold(
               Map.of(
                   "budgetYear", 2026,
+                  "nodeId", 101L,
                   "holdAction", "HOLD",
                   "amount", "300000000"));
       assertEquals(true, holdRes.get("executed"));
@@ -720,6 +812,7 @@ class BudgetDashboardAndWebhookTest {
           txBusiness.executeTrancheRelease(
               Map.of(
                   "budgetYear", 2026,
+                  "nodeId", 101L,
                   "trancheCode", "TRANCHE_Q3",
                   "releaseRatePercent", "25"));
       assertEquals(true, trancheRes.get("released"));
@@ -742,13 +835,14 @@ class BudgetDashboardAndWebhookTest {
           txBusiness.executeAutonomyFundDistribution(
               Map.of(
                   "budgetYear", 2026,
+                  "nodeId", 101L,
                   "autonomyGroup", "GROUP_2",
                   "surplusAmount", "1000000000"));
       assertEquals(true, fundRes.get("distributed"));
-      assertEquals(new BigDecimal("250000000"), fundRes.get("pthdsnAmount"));
-      assertEquals(new BigDecimal("450000000"), fundRes.get("bstnAmount"));
-      assertEquals(new BigDecimal("200000000"), fundRes.get("ktplAmount"));
-      assertEquals(new BigDecimal("100000000"), fundRes.get("dpodtnAmount"));
+      assertEquals(0, new BigDecimal("250000000").compareTo((BigDecimal) fundRes.get("pthdsnAmount")));
+      assertEquals(0, new BigDecimal("450000000").compareTo((BigDecimal) fundRes.get("bstnAmount")));
+      assertEquals(0, new BigDecimal("200000000").compareTo((BigDecimal) fundRes.get("ktplAmount")));
+      assertEquals(0, new BigDecimal("100000000").compareTo((BigDecimal) fundRes.get("dpodtnAmount")));
     }
   }
 }

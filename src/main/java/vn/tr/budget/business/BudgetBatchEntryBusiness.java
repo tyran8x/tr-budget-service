@@ -25,6 +25,7 @@ import vn.tr.budget.data.dto.BudgetAllocationData;
 import vn.tr.budget.data.dto.BudgetDisbursementData;
 import vn.tr.budget.data.dto.BudgetTransactionData;
 import vn.tr.common.core.exception.ServiceException;
+import vn.tr.common.core.exception.base.InvalidDataException;
 
 /**
  * Điều phối nhập liệu hàng loạt nguyên tử (Spreadsheet Batch Entry) và Ma trận Giao Dự toán Đầu
@@ -38,7 +39,13 @@ import vn.tr.common.core.exception.ServiceException;
 public class BudgetBatchEntryBusiness {
 
   private static final Set<String> LOCKED_ALLOCATION_STATUSES =
-      Set.of("APPROVED", "SELF_APPROVED", "FINANCE_REVIEWED");
+      Set.of(
+          "APPROVED",
+          "SELF_APPROVED",
+          "FINANCE_REVIEWED",
+          "EXECUTING",
+          "SETTLED",
+          "LOCKED_SETTLED");
 
   private final BudgetAllocationBusiness allocationBusiness;
   private final BudgetTransactionBusiness transactionBusiness;
@@ -139,10 +146,15 @@ public class BudgetBatchEntryBusiness {
     if (payload == null) {
       throw new ServiceException("Payload ma trận phân bổ không được để trống.");
     }
-    int year =
-        payload.get("budgetYear") != null
-            ? Integer.parseInt(String.valueOf(payload.get("budgetYear")))
-            : LocalDate.now().getYear();
+    int year;
+    try {
+      year =
+          payload.get("budgetYear") != null && !String.valueOf(payload.get("budgetYear")).isBlank()
+              ? Integer.parseInt(String.valueOf(payload.get("budgetYear")).trim())
+              : LocalDate.now().getYear();
+    } catch (NumberFormatException ex) {
+      throw new InvalidDataException("Giá trị năm ngân sách (budgetYear) không hợp lệ.", null);
+    }
     String periodType =
         payload.get("periodType") != null ? String.valueOf(payload.get("periodType")) : "ANNUAL";
     String decisionNo =

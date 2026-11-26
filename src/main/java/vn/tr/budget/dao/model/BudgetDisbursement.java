@@ -233,6 +233,10 @@ public class BudgetDisbursement extends BaseCommonEntity implements AppIsolated 
   @Column(name = "advance_settlement_due_date")
   private LocalDate advanceSettlementDueDate;
 
+  @Column(name = "is_overdue_warning_sent")
+  @Builder.Default
+  private Boolean isOverdueWarningSent = Boolean.FALSE;
+
   @Column(name = "wf_instance_id")
   private Long wfInstanceId;
 

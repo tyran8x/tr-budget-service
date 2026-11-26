@@ -5,10 +5,11 @@ import org.springframework.data.jpa.domain.Specification;
 import vn.tr.budget.dao.model.BudgetCategory;
 import vn.tr.budget.data.criteria.BudgetCategorySearchCriteria;
 import vn.tr.common.jpa.helper.CriteriaBuilderHelper;
+import vn.tr.common.security.abac.OrgSubtreeAuthorizationHelper;
 import vn.tr.common.web.utils.LookupOptionsHelper;
 
 /**
- * JPA Specification cho BudgetCategory.
+ * JPA Specification cho BudgetCategory (hỗ trợ ABAC Org-Subtree cho danh mục đơn vị & Fail-Closed).
  *
  * @author tyran8x
  */
@@ -16,14 +17,29 @@ public final class BudgetCategorySpecifications {
 
   private BudgetCategorySpecifications() {}
 
-  public static Specification<BudgetCategory> quickSearch(final BudgetCategorySearchCriteria criteria) {
+  public static Specification<BudgetCategory> quickSearch(
+      final BudgetCategorySearchCriteria criteria) {
+    return quickSearch(criteria, null);
+  }
+
+  public static Specification<BudgetCategory> quickSearch(
+      final BudgetCategorySearchCriteria criteria,
+      final OrgSubtreeAuthorizationHelper.OrgSubtreeScope scope) {
     return (root, query, cb) -> {
       if (criteria == null) {
-        return null;
+        return cb.disjunction();
       }
       Predicate textSearchCondition =
           CriteriaBuilderHelper.createOrUnaccentedLike(
-              cb, root, criteria.getSearch(), "name", "code", "categoryGroup", "chapterCode", "clauseCode", "autonomyType");
+              cb,
+              root,
+              criteria.getSearch(),
+              "name",
+              "code",
+              "categoryGroup",
+              "chapterCode",
+              "clauseCode",
+              "autonomyType");
       Predicate statusCondition =
           LookupOptionsHelper.hasExplicitIds(criteria)
               ? null
@@ -31,16 +47,31 @@ public final class BudgetCategorySpecifications {
       Predicate idsCondition = CriteriaBuilderHelper.createIn(cb, root, "id", criteria.getIds());
       Predicate codesCondition =
           CriteriaBuilderHelper.createIn(cb, root, "code", criteria.getCodes());
-      Predicate parentIdCondition = CriteriaBuilderHelper.createEquals(cb, root, "parentId", criteria.getParentId());
-      Predicate categoryGroupCondition = CriteriaBuilderHelper.createEquals(cb, root, "categoryGroup", criteria.getCategoryGroup());
-      Predicate budgetYearCondition = CriteriaBuilderHelper.createEquals(cb, root, "budgetYear", criteria.getBudgetYear());
-      Predicate domainCodeCondition = CriteriaBuilderHelper.createEquals(cb, root, "domainCode", criteria.getDomainCode());
-      Predicate domainGroupCodeCondition = CriteriaBuilderHelper.createEquals(cb, root, "domainGroupCode", criteria.getDomainGroupCode());
-      Predicate nodeIdCondition = CriteriaBuilderHelper.createEquals(cb, root, "nodeId", criteria.getNodeId());
-      Predicate chapterCodeCondition = CriteriaBuilderHelper.createEquals(cb, root, "chapterCode", criteria.getChapterCode());
-      Predicate clauseCodeCondition = CriteriaBuilderHelper.createEquals(cb, root, "clauseCode", criteria.getClauseCode());
-      Predicate autonomyTypeCondition = CriteriaBuilderHelper.createEquals(cb, root, "autonomyType", criteria.getAutonomyType());
-      Predicate allowCarryOverCondition = CriteriaBuilderHelper.createEquals(cb, root, "isAllowCarryOver", criteria.getAllowCarryOver());
+      Predicate parentIdCondition =
+          CriteriaBuilderHelper.createEquals(cb, root, "parentId", criteria.getParentId());
+      Predicate categoryGroupCondition =
+          CriteriaBuilderHelper.createEquals(
+              cb, root, "categoryGroup", criteria.getCategoryGroup());
+      Predicate budgetYearCondition =
+          CriteriaBuilderHelper.createEquals(cb, root, "budgetYear", criteria.getBudgetYear());
+      Predicate domainCodeCondition =
+          CriteriaBuilderHelper.createEquals(cb, root, "domainCode", criteria.getDomainCode());
+      Predicate domainGroupCodeCondition =
+          CriteriaBuilderHelper.createEquals(
+              cb, root, "domainGroupCode", criteria.getDomainGroupCode());
+      Predicate nodeIdCondition =
+          CriteriaBuilderHelper.createEquals(cb, root, "nodeId", criteria.getNodeId());
+      Predicate chapterCodeCondition =
+          CriteriaBuilderHelper.createEquals(cb, root, "chapterCode", criteria.getChapterCode());
+      Predicate clauseCodeCondition =
+          CriteriaBuilderHelper.createEquals(cb, root, "clauseCode", criteria.getClauseCode());
+      Predicate autonomyTypeCondition =
+          CriteriaBuilderHelper.createEquals(cb, root, "autonomyType", criteria.getAutonomyType());
+      Predicate allowCarryOverCondition =
+          CriteriaBuilderHelper.createEquals(
+              cb, root, "isAllowCarryOver", criteria.getAllowCarryOver());
+      Predicate orgScopeCondition =
+          BudgetQueryHelper.buildOrgSubtreePredicate(cb, root, scope, "nodeId", "nodeCode", true);
       return CriteriaBuilderHelper.and(
           cb,
           textSearchCondition,
@@ -56,7 +87,8 @@ public final class BudgetCategorySpecifications {
           chapterCodeCondition,
           clauseCodeCondition,
           autonomyTypeCondition,
-          allowCarryOverCondition);
+          allowCarryOverCondition,
+          orgScopeCondition);
     };
   }
 }

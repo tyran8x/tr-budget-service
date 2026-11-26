@@ -14,6 +14,8 @@ public enum BudgetDisbursementType {
   COMMITMENT("COMMITMENT", "Tạm giữ cam kết chi (CKC)"),
   ADVANCE("ADVANCE", "Tạm ứng dự toán Kho bạc"),
   DISBURSEMENT("DISBURSEMENT", "Thực chi / Thanh toán trực tiếp"),
+  DIRECT_PAYMENT("DIRECT_PAYMENT", "Thanh toán trực tiếp qua Kho bạc"),
+  ADVANCE_SETTLEMENT("ADVANCE_SETTLEMENT", "Thanh toán hoàn tạm ứng Kho bạc"),
   SETTLEMENT("SETTLEMENT", "Nghiệm thu quyết toán / Hoàn ứng");
 
   private final String code;

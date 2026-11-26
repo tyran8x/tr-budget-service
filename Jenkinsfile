@@ -22,24 +22,26 @@ pipeline {
     }
 
     environment {
-        SERVICE_NAME      = 'tr-budget-service'
-        REMOTE_BASE_PATH  = '/opt/spring-app'
-        SSH_CONFIG_NAME   = 'SSH-Sv112'
+        SERVICE_NAME          = 'tr-budget-service'
+        SERVICE_PORT          = '8503'
+        COMPOSE_SERVICE_NAME  = 'dev-budget'
+        CONTAINER_NAME        = 'budget-service'
+        REMOTE_BASE_PATH      = '/opt/spring-app'
+        SSH_CONFIG_NAME       = 'SSH-Sv112'
+        TELEGRAM_TOKEN_CRED   = 'telegram-bot-token'
+        TELEGRAM_CHAT_ID_CRED = 'telegram-chat-id'
+        NEXUS_CRED_ID         = 'nexus-maven-credentials'
 
-        TELEGRAM_TOKEN    = "8423245923:AAFHSTIpl6A5vsbkRbYDMqkPw73t5PKP34E"
-        TELEGRAM_CHAT_ID  = "-1003054884531"
-
-        MAVEN_SSL_OPTS    = "-Dmaven.wagon.http.ssl.insecure=true -Dmaven.wagon.http.ssl.allowall=true -Dmaven.wagon.http.ssl.ignore.validity.dates=true"
-        MAVEN_COMMON_OPTS = "-B -T 1C -s settings.xml -Dmaven.javadoc.skip=true -Dmaven.source.skip=true -Dgpg.skip=true"
+        MAVEN_COMMON_OPTS     = "-B -T 1C -s settings.xml -Dmaven.javadoc.skip=true -Dmaven.source.skip=true -Dgpg.skip=true"
     }
 
     parameters {
         choice(name: 'DEPLOY_ENV',
-               choices: ['dev', 'uat', 'prod', 'sct', 'stttt', 'sgtvt'],
+               choices: ['dev', 'uat', 'prod', 'sct', 'stttt', 'sgtvt', 'ict-dng', 'bacninh', 'danhgiacntt', 'hdnd', 'qlc'],
                description: '🌍 Chọn môi trường để triển khai')
-        booleanParam(name: 'USE_DOCKER',    defaultValue: false, description: '🐋 Triển khai bằng Docker')
+        booleanParam(name: 'USE_DOCKER',    defaultValue: false, description: '🐋 Triển khai bằng Docker (Non-root Dockerfile)')
         booleanParam(name: 'PUSH_TO_NEXUS', defaultValue: false, description: '🚀 Đẩy artifact lên Nexus')
-        booleanParam(name: 'SKIP_TESTS',    defaultValue: true,  description: '🧪 Bỏ qua Unit Tests (Bỏ chọn nếu muốn chạy test)')
+        booleanParam(name: 'SKIP_TESTS',    defaultValue: false, description: '🧪 Bỏ qua kiểm thử (Mặc định FALSE — bắt buộc chạy Unit/Security/Flyway Tests)')
     }
 
     stages {
@@ -47,7 +49,7 @@ pipeline {
             steps {
                 script {
                     checkout scm
-                    sh "rm -rf target *.jar"
+                    sh 'rm -rf target *.jar'
 
                     def appVersion = sh(
                         script: "grep -m1 '<revision>' pom.xml | sed 's/.*<revision>//;s/<\\/revision>.*//' | tr -d '[:space:]'",
@@ -98,8 +100,58 @@ pipeline {
                     GLOBAL_COMMIT_MSG    = commitMsg
                     GLOBAL_JAVA_HOME     = detectedJavaHome
 
-                    echo "✅ Version=${GLOBAL_APP_VERSION} | Env=${GLOBAL_ENV_LOWER} | JAVA_HOME=${GLOBAL_JAVA_HOME}"
+                    echo "✅ Service=${env.SERVICE_NAME} | Port=${env.SERVICE_PORT} | Version=${GLOBAL_APP_VERSION} | Env=${GLOBAL_ENV_LOWER} | JAVA_HOME=${GLOBAL_JAVA_HOME}"
                     currentBuild.displayName = "#${BUILD_NUMBER} - ${GLOBAL_ENV_LOWER} - v${GLOBAL_APP_VERSION}"
+                }
+            }
+        }
+
+        stage('🔐 Gate G1: Secret & Security Hygiene') {
+            steps {
+                script {
+                    sh '''
+                        set -eu
+                        echo "🔍 Checking repository for hardcoded secrets & insecure build flags..."
+                        if command -v gitleaks >/dev/null 2>&1; then
+                            gitleaks detect --source . --no-git --redact
+                        fi
+                        if grep -rnE '([0-9]{8,10}:AA[0-9A-Za-z_-]{30,}|ssl[.]insecure=true|[J]PA_DDL_AUTO:-update|[D]nictPro@123|3vHJBiq1727)' \
+                            Jenkinsfile settings.xml Dockerfile tr-budget-service.sh src/main/resources 2>/dev/null; then
+                            echo "❌ Security Gate G1 failed: secret or insecure runtime flag detected!"
+                            exit 1
+                        fi
+                        if ! grep -q "USER appuser" Dockerfile; then
+                            echo "❌ Security Gate G1 failed: Dockerfile must enforce non-root USER appuser!"
+                            exit 1
+                        fi
+                        echo "✅ Gate G1 passed."
+                    '''
+                }
+            }
+        }
+
+        stage('🧪 Gate G2: Unit, Security & Flyway Tests') {
+            when {
+                expression {
+                    return !((params.SKIP_TESTS != null) && params.SKIP_TESTS.toString().toBoolean())
+                }
+            }
+            steps {
+                script {
+                    try {
+                        withEnv(["JAVA_HOME=${GLOBAL_JAVA_HOME}", "MAVEN_OPTS_RUN=${env.MAVEN_COMMON_OPTS}"]) {
+                            sh '''
+                                set -eu
+                                mvn ${MAVEN_OPTS_RUN} test
+                            '''
+                        }
+                    } catch (Exception e) {
+                        def reason = "Lỗi Gate G2 (Unit/Security/Flyway Tests): ${e.message}"
+                        currentBuild.description = "❌ ${reason}"
+                        error(reason)
+                    } finally {
+                        junit allowEmptyResults: true, testResults: '**/target/surefire-reports/*.xml'
+                    }
                 }
             }
         }
@@ -109,11 +161,17 @@ pipeline {
                 script {
                     try {
                         echo "Building ${env.SERVICE_NAME} v${GLOBAL_APP_VERSION}..."
-                        def skipTests = (params.SKIP_TESTS == null) ? true : params.SKIP_TESTS.toString().toBoolean()
-                        def testFlag  = skipTests ? '-DskipTests=true -Dmaven.test.skip=true' : ''
-                        echo "🧪 SKIP_TESTS=${skipTests} | Flags=${testFlag}"
-                        sh "JAVA_HOME='${GLOBAL_JAVA_HOME}' mvn ${env.MAVEN_COMMON_OPTS} clean package ${testFlag} ${env.MAVEN_SSL_OPTS}"
-                        sh "cp target/${env.SERVICE_NAME}.jar ./"
+                        withEnv([
+                            "JAVA_HOME=${GLOBAL_JAVA_HOME}",
+                            "MAVEN_OPTS_RUN=${env.MAVEN_COMMON_OPTS}",
+                            "SVC_NAME=${env.SERVICE_NAME}"
+                        ]) {
+                            sh '''
+                                set -eu
+                                mvn ${MAVEN_OPTS_RUN} package -DskipTests=true
+                                cp "target/${SVC_NAME}.jar" ./
+                            '''
+                        }
                     } catch (Exception e) {
                         def reason = "Lỗi Build Maven: ${e.message}"
                         currentBuild.description = "❌ ${reason}"
@@ -129,7 +187,20 @@ pipeline {
                 script {
                     try {
                         echo "🚀 Uploading ${env.SERVICE_NAME} v${GLOBAL_APP_VERSION} to Nexus..."
-                        sh "JAVA_HOME='${GLOBAL_JAVA_HOME}' mvn ${env.MAVEN_COMMON_OPTS} deploy -Dmaven.deploy.skip=false -DskipTests=true -Dmaven.test.skip=true ${env.MAVEN_SSL_OPTS}"
+                        withCredentials([
+                            usernamePassword(
+                                credentialsId: env.NEXUS_CRED_ID,
+                                usernameVariable: 'NEXUS_USERNAME',
+                                passwordVariable: 'NEXUS_PASSWORD'
+                            )
+                        ]) {
+                            withEnv(["JAVA_HOME=${GLOBAL_JAVA_HOME}", "MAVEN_OPTS_RUN=${env.MAVEN_COMMON_OPTS}"]) {
+                                sh '''
+                                    set -eu
+                                    mvn ${MAVEN_OPTS_RUN} deploy -Dmaven.deploy.skip=false -DskipTests=true -Dmaven.test.skip=true
+                                '''
+                            }
+                        }
                     } catch (Exception e) {
                         def reason = "Lỗi Push Nexus: ${e.message}"
                         currentBuild.description = "❌ ${reason}"
@@ -143,51 +214,59 @@ pipeline {
             steps {
                 script {
                     try {
-                        def svcName   = env.SERVICE_NAME
-                        def envLower  = GLOBAL_ENV_LOWER ?: (params.DEPLOY_ENV ?: 'dev').toLowerCase()
-                        def remoteDir = GLOBAL_REMOTE_DIR ?: "${env.REMOTE_BASE_PATH}/${svcName}-${envLower}"
-                        def appVer    = GLOBAL_APP_VERSION ?: 'unknown'
+                        def svcName       = env.SERVICE_NAME
+                        def svcPort       = env.SERVICE_PORT
+                        def composeSvc    = env.COMPOSE_SERVICE_NAME
+                        def containerName = env.CONTAINER_NAME
+                        def envLower      = GLOBAL_ENV_LOWER ?: (params.DEPLOY_ENV ?: 'dev').toLowerCase()
+                        def remoteDir     = GLOBAL_REMOTE_DIR ?: "${env.REMOTE_BASE_PATH}/${svcName}-${envLower}"
+                        def appVer        = GLOBAL_APP_VERSION ?: 'unknown'
 
                         def sourceFiles = params.USE_DOCKER
-                            ? "${svcName}.jar"
+                            ? "${svcName}.jar,Dockerfile,pom.xml,settings.xml"
                             : "${svcName}.jar,${svcName}.sh"
 
                         def remoteRelDir = remoteDir.startsWith('/') ? remoteDir.substring(1) : remoteDir
 
                         def execCmd = params.USE_DOCKER ? """
-                            echo "--- DOCKER BUILD & DEPLOY ---"
-                            mkdir -p "${remoteDir}"
+                            set -eu
+                            echo "--- DOCKER BUILD & DEPLOY (NON-ROOT Dockerfile) ---"
+                            mkdir -p "${remoteDir}/target" "${remoteDir}/src"
                             cd "${remoteDir}" || { echo "❌ Cannot cd: ${remoteDir}"; exit 1; }
-                            printf "FROM eclipse-temurin:25-jre-alpine\\nWORKDIR /app\\nCOPY ${svcName}.jar app.jar\\nENV TZ=Asia/Ho_Chi_Minh\\nENV SPRING_PROFILES_ACTIVE=docker,${envLower}\\nENTRYPOINT [\\\"java\\\", \\\"-Xms128m\\\", \\\"-Xmx512m\\\", \\\"-XX:+UseContainerSupport\\\", \\\"-XX:-UseBASE64Intrinsics\\\", \\\"-jar\\\", \\\"app.jar\\\"]\\n" > Dockerfile.deploy
+                            mv -f "${svcName}.jar" "target/${svcName}.jar"
                             IMAGE_NAME="tyran8x/${svcName}"
-                            docker build -f Dockerfile.deploy -t \${IMAGE_NAME}:${envLower} -t \${IMAGE_NAME}:${appVer} .
-                            docker ps -q --filter "publish=8306" | xargs -r docker stop || true
+                            DOCKER_BUILDKIT=1 docker build -f Dockerfile --build-arg SKIP_TESTS=true -t "\${IMAGE_NAME}:${envLower}" -t "\${IMAGE_NAME}:${appVer}" .
+                            CONTAINER_UID=\$(docker run --rm --entrypoint id "\${IMAGE_NAME}:${envLower}" -u)
+                            if [ "\${CONTAINER_UID}" = "0" ]; then
+                                echo "❌ Refusing to deploy container running as root (UID=0)"
+                                exit 1
+                            fi
+                            docker ps -q --filter "publish=${svcPort}" | xargs -r docker stop || true
                             if [ -d "/opt/docker" ]; then
-                                cd "/opt/docker" && IMAGE_TAG=${envLower} docker compose up -d --no-deps dev-planning
+                                cd "/opt/docker" && IMAGE_TAG="${envLower}" docker compose up -d --no-deps ${composeSvc}
                             else
-                                docker stop dev-planning-service || true && docker rm dev-planning-service || true
-                                docker run -d --name dev-planning-service -p 8306:8306 \${IMAGE_NAME}:${envLower}
+                                docker stop "${containerName}" "dev-${containerName}" || true
+                                docker rm "${containerName}" "dev-${containerName}" || true
+                                docker run -d --name "${envLower}-${containerName}" -p ${svcPort}:${svcPort} \
+                                    -e SPRING_PROFILES_ACTIVE="docker,${envLower}" \
+                                    -e JPA_DDL_AUTO="validate" \
+                                    -e FLYWAY_ENABLED="true" \
+                                    "\${IMAGE_NAME}:${envLower}"
                             fi
                             SUCCESS=0
                             for i in \$(seq 1 30); do
-                                curl -s http://localhost:8306/actuator/health | grep "UP" > /dev/null && SUCCESS=1 && break
+                                curl -sf http://localhost:${svcPort}/actuator/health | grep "UP" > /dev/null && SUCCESS=1 && break
                                 echo -n "." && sleep 2
                             done
                             if [ \$SUCCESS -eq 0 ]; then
-                                echo "❌ Health Check Timeout"
-                                docker logs --tail 60 dev-planning-service 2>&1 || true
-                                ERR_SNIPPET=\$(docker logs --tail 20 dev-planning-service 2>&1 | head -c 1500 || echo "Docker health check timeout")
-                                MSG="[Jenkins] 🚨 DOCKER STARTUP ERROR: ${svcName} - ${envLower} (v${appVer})
-------------------------------------------------------------
-\${ERR_SNIPPET}
-------------------------------------------------------------
-URL: ${env.BUILD_URL}console"
-                                curl -s -X POST "https://api.telegram.org/bot${env.TELEGRAM_TOKEN}/sendMessage" -d chat_id="${env.TELEGRAM_CHAT_ID}" --data-urlencode "text=\${MSG}" > /dev/null 2>&1 || true
+                                echo "❌ Health Check Timeout on port ${svcPort}"
+                                docker logs --tail 60 "${envLower}-${containerName}" 2>&1 || true
                                 exit 1
                             fi
                             docker image prune -f
-                            echo "✅ DOCKER DEPLOYMENT SUCCESSFUL!"
+                            echo "✅ DOCKER DEPLOYMENT SUCCESSFUL (UID=\${CONTAINER_UID}, port=${svcPort})!"
                         """ : """
+                            set -eu
                             echo "--- SHELL DEPLOYMENT ---"
                             mkdir -p "${remoteDir}"
                             cd "${remoteDir}" || { echo "❌ Cannot cd: ${remoteDir}"; exit 1; }
@@ -196,17 +275,13 @@ URL: ${env.BUILD_URL}console"
                             unset SPRING_CONFIG_IMPORT
                             chmod +x "${svcName}.sh"
                             export SPRING_PROFILES_ACTIVE="${envLower}"
+                            export SERVER_PORT_ENV="${svcPort}"
+                            export JPA_DDL_AUTO="\${JPA_DDL_AUTO:-validate}"
                             if ! ./"${svcName}.sh" restart; then
-                                ERR_SNIPPET=\$(head -c 1500 "/opt/logs/${svcName}/last-startup-error.txt" 2>/dev/null || tail -n 20 "/opt/logs/${svcName}/console.log" 2>/dev/null | head -c 1500 || echo "Không đọc được file log")
-                                MSG="[Jenkins] 🚨 STARTUP ERROR LOG: ${svcName} - ${envLower} (v${appVer})
-------------------------------------------------------------
-\${ERR_SNIPPET}
-------------------------------------------------------------
-URL: ${env.BUILD_URL}console"
-                                curl -s -X POST "https://api.telegram.org/bot${env.TELEGRAM_TOKEN}/sendMessage" -d chat_id="${env.TELEGRAM_CHAT_ID}" --data-urlencode "text=\${MSG}" > /dev/null 2>&1 || true
+                                echo "❌ Shell deployment failed — check /opt/logs/${svcName}/last-startup-error.txt"
                                 exit 1
                             fi
-                            echo "✅ SHELL DEPLOYMENT SUCCESSFUL!"
+                            echo "✅ SHELL DEPLOYMENT SUCCESSFUL (port=${svcPort})!"
                         """
 
                         sshPublisher(publishers: [
@@ -255,15 +330,13 @@ URL: ${env.BUILD_URL}console"
             }
         }
         cleanup {
-            sh "rm -f *.jar"
+            sh 'rm -f *.jar'
         }
     }
 }
 
 def sendNotification(String status, String version, String envName, String author, String commit, String reason) {
     def svcName  = env.SERVICE_NAME
-    def token    = env.TELEGRAM_TOKEN
-    def chatId   = env.TELEGRAM_CHAT_ID
     def buildUrl = env.BUILD_URL
 
     def reasonRow = reason ? "REASON   : ${reason}\n" : ""
@@ -280,12 +353,24 @@ def sendNotification(String status, String version, String envName, String autho
         AUTHOR   : ${author}
         ------------------------------------------------------------""".stripIndent()
 
-    if (token && chatId) {
-        try {
-            def telegramMsg = "${subject}\n${body}"
-            sh "curl -s -X POST https://api.telegram.org/bot${token}/sendMessage -d chat_id=${chatId} --data-urlencode \"text=${telegramMsg}\""
-        } catch (Exception e) {
-            echo "❌ Telegram notification failed: ${e.message}"
+    def telegramMsg = "${subject}\n${body}"
+    try {
+        withCredentials([
+            string(credentialsId: env.TELEGRAM_TOKEN_CRED, variable: 'TG_TOKEN'),
+            string(credentialsId: env.TELEGRAM_CHAT_ID_CRED, variable: 'TG_CHAT_ID')
+        ]) {
+            withEnv(["TG_MSG=${telegramMsg}"]) {
+                sh '''
+                    set +x
+                    if [ -n "${TG_TOKEN:-}" ] && [ -n "${TG_CHAT_ID:-}" ]; then
+                        curl -sS -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
+                            -d "chat_id=${TG_CHAT_ID}" \
+                            --data-urlencode "text=${TG_MSG}" > /dev/null
+                    fi
+                '''
+            }
         }
+    } catch (Exception e) {
+        echo "⚠️ Telegram notification skipped or failed: ${e.message}"
     }
 }

@@ -32,6 +32,8 @@ import vn.tr.common.core.domain.data.PagedData;
 import vn.tr.common.core.domain.data.RefData;
 import vn.tr.common.log.annotation.Log;
 import vn.tr.common.log.enums.BusinessType;
+import vn.tr.common.ratelimiter.annotation.RateLimiter;
+import vn.tr.common.ratelimiter.enums.LimitType;
 import vn.tr.common.web.core.BaseController;
 import vn.tr.common.web.data.dto.BulkOperationResult;
 import vn.tr.common.web.data.dto.BulkSortOrderData;
@@ -146,11 +148,12 @@ public class BudgetDisbursementController extends BaseController {
   @PutMapping("/sort-order")
   @Operation(summary = "Cập nhật thứ tự hàng loạt")
   @Log(title = "[BudgetDisbursement] Batch Update Sort Order", businessType = BusinessType.UPDATE)
-  public R<Void> bulkUpdateSortOrder(@RequestBody BulkSortOrderData data) {
+  public R<Void> bulkUpdateSortOrder(@Valid @RequestBody BulkSortOrderData data) {
     budgetDisbursementBusiness.bulkUpdateSortOrder(data);
     return success();
   }
 
+  @RateLimiter(time = 60, count = 20, limitType = LimitType.IP)
   @SaCheckPermission("BudgetDisbursementExport")
   @GetMapping("/export")
   @Operation(summary = "Xuất file Excel Hồ sơ Cam kết chi, Tạm ứng, Giải ngân Kho bạc & Quyết toán")
@@ -174,6 +177,7 @@ public class BudgetDisbursementController extends BaseController {
     budgetDisbursementExcelService.importTemplate(response);
   }
 
+  @RateLimiter(time = 60, count = 15, limitType = LimitType.IP)
   @SaCheckPermission("BudgetDisbursementImport")
   @PostMapping("/import/validate")
   @Operation(summary = "Validate file Excel Import")
@@ -183,13 +187,14 @@ public class BudgetDisbursementController extends BaseController {
             file, budgetDisbursementExcelService, budgetDisbursementMapper));
   }
 
+  @RateLimiter(time = 60, count = 15, limitType = LimitType.IP)
   @SaCheckPermission("BudgetDisbursementImport")
   @PostMapping("/import")
   @Operation(
       summary = "Import dữ liệu Hồ sơ Cam kết chi, Tạm ứng, Giải ngân Kho bạc & Quyết toán từ JSON")
   @Log(title = "[BudgetDisbursement] Import Commit", businessType = BusinessType.IMPORT)
   public R<Map<String, Object>> importData(
-      @RequestBody Map<String, List<BudgetDisbursementData>> body) {
+      @Valid @RequestBody Map<String, List<BudgetDisbursementData>> body) {
     return success(
         BudgetExcelControllerHelper.importData(
             body.get("data"),
@@ -242,22 +247,36 @@ public class BudgetDisbursementController extends BaseController {
     return success(budgetAllocationBusiness.scanAndDispatchSlaAlerts());
   }
 
+  @RateLimiter(time = 60, count = 20, limitType = LimitType.IP)
   @SaCheckPermission("BudgetDisbursementCreate")
   @PostMapping("/batch")
   @Operation(summary = "Nhập hàng loạt Hồ sơ Giải ngân Kho bạc từ lưới Spreadsheet / Paste Excel")
   @Log(title = "[BudgetDisbursement] Batch Create", businessType = BusinessType.INSERT)
-  public R<Map<String, Object>> batchCreate(@RequestBody List<BudgetDisbursementData> items) {
+  public R<Map<String, Object>> batchCreate(
+      @Valid @RequestBody List<BudgetDisbursementData> items) {
     return success(budgetBatchEntryBusiness.batchSaveDisbursements(items));
   }
 
   @SaCheckPermission(
-      value = {"BudgetDisbursementDetail", "BudgetDisbursementApprove"},
+      value = {"BudgetDisbursementExport", "BudgetDisbursementDetail", "BudgetDisbursementApprove"},
+      mode = SaMode.OR)
+  @PostMapping("/{id}/kbnn-dvc-package")
+  @Operation(
+      summary =
+          "Phát hành và lưu số hồ sơ gói giao dịch điện tử Dịch vụ công Kho bạc Nhà nước (DVC KBNN / TABMIS) theo Mẫu C2-02a/NS")
+  @Log(title = "[BudgetDisbursement] Export KBNN DVC Package", businessType = BusinessType.EXPORT)
+  public R<Map<String, Object>> exportKbnnDvcPackage(@PathVariable("id") Long id) {
+    return success(budgetDisbursementBusiness.exportKbnnDvcPackage(id));
+  }
+
+  @SaCheckPermission(
+      value = {"BudgetDisbursementExport", "BudgetDisbursementDetail", "BudgetDisbursementApprove"},
       mode = SaMode.OR)
   @GetMapping("/{id}/kbnn-dvc-package")
   @Operation(
       summary =
-          "Kết xuất gói hồ sơ giao dịch điện tử Dịch vụ công Kho bạc Nhà nước (DVC KBNN / TABMIS) theo Mẫu C2-02a/NS")
-  public R<Map<String, Object>> exportKbnnDvcPackage(@PathVariable("id") Long id) {
-    return success(budgetDisbursementBusiness.exportKbnnDvcPackage(id));
+          "Xem trước (chỉ đọc) gói hồ sơ giao dịch điện tử DVC KBNN / TABMIS theo Mẫu C2-02a/NS")
+  public R<Map<String, Object>> previewKbnnDvcPackage(@PathVariable("id") Long id) {
+    return success(budgetDisbursementBusiness.previewKbnnDvcPackage(id));
   }
 }

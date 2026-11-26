@@ -8,7 +8,7 @@ import vn.tr.common.jpa.helper.CriteriaBuilderHelper;
 import vn.tr.common.web.utils.LookupOptionsHelper;
 
 /**
- * JPA Specification cho BudgetEstimateItem.
+ * JPA Specification cho BudgetEstimateItem (Fail-Closed khi criteria null).
  *
  * @author tyran8x
  */
@@ -16,14 +16,23 @@ public final class BudgetEstimateItemSpecifications {
 
   private BudgetEstimateItemSpecifications() {}
 
-  public static Specification<BudgetEstimateItem> quickSearch(final BudgetEstimateItemSearchCriteria criteria) {
+  public static Specification<BudgetEstimateItem> quickSearch(
+      final BudgetEstimateItemSearchCriteria criteria) {
     return (root, query, cb) -> {
       if (criteria == null) {
-        return null;
+        return cb.disjunction();
       }
       Predicate textSearchCondition =
           CriteriaBuilderHelper.createOrUnaccentedLike(
-              cb, root, criteria.getSearch(), "name", "code", "itemType", "categoryCode", "categoryName", "numberingStyle");
+              cb,
+              root,
+              criteria.getSearch(),
+              "name",
+              "code",
+              "itemType",
+              "categoryCode",
+              "categoryName",
+              "numberingStyle");
       Predicate statusCondition =
           LookupOptionsHelper.hasExplicitIds(criteria)
               ? null
@@ -31,11 +40,16 @@ public final class BudgetEstimateItemSpecifications {
       Predicate idsCondition = CriteriaBuilderHelper.createIn(cb, root, "id", criteria.getIds());
       Predicate codesCondition =
           CriteriaBuilderHelper.createIn(cb, root, "code", criteria.getCodes());
-      Predicate parentIdCondition = CriteriaBuilderHelper.createEquals(cb, root, "parentId", criteria.getParentId());
-      Predicate itemTypeCondition = CriteriaBuilderHelper.createEquals(cb, root, "itemType", criteria.getItemType());
-      Predicate categoryIdCondition = CriteriaBuilderHelper.createEquals(cb, root, "categoryId", criteria.getCategoryId());
-      Predicate categoryCodeCondition = CriteriaBuilderHelper.createEquals(cb, root, "categoryCode", criteria.getCategoryCode());
-      Predicate isHeaderCondition = CriteriaBuilderHelper.createEquals(cb, root, "isHeader", criteria.getIsHeader());
+      Predicate parentIdCondition =
+          CriteriaBuilderHelper.createEquals(cb, root, "parentId", criteria.getParentId());
+      Predicate itemTypeCondition =
+          CriteriaBuilderHelper.createEquals(cb, root, "itemType", criteria.getItemType());
+      Predicate categoryIdCondition =
+          CriteriaBuilderHelper.createEquals(cb, root, "categoryId", criteria.getCategoryId());
+      Predicate categoryCodeCondition =
+          CriteriaBuilderHelper.createEquals(cb, root, "categoryCode", criteria.getCategoryCode());
+      Predicate isHeaderCondition =
+          CriteriaBuilderHelper.createEquals(cb, root, "isHeader", criteria.getIsHeader());
       Predicate budgetYearCondition =
           CriteriaBuilderHelper.createEquals(cb, root, "budgetYear", criteria.getBudgetYear());
       return CriteriaBuilderHelper.and(

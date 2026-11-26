@@ -40,7 +40,8 @@ class BudgetWorkflowEngineTest {
   @InjectMocks private BudgetWorkflowEngineHelper engineHelper;
 
   @Test
-  @DisplayName("Kiểm tra tự chủ tài chính Đơn vị: Trong hạn mức cho phép UNIT_SELF, vượt hạn mức yêu cầu DIRECTORATE")
+  @DisplayName(
+      "Kiểm tra tự chủ tài chính Đơn vị: Trong hạn mức cho phép UNIT_SELF_APPROVAL, vượt hạn mức yêu cầu SUPERIOR_APPROVAL")
   void shouldCheckUnitAutonomyCorrectly() {
     BudgetUnitConfig cfg =
         BudgetUnitConfig.builder()
@@ -62,12 +63,12 @@ class BudgetWorkflowEngineTest {
     Map<String, Object> withinLimit =
         engineHelper.checkUnitAutonomy(101L, "LK-340-341", new BigDecimal("150000000"));
     assertThat(withinLimit.get("canSelfApprove")).isEqualTo(true);
-    assertThat(withinLimit.get("recommendedApprovalScope")).isEqualTo("UNIT_SELF");
+    assertThat(withinLimit.get("recommendedApprovalScope")).isEqualTo("UNIT_SELF_APPROVAL");
 
     Map<String, Object> overLimit =
         engineHelper.checkUnitAutonomy(101L, "LK-340-341", new BigDecimal("250000000"));
     assertThat(overLimit.get("canSelfApprove")).isEqualTo(false);
-    assertThat(overLimit.get("recommendedApprovalScope")).isEqualTo("DIRECTORATE");
+    assertThat(overLimit.get("recommendedApprovalScope")).isEqualTo("SUPERIOR_APPROVAL");
 
     // Kiểm tra giới hạn theo danh sách mã loại khoản được phép tự chủ (allowedCategoryCodesJson)
     cfg.setAllowedCategoryCodesJson("[\"281\", \"253\"]");
@@ -78,7 +79,7 @@ class BudgetWorkflowEngineTest {
     Map<String, Object> deniedCat =
         engineHelper.checkUnitAutonomy(101L, "341", new BigDecimal("100000000"));
     assertThat(deniedCat.get("canSelfApprove")).isEqualTo(false);
-    assertThat(deniedCat.get("recommendedApprovalScope")).isEqualTo("DIRECTORATE");
+    assertThat(deniedCat.get("recommendedApprovalScope")).isEqualTo("SUPERIOR_APPROVAL");
     assertThat(String.valueOf(deniedCat.get("autonomyDenialReason"))).contains("341");
   }
 

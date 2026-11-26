@@ -13,6 +13,7 @@ import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.support.TransactionSynchronization;
@@ -24,6 +25,8 @@ import vn.tr.common.core.constant.ServiceNameConstants;
 import vn.tr.common.core.context.HeaderContext;
 import vn.tr.common.core.event.reporting.DomainFactMetricEvent;
 import vn.tr.common.core.event.reporting.DomainFactMetricEvent.MetricItemData;
+import vn.tr.common.kafka.outbox.OutboxPublisher;
+import vn.tr.common.satoken.utils.LoginHelper;
 
 /**
  * Publisher đẩy 1 chiều sự kiện {@link DomainFactMetricEvent} từ {@code tr-budget-service} lên
@@ -40,6 +43,13 @@ public class BudgetFactMetricPublisher {
   public static final String PROVIDER_CODE = "BUDGET";
 
   private final ObjectProvider<KafkaTemplate<String, Object>> kafkaTemplateProvider;
+
+  @Autowired(required = false)
+  private ObjectProvider<OutboxPublisher> outboxPublisherProvider;
+
+  public void setOutboxPublisherProvider(ObjectProvider<OutboxPublisher> outboxPublisherProvider) {
+    this.outboxPublisherProvider = outboxPublisherProvider;
+  }
 
   /** Phát sự kiện chỉ số giải ngân/quyết toán ngân sách sau khi giao dịch DB commit. */
   public void publishDisbursementSnapshot(
@@ -149,21 +159,47 @@ public class BudgetFactMetricPublisher {
     if (event == null || StrUtil.isBlank(event.getAppCode())) {
       return;
     }
+    String key =
+        event.getAppCode()
+            + ":"
+            + PROVIDER_CODE
+            + ":"
+            + StrUtil.blankToDefault(event.getUnitCode(), "ALL");
+    OutboxPublisher outboxPublisher =
+        outboxPublisherProvider != null ? outboxPublisherProvider.getIfAvailable() : null;
+    if (outboxPublisher != null && TransactionSynchronizationManager.isActualTransactionActive()) {
+      try {
+        outboxPublisher.enqueue(ReportingKafkaConstants.TOPIC_DOMAIN_FACT_METRICS, key, event);
+        return;
+      } catch (Exception ex) {
+        log.warn(
+            "[BudgetFactMetricPublisher] Lỗi ghi sys_outbox_event, chuyển fallback afterCommit (eventId={}): {}",
+            event.getEventId(),
+            ex.getMessage());
+      }
+    }
     if (TransactionSynchronizationManager.isSynchronizationActive()) {
       TransactionSynchronizationManager.registerSynchronization(
           new TransactionSynchronization() {
             @Override
             public void afterCommit() {
-              sendSafely(event);
+              sendSafely(event, key);
             }
           });
     } else {
-      sendSafely(event);
+      sendSafely(event, key);
     }
   }
 
-  private void sendSafely(DomainFactMetricEvent event) {
+  private void sendSafely(DomainFactMetricEvent event, String key) {
     try {
+      OutboxPublisher outboxPublisher =
+          outboxPublisherProvider != null ? outboxPublisherProvider.getIfAvailable() : null;
+      if (outboxPublisher != null) {
+        outboxPublisher.publishWithOutboxFallback(
+            ReportingKafkaConstants.TOPIC_DOMAIN_FACT_METRICS, key, event);
+        return;
+      }
       KafkaTemplate<String, Object> kafkaTemplate =
           kafkaTemplateProvider != null ? kafkaTemplateProvider.getIfAvailable() : null;
       if (kafkaTemplate == null) {
@@ -172,12 +208,6 @@ public class BudgetFactMetricPublisher {
             event.getEventId());
         return;
       }
-      String key =
-          event.getAppCode()
-              + ":"
-              + PROVIDER_CODE
-              + ":"
-              + StrUtil.blankToDefault(event.getUnitCode(), "ALL");
       kafkaTemplate.send(ReportingKafkaConstants.TOPIC_DOMAIN_FACT_METRICS, key, event);
     } catch (Exception ex) {
       log.warn(
@@ -188,11 +218,19 @@ public class BudgetFactMetricPublisher {
   }
 
   private String resolveEffectiveAppCode(String entityAppCode) {
-    if (StrUtil.isNotBlank(entityAppCode)) {
-      return entityAppCode.trim();
-    }
     String headerAppCode = HeaderContext.getAppCode();
-    return StrUtil.isNotBlank(headerAppCode) ? headerAppCode.trim() : null;
+    if (StrUtil.isNotBlank(headerAppCode)) {
+      return headerAppCode.trim();
+    }
+    try {
+      String loginAppCode = LoginHelper.getAppCode();
+      if (StrUtil.isNotBlank(loginAppCode)) {
+        return loginAppCode.trim();
+      }
+    } catch (Exception ignored) {
+      // Không có phiên đăng nhập
+    }
+    return StrUtil.isNotBlank(entityAppCode) ? entityAppCode.trim() : null;
   }
 
   private static BigDecimal safe(BigDecimal value) {

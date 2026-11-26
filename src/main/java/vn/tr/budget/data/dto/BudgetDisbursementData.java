@@ -147,4 +147,6 @@ public class BudgetDisbursementData extends BaseCommonData {
   private String dvcKbnnDossierNo;
 
   private LocalDate advanceSettlementDueDate;
+
+  private Boolean isOverdueWarningSent;
 }

@@ -2,6 +2,7 @@ package vn.tr.budget.data.validator;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.Map;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
@@ -14,6 +15,7 @@ import vn.tr.budget.data.enums.BudgetWorkflowStatus;
 import vn.tr.common.core.exception.base.BaseException;
 import vn.tr.common.core.utils.MessageUtils;
 import vn.tr.common.feign.identity.TemporalTargetScopeHelper;
+import vn.tr.common.feign.identity.UnifiedIdentityResolver;
 import vn.tr.common.web.validator.BaseValidator;
 
 /**
@@ -30,8 +32,9 @@ public class BudgetAllocationValidator extends BaseValidator {
   @Autowired(required = false)
   private TemporalTargetScopeHelper temporalScopeHelper =
       new TemporalTargetScopeHelper();
-  @org.springframework.beans.factory.annotation.Autowired(required = false)
-  private vn.tr.common.feign.identity.UnifiedIdentityResolver unifiedIdentityResolver;
+
+  @Autowired(required = false)
+  private UnifiedIdentityResolver unifiedIdentityResolver;
 
   @jakarta.annotation.PostConstruct
   void initTemporalScopeHelper() {
@@ -181,7 +184,7 @@ public class BudgetAllocationValidator extends BaseValidator {
             || data.getSubmittedByPersonId() != null
             || data.getSubmittedByPersonName() != null)) {
       try {
-        var resolved =
+        Map<String, Object> resolved =
             temporalScopeHelper.validateScopeSelection(
                 data.getAgencyCode(),
                 data.getTemporalRegime(),
@@ -224,7 +227,7 @@ public class BudgetAllocationValidator extends BaseValidator {
           data.setSubmittedByUserId((Long) resolved.get("resolvedUserId"));
         }
         if (data.getApprovedByPersonId() != null || data.getApprovedByUserId() != null) {
-          var approverResolved =
+          Map<String, Object> approverResolved =
               temporalScopeHelper.validateScopeSelection(
                   data.getAgencyCode(),
                   data.getTemporalRegime(),

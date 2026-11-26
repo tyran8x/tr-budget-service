@@ -28,8 +28,8 @@ spring:
     config:
       fail-fast: false
       uri: ${SPRING_CLOUD_CONFIG_URI:http://localhost:8888}
-      username: ${SPRING_CLOUD_CONFIG_USERNAME:admin}
-      password: ${SPRING_CLOUD_CONFIG_PASSWORD:admin}
+      username: ${SPRING_CLOUD_CONFIG_USERNAME:}
+      password: ${SPRING_CLOUD_CONFIG_PASSWORD:}
       retry:
         initial-interval: 3000
         multiplier: 1.5
@@ -44,13 +44,13 @@ spring:
 
   servlet:
     multipart:
-      max-file-size: 100MB
-      max-request-size: 100MB
+      max-file-size: 20MB
+      max-request-size: 20MB
 
   datasource:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/tr_budget}
     username: ${DB_USERNAME:postgres}
-    password: ${DB_PASSWORD:DnictPro@123}
+    password: ${DB_PASSWORD:}
     driver-class-name: org.postgresql.Driver
     type: com.zaxxer.hikari.HikariDataSource
     hikari:
@@ -66,7 +66,7 @@ spring:
   jpa:
     open-in-view: false
     hibernate:
-      ddl-auto: update
+      ddl-auto: ${JPA_DDL_AUTO:validate}
     show-sql: ${JPA_SHOW_SQL:false}
     properties:
       hibernate:
@@ -74,16 +74,17 @@ spring:
         "[jdbc.batch_size]": 50
 
   flyway:
-    enabled: ${FLYWAY_ENABLED:false}
+    enabled: ${FLYWAY_ENABLED:true}
     locations: classpath:db/migration
     baseline-on-migrate: true
     baseline-version: '0'
+    validate-on-migrate: true
 
   data:
     redis:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
-      password: ${REDIS_PASSWORD:DnictPro@123}
+      password: ${REDIS_PASSWORD:}
       database: ${REDIS_DATABASE:0}
       timeout: 10s
       lettuce:
@@ -105,12 +106,10 @@ spring:
       auto-offset-reset: earliest
       enable-auto-commit: false
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
-      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
-      properties:
-        spring.json.trusted.packages: "*"
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
-      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
     listener:
       missing-topics-fatal: false
 
@@ -122,8 +121,8 @@ spring:
         instance:
           metadata:
             user:
-              name: ${BOOT_ADMIN_USERNAME:admin}
-              password: ${BOOT_ADMIN_PASSWORD:DnictPro@123}
+              name: ${BOOT_ADMIN_USERNAME:}
+              password: ${BOOT_ADMIN_PASSWORD:}
 
 eureka:
   client:
@@ -144,7 +143,7 @@ sa-token:
   is-concurrent: true
   is-share: true
   token-style: jwt
-  jwt-secret-key: ${SA_TOKEN_JWT_SECRET:DnictPro@123}
+  jwt-secret-key: ${SA_TOKEN_JWT_SECRET:}
   is-log: false
 
 redisson:
@@ -173,12 +172,45 @@ redisson:
     readMode: ${REDISSON_CLUSTER_READ_MODE:SLAVE}
     subscriptionMode: ${REDISSON_CLUSTER_SUB_MODE:SLAVE}
 
+resilience4j:
+  circuitbreaker:
+    configs:
+      default:
+        sliding-window-type: COUNT_BASED
+        sliding-window-size: 20
+        minimum-number-of-calls: 5
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 30s
+        permitted-number-of-calls-in-half-open-state: 3
+        automatic-transition-from-open-to-half-open-enabled: true
+    instances:
+      planningClient:
+        base-config: default
+      paymentClient:
+        base-config: default
+      workflowClient:
+        base-config: default
+      notificationClient:
+        base-config: default
+      identityClient:
+        base-config: default
+      directoryPersonClient:
+        base-config: default
+      aiClient:
+        base-config: default
+
+budget:
+  seed:
+    enabled: ${BUDGET_SEED_ENABLED:false}
+
 tr:
   app-code: budget
   app-shorthand: Budget
   kafka:
     payment-listener:
-      enabled: ${BUDGET_PAYMENT_KAFKA_ENABLED:false}
+      enabled: ${BUDGET_PAYMENT_KAFKA_ENABLED:true}
+    plan-sync-listener:
+      enabled: ${BUDGET_PLAN_SYNC_KAFKA_ENABLED:true}
   feign:
     core-service-name: ${CORE_SERVICE_NAME:tr-core-service}
     catalog-service-name: ${CATALOG_SERVICE_NAME:tr-catalog-service}
@@ -198,7 +230,6 @@ security:
     - /swagger-ui/**
     - /webjars/**
     - /v3/api-docs/**
-    - /actuator/**
 
 xss:
   enabled: true
@@ -211,7 +242,7 @@ springdoc:
   info:
     title: 'TR Budget Service — API'
     description: 'API Quản lý Kinh phí Đa cấp, Cây Dự toán Thu - Chi, Phân quyền Tự chủ Tài chính Đơn vị, Phân bổ Kinh phí, Sổ cái Biến động Nguồn (Bổ sung, Chuyển nguồn liên năm, Điều chuyển nội bộ), Giải ngân Kho bạc và Báo cáo Quyết toán'
-    version: '${revision:4.1.2.20261026.1}'
+    version: '${revision:4.2.0.20261126.1}'
     contact:
       name: tyran8x
       email: tyran8x@gmail.com
@@ -236,9 +267,6 @@ management:
         include:
           - health
           - info
-          - metrics
-          - loggers
-          - refresh
           - prometheus
   endpoint:
     health:

@@ -254,7 +254,9 @@ class BudgetAuditRemediationTest {
     assertThat(srcTx.getCounterpartTxId()).isEqualTo(200L);
     assertThat(srcTx.getBalanceAfterAmount()).isEqualByComparingTo("800000000");
 
-    // Từ chối giao dịch nguồn phải tự động từ chối giao dịch đối ứng 200L
+    // Từ chối giao dịch nguồn ở trạng thái chờ duyệt phải tự động từ chối giao dịch đối ứng 200L
+    srcTx.setApprovalStatus("PENDING_APPROVAL");
+    capturedRecv.setApprovalStatus("PENDING_APPROVAL");
     BudgetTransactionService txService = mock(BudgetTransactionService.class);
     BudgetTransactionMapper txMapper = mock(BudgetTransactionMapper.class);
     BudgetWorkflowEngineHelper mockedEngine = mock(BudgetWorkflowEngineHelper.class);

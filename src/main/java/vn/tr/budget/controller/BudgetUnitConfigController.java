@@ -31,6 +31,8 @@ import vn.tr.common.core.domain.data.PagedData;
 import vn.tr.common.core.domain.data.RefData;
 import vn.tr.common.log.annotation.Log;
 import vn.tr.common.log.enums.BusinessType;
+import vn.tr.common.ratelimiter.annotation.RateLimiter;
+import vn.tr.common.ratelimiter.enums.LimitType;
 import vn.tr.common.web.core.BaseController;
 import vn.tr.common.web.data.dto.BulkOperationResult;
 import vn.tr.common.web.data.dto.BulkSortOrderData;
@@ -153,11 +155,12 @@ public class BudgetUnitConfigController extends BaseController {
   @PutMapping("/sort-order")
   @Operation(summary = "Cập nhật thứ tự hàng loạt")
   @Log(title = "[BudgetUnitConfig] Batch Update Sort Order", businessType = BusinessType.UPDATE)
-  public R<Void> bulkUpdateSortOrder(@RequestBody BulkSortOrderData data) {
+  public R<Void> bulkUpdateSortOrder(@Valid @RequestBody BulkSortOrderData data) {
     budgetUnitConfigBusiness.bulkUpdateSortOrder(data);
     return success();
   }
 
+  @RateLimiter(time = 60, count = 20, limitType = LimitType.IP)
   @SaCheckPermission("BudgetUnitConfigExport")
   @GetMapping("/export")
   @Operation(summary = "Xuất file Excel Cấu hình Đơn vị Sử dụng Ngân sách & Tự chủ Tài chính")
@@ -180,6 +183,7 @@ public class BudgetUnitConfigController extends BaseController {
     budgetUnitConfigExcelService.importTemplate(response);
   }
 
+  @RateLimiter(time = 60, count = 15, limitType = LimitType.IP)
   @SaCheckPermission("BudgetUnitConfigImport")
   @PostMapping("/import/validate")
   @Operation(summary = "Validate file Excel Import")
@@ -189,12 +193,13 @@ public class BudgetUnitConfigController extends BaseController {
             file, budgetUnitConfigExcelService, budgetUnitConfigMapper));
   }
 
+  @RateLimiter(time = 60, count = 15, limitType = LimitType.IP)
   @SaCheckPermission("BudgetUnitConfigImport")
   @PostMapping("/import")
   @Operation(summary = "Import dữ liệu Cấu hình Đơn vị Sử dụng Ngân sách & Tự chủ Tài chính từ JSON")
   @Log(title = "[BudgetUnitConfig] Import Commit", businessType = BusinessType.IMPORT)
   public R<Map<String, Object>> importData(
-      @RequestBody Map<String, List<BudgetUnitConfigData>> body) {
+      @Valid @RequestBody Map<String, List<BudgetUnitConfigData>> body) {
     return success(
         BudgetExcelControllerHelper.importData(
             body.get("data"),

@@ -31,6 +31,7 @@ import vn.tr.common.web.utils.LookupOptionsHelper;
 import java.math.BigDecimal;
 import org.springframework.beans.factory.annotation.Autowired;
 import vn.tr.budget.business.helper.BudgetIntegrationOrchestrator;
+import vn.tr.budget.business.helper.BudgetSecurityGuardHelper;
 import vn.tr.budget.business.helper.BudgetWorkflowEngineHelper;
 
 /**
@@ -55,6 +56,20 @@ public class BudgetUnitConfigBusiness {
   @Autowired(required = false)
   private BudgetIntegrationOrchestrator integrationOrchestrator;
 
+  @Autowired(required = false)
+  private BudgetSecurityGuardHelper securityGuardHelper;
+
+  public void setSecurityGuardHelper(BudgetSecurityGuardHelper securityGuardHelper) {
+    this.securityGuardHelper = securityGuardHelper;
+  }
+
+  private BudgetSecurityGuardHelper guard() {
+    if (securityGuardHelper == null) {
+      securityGuardHelper = new BudgetSecurityGuardHelper();
+    }
+    return securityGuardHelper;
+  }
+
   public JpaRepository<BudgetUnitConfig, Long> getInjectedRepo() {
     return budgetUnitConfigService.getRepository();
   }
@@ -62,6 +77,7 @@ public class BudgetUnitConfigBusiness {
   /** Tạo mới BudgetUnitConfig. */
   public BudgetUnitConfigData create(BudgetUnitConfigData data) {
     data.setId(null);
+    guard().assertNodeAccessIfPresent(data.getNodeId(), data.getNodeCode());
     validateData(data);
     if (data.getStatus() == null) {
       data.setStatus(LifecycleStatus.ACTIVE);
@@ -88,6 +104,7 @@ public class BudgetUnitConfigBusiness {
       data.setCanCarryOver(Boolean.TRUE);
     }
     syncUnitConfigSnapshots(data);
+    guard().assertNodeAccessIfPresent(data.getNodeId(), data.getNodeCode());
     BudgetUnitConfig entity =
         genericUpsertHelper.upsert(
             data,
@@ -105,9 +122,12 @@ public class BudgetUnitConfigBusiness {
         budgetUnitConfigService
             .findById(id)
             .orElseThrow(() -> new EntityNotFoundException(BudgetUnitConfig.class, id));
+    guard().assertNodeAccessIfPresent(existing.getNodeId(), existing.getNodeCode());
+    guard().assertNodeAccessIfPresent(data.getNodeId(), data.getNodeCode());
     data.setId(id);
     validateData(data);
     syncUnitConfigSnapshots(data);
+    guard().assertNodeAccessIfPresent(data.getNodeId(), data.getNodeCode());
     budgetUnitConfigMapper.updateEntityFromData(data, existing);
     BudgetUnitConfig saved = budgetUnitConfigService.save(existing);
     return enrichData(budgetUnitConfigMapper.toData(saved));
@@ -164,14 +184,21 @@ public class BudgetUnitConfigBusiness {
 
   /** Xoá mềm BudgetUnitConfig. */
   public void delete(Long id) {
-    budgetUnitConfigService
-        .findById(id)
-        .orElseThrow(() -> new EntityNotFoundException(BudgetUnitConfig.class, id));
+    BudgetUnitConfig existing =
+        budgetUnitConfigService
+            .findById(id)
+            .orElseThrow(() -> new EntityNotFoundException(BudgetUnitConfig.class, id));
+    guard().assertNodeAccessIfPresent(existing.getNodeId(), existing.getNodeCode());
     budgetUnitConfigService.delete(id);
   }
 
   /** Xoá mềm hàng loạt BudgetUnitConfig. */
   public BulkOperationResult<Long> bulkDelete(Collection<Long> ids) {
+    if (ids != null && !ids.isEmpty()) {
+      for (BudgetUnitConfig entity : budgetUnitConfigService.findAllByIds(ids)) {
+        guard().assertNodeAccessIfPresent(entity.getNodeId(), entity.getNodeCode());
+      }
+    }
     return businessLogicHelper.executeBulkDelete(
         ids,
         budgetUnitConfigService::findAllByIds,
@@ -185,11 +212,12 @@ public class BudgetUnitConfigBusiness {
   /** Lấy chi tiết BudgetUnitConfig theo ID. */
   @Transactional(readOnly = true)
   public BudgetUnitConfigData findById(Long id) {
-    return budgetUnitConfigService
-        .findById(id)
-        .map(budgetUnitConfigMapper::toData)
-        .map(this::enrichData)
-        .orElseThrow(() -> new EntityNotFoundException(BudgetUnitConfig.class, id));
+    BudgetUnitConfig entity =
+        budgetUnitConfigService
+            .findById(id)
+            .orElseThrow(() -> new EntityNotFoundException(BudgetUnitConfig.class, id));
+    guard().assertNodeAccessIfPresent(entity.getNodeId(), entity.getNodeCode());
+    return enrichData(budgetUnitConfigMapper.toData(entity));
   }
 
   /** Tìm kiếm BudgetUnitConfig phân trang. */
@@ -207,6 +235,7 @@ public class BudgetUnitConfigBusiness {
         budgetUnitConfigService
             .findById(id)
             .orElseThrow(() -> new EntityNotFoundException(BudgetUnitConfig.class, id));
+    guard().assertNodeAccessIfPresent(source.getNodeId(), source.getNodeCode());
     BudgetUnitConfigData clonedData = budgetUnitConfigMapper.toData(source);
     clonedData.setId(null);
     clonedData.setCode(source.getCode() + "_COPY_" + System.currentTimeMillis() % 10000);
@@ -217,6 +246,11 @@ public class BudgetUnitConfigBusiness {
   /** Khôi phục phiên bản lịch sử JaVers. */
   @Transactional
   public BudgetUnitConfigData rollback(Long id, Long version) {
+    BudgetUnitConfig existing =
+        budgetUnitConfigService
+            .findById(id)
+            .orElseThrow(() -> new EntityNotFoundException(BudgetUnitConfig.class, id));
+    guard().assertNodeAccessIfPresent(existing.getNodeId(), existing.getNodeCode());
     return auditRollbackHelper.executeRollback(
         BudgetUnitConfig.class,
         id,
@@ -240,6 +274,7 @@ public class BudgetUnitConfigBusiness {
           .findById(item.getId())
           .ifPresent(
               entity -> {
+                guard().assertNodeAccessIfPresent(entity.getNodeId(), entity.getNodeCode());
                 entity.setSortOrder(item.getSortOrder());
                 budgetUnitConfigService.save(entity);
               });
@@ -255,6 +290,7 @@ public class BudgetUnitConfigBusiness {
   @Transactional(readOnly = true)
   public Map<String, Object> checkAutonomy(
       Long nodeId, String categoryCode, BigDecimal proposedAmount) {
+    guard().assertNodeAccessIfPresent(nodeId, null);
     return workflowEngineHelper.checkUnitAutonomy(nodeId, categoryCode, proposedAmount);
   }
 

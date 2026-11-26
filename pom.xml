@@ -6,7 +6,7 @@
     <parent>
         <groupId>io.github.tyran8x</groupId>
         <artifactId>tr-pro-app</artifactId>
-        <version>4.2.0.20261126.1</version>
+        <version>4.2.0.20261126.2</version>
         <relativePath/>
     </parent>
 
@@ -16,7 +16,7 @@
     <description>Enterprise Multi-Level Budget, Revenue-Expenditure Tree, Unit Autonomy, Allocation, Carry-Over, Supplement, Disbursement and Settlement Service</description>
 
     <properties>
-        <revision>4.2.0.20261126.1</revision>
+        <revision>4.2.0.20261126.2</revision>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
         <java.version>25</java.version>
@@ -82,10 +82,14 @@
             <artifactId>tr-common-doc</artifactId>
         </dependency>
 
-        <!-- ═══ Spring Boot / Cloud ═══ -->
+        <!-- ═══ Spring Boot / Cloud / Resilience / Observability ═══ -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-registry-prometheus</artifactId>
         </dependency>
         <dependency>
             <groupId>org.springframework.cloud</groupId>
@@ -97,6 +101,10 @@
         </dependency>
         <dependency>
             <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-starter-circuitbreaker-resilience4j</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
             <artifactId>spring-cloud-starter-netflix-eureka-client</artifactId>
         </dependency>
         <dependency>
@@ -104,7 +112,19 @@
             <artifactId>spring-boot-admin-starter-client</artifactId>
         </dependency>
 
-        <!-- ═══ Database ═══ -->
+        <!-- ═══ Database & Flyway ═══ -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-flyway</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-database-postgresql</artifactId>
+        </dependency>
         <dependency>
             <groupId>org.postgresql</groupId>
             <artifactId>postgresql</artifactId>
@@ -120,6 +140,7 @@
         <dependency>
             <groupId>org.hibernate.orm</groupId>
             <artifactId>hibernate-processor</artifactId>
+            <scope>provided</scope>
         </dependency>
         <dependency>
             <groupId>org.projectlombok</groupId>
@@ -160,6 +181,7 @@
             <plugin>
                 <groupId>org.sonatype.central</groupId>
                 <artifactId>central-publishing-maven-plugin</artifactId>
+                <version>0.10.0</version>
                 <configuration>
                     <skipPublishing>true</skipPublishing>
                 </configuration>

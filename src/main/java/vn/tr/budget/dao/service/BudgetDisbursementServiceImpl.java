@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Optional;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
@@ -17,6 +18,7 @@ import org.springframework.transaction.annotation.Transactional;
 import vn.tr.budget.dao.model.BudgetDisbursement;
 import vn.tr.budget.data.criteria.BudgetDisbursementSearchCriteria;
 import vn.tr.common.core.utils.ServiceUtils;
+import vn.tr.common.security.abac.OrgSubtreeAuthorizationHelper;
 
 /**
  * Triển khai Service cho BudgetDisbursement.
@@ -29,6 +31,9 @@ import vn.tr.common.core.utils.ServiceUtils;
 public class BudgetDisbursementServiceImpl implements BudgetDisbursementService {
 
   private final BudgetDisbursementRepo repo;
+
+  @Autowired(required = false)
+  private OrgSubtreeAuthorizationHelper orgSubtreeAuthorizationHelper;
 
   @Override
   public Optional<BudgetDisbursement> findById(Long id) {
@@ -63,7 +68,7 @@ public class BudgetDisbursementServiceImpl implements BudgetDisbursementService 
   @Transactional
   public void deleteByIds(Collection<Long> ids) {
     if (ObjectUtil.isNotEmpty(ids)) {
-      repo.softDeleteByIds(ids);
+      repo.softDeleteByIds(ids, BudgetQueryHelper.resolveCurrentAppCode());
     }
   }
 
@@ -71,7 +76,12 @@ public class BudgetDisbursementServiceImpl implements BudgetDisbursementService 
   public Page<BudgetDisbursement> findAll(BudgetDisbursementSearchCriteria searchCriteria, Pageable pageable) {
     BudgetDisbursementSearchCriteria criteria =
         ObjectUtil.defaultIfNull(searchCriteria, new BudgetDisbursementSearchCriteria());
-    Specification<BudgetDisbursement> spec = BudgetDisbursementSpecifications.quickSearch(criteria);
+    OrgSubtreeAuthorizationHelper.OrgSubtreeScope scope =
+        orgSubtreeAuthorizationHelper != null
+            ? orgSubtreeAuthorizationHelper.resolveCurrentCallerScope()
+            : null;
+    Specification<BudgetDisbursement> spec =
+        BudgetDisbursementSpecifications.quickSearch(criteria, scope);
     if (pageable == null || pageable.isUnpaged()) {
       Sort sort =
           BudgetQueryHelper.buildSafeSort(
@@ -93,7 +103,9 @@ public class BudgetDisbursementServiceImpl implements BudgetDisbursementService 
 
   @Override
   public Optional<BudgetDisbursement> findByCodeIgnoreCaseIncludingDeleted(String code) {
-    List<BudgetDisbursement> results = repo.findAllByCodeIgnoreCaseIncludingDeletedSorted(code);
+    List<BudgetDisbursement> results =
+        repo.findAllByCodeIgnoreCaseIncludingDeletedSorted(
+            code, BudgetQueryHelper.resolveCurrentAppCode());
     return ServiceUtils.checkDuplicateAndReturnFirst(log, "BudgetDisbursement", code, results, BudgetDisbursement::getId);
   }
 

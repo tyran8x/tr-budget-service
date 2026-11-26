@@ -5,12 +5,15 @@ import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.LongPredicate;
 import org.springframework.web.multipart.MultipartFile;
 import vn.tr.common.core.exception.base.BaseException;
+import vn.tr.common.core.exception.base.InvalidDataException;
 import vn.tr.common.core.utils.MessageUtils;
 import vn.tr.common.excel.core.GlobalExcelMapper;
 import vn.tr.common.excel.core.GlobalExcelService;
@@ -27,6 +30,9 @@ import vn.tr.common.web.data.dto.BaseSimpleData;
  */
 public final class BudgetExcelControllerHelper {
 
+  /** Giới hạn số dòng tối đa cho một lần import Excel/JSON chống quá tải bộ nhớ (OOM/DoS). */
+  public static final int MAX_IMPORT_ROWS = 5_000;
+
   private BudgetExcelControllerHelper() {}
 
   public static <E, I, D extends BaseSimpleData, C extends BaseSearchCriteria>
@@ -34,9 +40,29 @@ public final class BudgetExcelControllerHelper {
       MultipartFile file,
       GlobalExcelService<E, I, D, C> excelService,
       GlobalExcelMapper<E, D, I> mapper) {
+    if (file == null || file.isEmpty()) {
+      throw new InvalidDataException("Tệp Excel import không được để trống.", null);
+    }
+    String originalFilename = file.getOriginalFilename();
+    String lowerName =
+        originalFilename != null ? originalFilename.trim().toLowerCase(Locale.ROOT) : "";
+    if (!lowerName.endsWith(".xlsx") && !lowerName.endsWith(".xls")) {
+      throw new InvalidDataException(
+          "Định dạng tệp không hợp lệ. Chỉ chấp nhận tệp Excel (.xlsx, .xls).", null);
+    }
     try (InputStream is = file.getInputStream()) {
       ImportBatchResult<I> batchResult =
-          excelService.validateExcel(is, file.getOriginalFilename(), true);
+          excelService.validateExcel(is, originalFilename, true);
+
+      if (batchResult.getTotalRows() > MAX_IMPORT_ROWS) {
+        throw new InvalidDataException(
+            "Tệp Excel vượt quá giới hạn tối đa "
+                + MAX_IMPORT_ROWS
+                + " dòng mỗi lần import (hiện tại: "
+                + batchResult.getTotalRows()
+                + " dòng).",
+            null);
+      }
 
       List<D> dataList = new ArrayList<>();
       List<Map<String, Object>> errorsList = new ArrayList<>();
@@ -75,9 +101,18 @@ public final class BudgetExcelControllerHelper {
       Function<D, Long> idExtractor,
       LongPredicate existsCheck,
       Consumer<D> createFn,
-      java.util.function.BiConsumer<Long, D> updateFn) {
+      BiConsumer<Long, D> updateFn) {
     if (dataList == null || dataList.isEmpty()) {
-      throw new BaseException("Dữ liệu import trống");
+      throw new InvalidDataException("Dữ liệu import trống.", null);
+    }
+    if (dataList.size() > MAX_IMPORT_ROWS) {
+      throw new InvalidDataException(
+          "Số lượng bản ghi import vượt quá giới hạn tối đa "
+              + MAX_IMPORT_ROWS
+              + " dòng mỗi lần (hiện tại: "
+              + dataList.size()
+              + " dòng).",
+          null);
     }
 
     int created = 0;

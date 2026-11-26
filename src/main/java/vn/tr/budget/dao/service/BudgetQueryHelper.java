@@ -1,14 +1,21 @@
 package vn.tr.budget.dao.service;
 
 import cn.hutool.core.util.StrUtil;
+import jakarta.persistence.criteria.CriteriaBuilder;
+import jakarta.persistence.criteria.Predicate;
+import jakarta.persistence.criteria.Root;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 import java.util.stream.Collectors;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
-import vn.tr.common.core.constant.AppCodeConstants;
 import vn.tr.common.core.context.HeaderContext;
+import vn.tr.common.core.exception.ServiceException;
+import vn.tr.common.satoken.utils.LoginHelper;
+import vn.tr.common.security.abac.OrgSubtreeAuthorizationHelper;
 
 /**
  * Tiện ích chuẩn hóa truy vấn JPA an toàn cho phân hệ Ngân sách: kiểm soát whitelist sortBy chống
@@ -164,8 +171,80 @@ public final class BudgetQueryHelper {
     return PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(), safeSort);
   }
 
+  /**
+   * Giải mã mã ứng dụng (Tenant AppCode) hiện tại theo nguyên tắc Fail-Closed.
+   *
+   * <p>Ưu tiên {@link HeaderContext#getAppCode()}, dự phòng {@link LoginHelper#getAppCode()}. Tuyệt
+   * đối không rơi ngầm về hằng số mặc định gây nguy cơ rò rỉ dữ liệu đa tenant.
+   */
   public static String resolveCurrentAppCode() {
     String appCode = HeaderContext.getAppCode();
-    return StrUtil.isNotBlank(appCode) ? appCode.trim() : AppCodeConstants.BUDGET;
+    if (StrUtil.isNotBlank(appCode)) {
+      return appCode.trim();
+    }
+    try {
+      String loginAppCode = LoginHelper.getAppCode();
+      if (StrUtil.isNotBlank(loginAppCode)) {
+        return loginAppCode.trim();
+      }
+    } catch (Exception ignored) {
+      // Không có phiên Sa-Token hoạt động
+    }
+    throw new ServiceException(
+        "Thiếu ngữ cảnh ứng dụng (X-App-Code) — từ chối truy cập đa tenant (fail-closed).", 400);
+  }
+
+  /**
+   * Tạo điều kiện lọc ABAC cây đơn vị ({@link OrgSubtreeAuthorizationHelper.OrgSubtreeScope}) cho
+   * JPA Specification.
+   *
+   * <p>Trả về {@code null} nếu caller không bị hạn chế (SuperAdmin / S2S). Trả về {@code
+   * cb.disjunction()} (fail-closed) nếu scope bị khóa hoàn toàn (DENY_ALL).
+   */
+  public static <T> Predicate buildOrgSubtreePredicate(
+      CriteriaBuilder cb,
+      Root<T> root,
+      OrgSubtreeAuthorizationHelper.OrgSubtreeScope scope,
+      String nodeIdField,
+      String nodeCodeField,
+      boolean allowUnscopedRecords) {
+    if (scope == null || !scope.restricted()) {
+      return null;
+    }
+    Set<Long> allowedIds = scope.allowedNodeIds();
+    Set<String> allowedCodes = scope.allowedNodeCodes();
+    List<Predicate> branches = new ArrayList<>();
+
+    if (allowedIds != null && !allowedIds.isEmpty() && StrUtil.isNotBlank(nodeIdField)) {
+      branches.add(root.get(nodeIdField).in(allowedIds));
+    }
+    if (allowedCodes != null && !allowedCodes.isEmpty() && StrUtil.isNotBlank(nodeCodeField)) {
+      Set<String> lowerCodes =
+          allowedCodes.stream()
+              .filter(StrUtil::isNotBlank)
+              .map(c -> c.trim().toLowerCase(Locale.ROOT))
+              .collect(Collectors.toSet());
+      if (!lowerCodes.isEmpty()) {
+        branches.add(cb.lower(root.get(nodeCodeField)).in(lowerCodes));
+      }
+    }
+    if (allowUnscopedRecords && StrUtil.isNotBlank(nodeIdField)) {
+      Predicate nullNodeId = cb.isNull(root.get(nodeIdField));
+      if (StrUtil.isNotBlank(nodeCodeField)) {
+        branches.add(
+            cb.and(
+                nullNodeId,
+                cb.or(
+                    cb.isNull(root.get(nodeCodeField)),
+                    cb.equal(cb.trim(root.get(nodeCodeField)), ""))));
+      } else {
+        branches.add(nullNodeId);
+      }
+    }
+
+    if (branches.isEmpty()) {
+      return cb.disjunction();
+    }
+    return cb.or(branches.toArray(new Predicate[0]));
   }
 }

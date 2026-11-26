@@ -1,11 +1,11 @@
 package vn.tr.budget.controller;
 
-import cn.dev33.satoken.annotation.SaIgnore;
 import cn.dev33.satoken.same.SaSameUtil;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.swagger.v3.oas.annotations.Hidden;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.Valid;
 import java.util.Map;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -30,19 +30,15 @@ import vn.tr.common.web.core.BaseController;
 
 /**
  * Controller nội bộ (Service-to-Service) phục vụ giao tiếp Feign liên thông giữa các Microservices
- * ({@code tr-planning-service}, {@code tr-payment-service}, {@code tr-report-service}) với {@code
- * tr-budget-service}.
+ * ({@code tr-planning-service}, {@code tr-payment-service}, {@code tr-reporting-service}) với
+ * {@code tr-budget-service}.
  *
- * <p>Bảo vệ bằng {@code SaSameUtil.checkCurrentRequestToken()} trên toàn bộ đường dẫn {@code
- * /internal/**} để cho phép gọi nội bộ không phụ thuộc phiên đăng nhập người dùng.
- *
- * <p>Nhận typed DTOs từ Feign Client, chuyển đổi sang {@code Map<String, Object>} qua Jackson
- * {@link ObjectMapper#convertValue} để tương thích ngược với Business layer hiện tại. Khi Business
- * layer được refactor sang typed DTOs, loại bỏ bước chuyển đổi này.
+ * <p><b>Bảo mật phòng thủ chiều sâu (TD-C01)</b>: Không gắn {@code @SaIgnore}; vừa được {@code
+ * SecurityConfig} chặn tại tầng Interceptor cho đường dẫn {@code /internal/**}, vừa gọi tường minh
+ * {@code SaSameUtil.checkCurrentRequestToken()} ở cả 7/7 endpoint S2S.
  *
  * @author tyran8x
  */
-@SaIgnore
 @Hidden
 @RestController
 @RequestMapping("/internal/budget")
@@ -61,7 +57,8 @@ public class BudgetInternalController extends BaseController {
   @PostMapping("/allocations/sync-from-plan")
   @Operation(summary = "Đồng bộ Phương án Phân bổ Kinh phí từ Kế hoạch công tác (S2S)")
   public R<BudgetPlanSyncResultData> syncAllocationFromPlan(
-      @RequestBody BudgetPlanSyncRequestData request) {
+      @Valid @RequestBody BudgetPlanSyncRequestData request) {
+    SaSameUtil.checkCurrentRequestToken();
     return success(budgetAllocationBusiness.syncFromPlan(request));
   }
 
@@ -69,13 +66,15 @@ public class BudgetInternalController extends BaseController {
   @Operation(summary = "Tra cứu bức tranh cân đối Kinh phí theo Mã Kế hoạch công tác (S2S)")
   public R<BudgetPlanSyncResultData> getBudgetSnapshotByPlanCode(
       @PathVariable("planCode") String planCode) {
+    SaSameUtil.checkCurrentRequestToken();
     return success(budgetAllocationBusiness.getBudgetSnapshotByPlanCode(planCode));
   }
 
   @PostMapping("/transactions/record")
   @Operation(summary = "Ghi nhận giao dịch biến động sổ cái kinh phí từ Kế hoạch công tác (S2S)")
   public R<Map<String, Object>> recordPlanLedgerTransaction(
-      @RequestBody BudgetLedgerTransactionData request) {
+      @Valid @RequestBody BudgetLedgerTransactionData request) {
+    SaSameUtil.checkCurrentRequestToken();
     @SuppressWarnings("unchecked")
     Map<String, Object> body = objectMapper.convertValue(request, Map.class);
     return success(budgetTransactionBusiness.recordFromPlan(body));
@@ -84,7 +83,8 @@ public class BudgetInternalController extends BaseController {
   @PostMapping("/disbursements/reserve-commitment")
   @Operation(summary = "Khởi tạo nhanh hồ sơ Cam kết chi (COMMITMENT) liên thông S2S")
   public R<Map<String, Object>> reserveCommitment(
-      @RequestBody BudgetCommitmentReserveData request) {
+      @Valid @RequestBody BudgetCommitmentReserveData request) {
+    SaSameUtil.checkCurrentRequestToken();
     @SuppressWarnings("unchecked")
     Map<String, Object> body = objectMapper.convertValue(request, Map.class);
     return success(budgetDisbursementBusiness.reserveCommitment(body));
@@ -96,11 +96,9 @@ public class BudgetInternalController extends BaseController {
           "Tự động đối soát và nghiệm thu quyết toán hồ sơ giải ngân từ Webhook Thanh toán (S2S)")
   public R<Map<String, Object>> settleDisbursementFromPaymentWebhook(
       @PathVariable("id") Long id,
-      @RequestBody(required = false) BudgetPaymentSettleData request) {
-    @SuppressWarnings("unchecked")
-    Map<String, Object> body =
-        request != null ? objectMapper.convertValue(request, Map.class) : null;
-    return success(budgetDisbursementBusiness.settleFromPaymentWebhook(id, body));
+      @Valid @RequestBody(required = false) BudgetPaymentSettleData request) {
+    SaSameUtil.checkCurrentRequestToken();
+    return success(budgetDisbursementBusiness.settleFromPaymentWebhook(id, request));
   }
 
   @GetMapping("/dashboard/overview")
@@ -108,6 +106,7 @@ public class BudgetInternalController extends BaseController {
   public R<Map<String, Object>> getDashboardOverview(
       @RequestParam(value = "budgetYear", required = false) Integer budgetYear,
       @RequestParam(value = "nodeId", required = false) Long nodeId) {
+    SaSameUtil.checkCurrentRequestToken();
     return success(budgetDashboardBusiness.getOverview(budgetYear, nodeId, null));
   }
 
@@ -115,7 +114,6 @@ public class BudgetInternalController extends BaseController {
    * Truy vấn chỉ số phân tích kinh phí & giải ngân chuẩn hóa (chỉ đọc) phục vụ Analytics Hub
    * ({@code tr-reporting-service}) qua kênh S2S Same-Token.
    */
-  @SaIgnore
   @GetMapping("/analytics/metrics")
   @Operation(summary = "Truy vấn chỉ số phân tích ngân sách chuẩn hóa cho Analytics Hub (S2S)")
   public R<InternalAnalyticsMetricData> getInternalAnalyticsMetrics(

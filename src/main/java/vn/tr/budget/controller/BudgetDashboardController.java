@@ -14,6 +14,9 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import vn.tr.budget.business.BudgetDashboardBusiness;
 import vn.tr.common.core.domain.R;
+import vn.tr.common.core.exception.base.InvalidDataException;
+import vn.tr.common.ratelimiter.annotation.RateLimiter;
+import vn.tr.common.ratelimiter.enums.LimitType;
 import vn.tr.common.web.core.BaseController;
 
 /**
@@ -102,6 +105,7 @@ public class BudgetDashboardController extends BaseController {
     return success(budgetDashboardBusiness.getDisbursementScorecard(budgetYear));
   }
 
+  @RateLimiter(time = 60, count = 15, limitType = LimitType.IP)
   @SaCheckPermission("BudgetDashboardQuery")
   @PostMapping("/ai-advisor")
   @Operation(
@@ -109,10 +113,16 @@ public class BudgetDashboardController extends BaseController {
           "Phân tích & Đề xuất Điều hành Kinh phí thông minh bằng AI (Đẩy nhanh giải ngân, Điều chuyển nội bộ, Chuyển nguồn)")
   public R<Map<String, Object>> getAiAdvisorInsights(
       @RequestBody(required = false) Map<String, Object> body) {
-    Integer budgetYear =
-        body != null && body.get("budgetYear") != null
-            ? Integer.valueOf(body.get("budgetYear").toString())
-            : null;
+    Integer budgetYear = null;
+    if (body != null
+        && body.get("budgetYear") != null
+        && !String.valueOf(body.get("budgetYear")).isBlank()) {
+      try {
+        budgetYear = Integer.valueOf(String.valueOf(body.get("budgetYear")).trim());
+      } catch (NumberFormatException ex) {
+        throw new InvalidDataException("Giá trị năm ngân sách (budgetYear) không hợp lệ.", null);
+      }
+    }
     return success(budgetDashboardBusiness.generateAiAdvisorInsights(budgetYear));
   }
 
@@ -136,6 +146,7 @@ public class BudgetDashboardController extends BaseController {
     return success(budgetDashboardBusiness.getMtefSummary(baseYear));
   }
 
+  @RateLimiter(time = 60, count = 20, limitType = LimitType.IP)
   @SaCheckPermission("BudgetDashboardSimulate")
   @PostMapping("/what-if-simulation")
   @Operation(

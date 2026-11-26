@@ -11,7 +11,7 @@ APP_NAME="${APP_NAME_ENV:-tr-budget-service}"
 CLI_SPRING_PROFILE="$SPRING_PROFILES_ACTIVE"
 SPRING_PROFILE="${SPRING_PROFILES_ACTIVE:-dev}"
 SERVER_PORT="${SERVER_PORT_ENV:-8503}"
-JAVA_OPTS="${JAVA_OPTS_ENV:--Xms256m -Xmx512m -XX:+UseSerialGC}"
+JAVA_OPTS="${JAVA_OPTS_ENV:--Xms512m -Xmx1536m -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -XX:+ExitOnOutOfMemoryError}"
 
 LOG_BASE_PATH="/opt/logs"
 HEALTH_TIMEOUT=150
@@ -37,7 +37,7 @@ export SPRING_PROFILES_ACTIVE="$SPRING_PROFILE"
 unset SPRING_CONFIG_IMPORT
 
 JAR_FILE="$APP_HOME/$APP_NAME.jar"
-PID_FILE="$APP_HOME/$APP_NAME.pid"
+PID_FILE="$APP_HOME/$APP_NAME-$SPRING_PROFILE-$SERVER_PORT.pid"
 LOG_DIR="$LOG_BASE_PATH/$APP_NAME"
 CONSOLE_LOG="$LOG_DIR/console.log"
 MAIN_LOG="$LOG_DIR/sys-info.log"
@@ -69,7 +69,7 @@ check_java() {
 is_running() {
     if [ -f "$PID_FILE" ]; then
         _pid=$(cat "$PID_FILE")
-        if kill -0 "$_pid" 2>/dev/null; then
+        if [ -n "$_pid" ] && kill -0 "$_pid" 2>/dev/null; then
             return 0
         fi
         rm -f "$PID_FILE"
@@ -158,7 +158,7 @@ start_app() {
 
     SPRING_PROFILE="${CLI_SPRING_PROFILE:-${SPRING_PROFILES_ACTIVE:-dev}}"
     export SPRING_PROFILES_ACTIVE="$SPRING_PROFILE"
-    export JPA_DDL_AUTO="${JPA_DDL_AUTO:-update}"
+    export JPA_DDL_AUTO="${JPA_DDL_AUTO:-validate}"
     unset SPRING_CONFIG_IMPORT
 
     check_java
@@ -168,6 +168,7 @@ start_app() {
     log_info " Starting: $APP_NAME"
     log_info " Profile : $SPRING_PROFILE"
     log_info " Port    : $SERVER_PORT"
+    log_info " PID File: $PID_FILE"
     log_info " JAR     : $JAR_FILE"
     log_info "=============================================="
 
@@ -184,8 +185,6 @@ start_app() {
         -DLOG_PATH=$LOG_BASE_PATH \
         -Dspring.application.name=$APP_NAME \
         -Dspring.profiles.active=$SPRING_PROFILE \
-        -DJPA_DDL_AUTO=$JPA_DDL_AUTO \
-        -Dspring.jpa.hibernate.ddl-auto=$JPA_DDL_AUTO \
         -Dserver.port=$SERVER_PORT"
 
     cd "$APP_HOME" || exit 1
@@ -231,7 +230,7 @@ stop_app() {
     if is_running; then
         local PID
         PID=$(get_pid)
-        log_info "Stopping $APP_NAME (PID: $PID)..."
+        log_info "Stopping $APP_NAME (PID: $PID, profile: $SPRING_PROFILE, port: $SERVER_PORT)..."
         kill -15 "$PID" 2>/dev/null
 
         local count=0
@@ -252,13 +251,14 @@ stop_app() {
         rm -f "$PID_FILE"
         log_info "✅ $APP_NAME stopped."
     else
-        log_warn "$APP_NAME is not running (no active PID file)."
+        log_warn "$APP_NAME is not running (no active PID file: $PID_FILE)."
     fi
 
+    # Chỉ dọn tiến trình mồ côi khớp đúng JAR path và cổng của instance hiện tại
     local ORPHAN_PIDS
-    ORPHAN_PIDS=$(pgrep -f "$APP_NAME.jar" 2>/dev/null || true)
+    ORPHAN_PIDS=$(pgrep -f "Dserver\.port=$SERVER_PORT.*$JAR_FILE" 2>/dev/null || true)
     if [ -n "$ORPHAN_PIDS" ]; then
-        log_warn "Found orphan $APP_NAME process(es): $ORPHAN_PIDS. Stopping..."
+        log_warn "Found orphan $APP_NAME process(es) on port $SERVER_PORT: $ORPHAN_PIDS. Stopping..."
         kill -15 $ORPHAN_PIDS 2>/dev/null || true
         sleep 2
         kill -9 $ORPHAN_PIDS 2>/dev/null || true
@@ -289,6 +289,7 @@ show_status() {
     echo "  Service : $APP_NAME"
     echo "  Profile : $SPRING_PROFILE"
     echo "  Port    : $SERVER_PORT"
+    echo "  PID File: $PID_FILE"
     if is_running; then
         local pid
         pid=$(get_pid)

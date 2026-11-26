@@ -5,10 +5,11 @@ import org.springframework.data.jpa.domain.Specification;
 import vn.tr.budget.dao.model.BudgetDisbursement;
 import vn.tr.budget.data.criteria.BudgetDisbursementSearchCriteria;
 import vn.tr.common.jpa.helper.CriteriaBuilderHelper;
+import vn.tr.common.security.abac.OrgSubtreeAuthorizationHelper;
 import vn.tr.common.web.utils.LookupOptionsHelper;
 
 /**
- * JPA Specification cho BudgetDisbursement.
+ * JPA Specification cho BudgetDisbursement (hỗ trợ ABAC Org-Subtree & Fail-Closed).
  *
  * @author tyran8x
  */
@@ -16,14 +17,30 @@ public final class BudgetDisbursementSpecifications {
 
   private BudgetDisbursementSpecifications() {}
 
-  public static Specification<BudgetDisbursement> quickSearch(final BudgetDisbursementSearchCriteria criteria) {
+  public static Specification<BudgetDisbursement> quickSearch(
+      final BudgetDisbursementSearchCriteria criteria) {
+    return quickSearch(criteria, null);
+  }
+
+  public static Specification<BudgetDisbursement> quickSearch(
+      final BudgetDisbursementSearchCriteria criteria,
+      final OrgSubtreeAuthorizationHelper.OrgSubtreeScope scope) {
     return (root, query, cb) -> {
       if (criteria == null) {
-        return null;
+        return cb.disjunction();
       }
       Predicate textSearchCondition =
           CriteriaBuilderHelper.createOrUnaccentedLike(
-              cb, root, criteria.getSearch(), "name", "code", "allocationCode", "nodeName", "beneficiaryName", "voucherNo", "contractNo");
+              cb,
+              root,
+              criteria.getSearch(),
+              "name",
+              "code",
+              "allocationCode",
+              "nodeName",
+              "beneficiaryName",
+              "voucherNo",
+              "contractNo");
       Predicate statusCondition =
           LookupOptionsHelper.hasExplicitIds(criteria)
               ? null
@@ -31,12 +48,22 @@ public final class BudgetDisbursementSpecifications {
       Predicate idsCondition = CriteriaBuilderHelper.createIn(cb, root, "id", criteria.getIds());
       Predicate codesCondition =
           CriteriaBuilderHelper.createIn(cb, root, "code", criteria.getCodes());
-      Predicate allocationIdCondition = CriteriaBuilderHelper.createEquals(cb, root, "allocationId", criteria.getAllocationId());
-      Predicate nodeIdCondition = CriteriaBuilderHelper.createEquals(cb, root, "nodeId", criteria.getNodeId());
-      Predicate budgetYearCondition = CriteriaBuilderHelper.createEquals(cb, root, "budgetYear", criteria.getBudgetYear());
-      Predicate disbursementTypeCondition = CriteriaBuilderHelper.createEquals(cb, root, "disbursementType", criteria.getDisbursementType());
-      Predicate approvalStatusCondition = CriteriaBuilderHelper.createEquals(cb, root, "approvalStatus", criteria.getApprovalStatus());
-      Predicate linkedPlanIdCondition = CriteriaBuilderHelper.createEquals(cb, root, "linkedPlanId", criteria.getLinkedPlanId());
+      Predicate allocationIdCondition =
+          CriteriaBuilderHelper.createEquals(cb, root, "allocationId", criteria.getAllocationId());
+      Predicate nodeIdCondition =
+          CriteriaBuilderHelper.createEquals(cb, root, "nodeId", criteria.getNodeId());
+      Predicate budgetYearCondition =
+          CriteriaBuilderHelper.createEquals(cb, root, "budgetYear", criteria.getBudgetYear());
+      Predicate disbursementTypeCondition =
+          CriteriaBuilderHelper.createEquals(
+              cb, root, "disbursementType", criteria.getDisbursementType());
+      Predicate approvalStatusCondition =
+          CriteriaBuilderHelper.createEquals(
+              cb, root, "approvalStatus", criteria.getApprovalStatus());
+      Predicate linkedPlanIdCondition =
+          CriteriaBuilderHelper.createEquals(cb, root, "linkedPlanId", criteria.getLinkedPlanId());
+      Predicate orgScopeCondition =
+          BudgetQueryHelper.buildOrgSubtreePredicate(cb, root, scope, "nodeId", "nodeCode", false);
       return CriteriaBuilderHelper.and(
           cb,
           textSearchCondition,
@@ -48,7 +75,8 @@ public final class BudgetDisbursementSpecifications {
           budgetYearCondition,
           disbursementTypeCondition,
           approvalStatusCondition,
-          linkedPlanIdCondition);
+          linkedPlanIdCondition,
+          orgScopeCondition);
     };
   }
 }

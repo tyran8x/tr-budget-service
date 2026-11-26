@@ -31,8 +31,11 @@ import vn.tr.budget.excel.BudgetExcelControllerHelper;
 import vn.tr.common.core.domain.R;
 import vn.tr.common.core.domain.data.PagedData;
 import vn.tr.common.core.domain.data.RefData;
+import vn.tr.common.core.exception.base.InvalidDataException;
 import vn.tr.common.log.annotation.Log;
 import vn.tr.common.log.enums.BusinessType;
+import vn.tr.common.ratelimiter.annotation.RateLimiter;
+import vn.tr.common.ratelimiter.enums.LimitType;
 import vn.tr.common.web.core.BaseController;
 import vn.tr.common.web.data.dto.BulkOperationResult;
 import vn.tr.common.web.data.dto.BulkSortOrderData;
@@ -154,11 +157,12 @@ public class BudgetEstimateItemController extends BaseController {
   @PutMapping("/sort-order")
   @Operation(summary = "Cập nhật thứ tự hàng loạt")
   @Log(title = "[BudgetEstimateItem] Batch Update Sort Order", businessType = BusinessType.UPDATE)
-  public R<Void> bulkUpdateSortOrder(@RequestBody BulkSortOrderData data) {
+  public R<Void> bulkUpdateSortOrder(@Valid @RequestBody BulkSortOrderData data) {
     budgetEstimateItemBusiness.bulkUpdateSortOrder(data);
     return success();
   }
 
+  @RateLimiter(time = 60, count = 20, limitType = LimitType.IP)
   @SaCheckPermission("BudgetEstimateItemExport")
   @GetMapping("/export")
   @Operation(summary = "Xuất file Excel Cây Danh mục & Cấu hình Dự toán Thu - Chi Đa cấp")
@@ -181,6 +185,7 @@ public class BudgetEstimateItemController extends BaseController {
     budgetEstimateItemExcelService.importTemplate(response);
   }
 
+  @RateLimiter(time = 60, count = 15, limitType = LimitType.IP)
   @SaCheckPermission("BudgetEstimateItemImport")
   @PostMapping("/import/validate")
   @Operation(summary = "Validate file Excel Import")
@@ -190,12 +195,13 @@ public class BudgetEstimateItemController extends BaseController {
             file, budgetEstimateItemExcelService, budgetEstimateItemMapper));
   }
 
+  @RateLimiter(time = 60, count = 15, limitType = LimitType.IP)
   @SaCheckPermission("BudgetEstimateItemImport")
   @PostMapping("/import")
   @Operation(summary = "Import dữ liệu Cây Danh mục & Cấu hình Dự toán Thu - Chi Đa cấp từ JSON")
   @Log(title = "[BudgetEstimateItem] Import Commit", businessType = BusinessType.IMPORT)
   public R<Map<String, Object>> importData(
-      @RequestBody Map<String, List<BudgetEstimateItemData>> body) {
+      @Valid @RequestBody Map<String, List<BudgetEstimateItemData>> body) {
     return success(
         BudgetExcelControllerHelper.importData(
             body.get("data"),
@@ -216,13 +222,15 @@ public class BudgetEstimateItemController extends BaseController {
     return success(budgetEstimateItemBusiness.getTree(budgetYear, itemType));
   }
 
+  @RateLimiter(time = 60, count = 20, limitType = LimitType.IP)
   @SaCheckPermission(
       value = {"BudgetEstimateItemCreate", "BudgetEstimateItemEdit"},
       mode = SaMode.OR)
   @PostMapping("/tree")
   @Operation(summary = "Đồng bộ toàn bộ Cây Dự toán Thu - Chi bằng Smart Diff-Based Upsert")
   @Log(title = "[BudgetEstimateItem] Save Tree", businessType = BusinessType.UPDATE)
-  public R<Map<String, Object>> saveEstimateTree(@RequestBody BudgetEstimateTreeSaveRequest request) {
+  public R<Map<String, Object>> saveEstimateTree(
+      @Valid @RequestBody BudgetEstimateTreeSaveRequest request) {
     return success(budgetEstimateTreeSyncBusiness.saveTree(request));
   }
 
@@ -234,17 +242,29 @@ public class BudgetEstimateItemController extends BaseController {
   @Log(title = "[BudgetEstimateItem] Move Node", businessType = BusinessType.UPDATE)
   public R<BudgetEstimateItemData> moveEstimateNode(
       @PathVariable("id") Long id, @RequestBody Map<String, Object> body) {
-    Long newParentId =
-        body != null && body.get("newParentId") != null
-            ? Long.valueOf(String.valueOf(body.get("newParentId")))
-            : null;
-    Integer sortOrder =
-        body != null && body.get("sortOrder") != null
-            ? Integer.valueOf(String.valueOf(body.get("sortOrder")))
-            : null;
+    Long newParentId;
+    Integer sortOrder;
+    try {
+      newParentId =
+          body != null
+                  && body.get("newParentId") != null
+                  && !String.valueOf(body.get("newParentId")).isBlank()
+              ? Long.valueOf(String.valueOf(body.get("newParentId")).trim())
+              : null;
+      sortOrder =
+          body != null
+                  && body.get("sortOrder") != null
+                  && !String.valueOf(body.get("sortOrder")).isBlank()
+              ? Integer.valueOf(String.valueOf(body.get("sortOrder")).trim())
+              : null;
+    } catch (NumberFormatException ex) {
+      throw new InvalidDataException(
+          "Tham số newParentId hoặc sortOrder phải là giá trị số hợp lệ.", null);
+    }
     return success(budgetEstimateTreeSyncBusiness.moveNode(id, newParentId, sortOrder));
   }
 
+  @RateLimiter(time = 60, count = 15, limitType = LimitType.IP)
   @SaCheckPermission("BudgetEstimateItemCreate")
   @PostMapping("/clone-year")
   @Operation(summary = "Nhân bản Cây Dự toán liên năm (N-1 -> N) kèm hệ số điều chỉnh (%)")

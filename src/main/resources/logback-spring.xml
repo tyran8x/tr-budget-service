@@ -4,7 +4,7 @@
     <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
 
     <!-- Dynamic Properties -->
-    <springProperty scope="context" name="appName" source="spring.application.name" defaultValue="tr-evaluation-service"/>
+    <springProperty scope="context" name="appName" source="spring.application.name" defaultValue="tr-budget-service"/>
     <springProperty scope="context" name="logPath" source="LOG_PATH" defaultValue="/opt/logs"/>
     <springProperty scope="context" name="PID" source="PID" defaultValue="unknown"/>
 
@@ -29,7 +29,7 @@
     <springProperty scope="context" name="FILE_LOG_PATTERN" source="logging.pattern.file"
                     defaultValue="%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%thread] %logger{36} %X{traceId:-} %X{spanId:-} - %msg%n%ex{full}"/>
 
-    <!-- 1. Console Appender (Only for local/dev/docker) -->
+    <!-- 1. Console Appender (Only for local/dev/docker/test) -->
     <springProfile name="local,dev,default,docker,test">
         <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
             <encoder>
@@ -83,43 +83,42 @@
         </filter>
     </appender>
 
-    <!-- 4. Async Appenders -->
+    <!-- 4. Async Appenders (neverBlock=true chống nghẽn Virtual Threads khi I/O chậm) -->
     <appender name="ASYNC_INFO" class="ch.qos.logback.classic.AsyncAppender">
         <discardingThreshold>0</discardingThreshold>
         <queueSize>1024</queueSize>
         <includeCallerData>false</includeCallerData>
-        <neverBlock>false</neverBlock>
+        <neverBlock>true</neverBlock>
         <appender-ref ref="FILE_INFO"/>
     </appender>
 
     <appender name="ASYNC_ERROR" class="ch.qos.logback.classic.AsyncAppender">
         <discardingThreshold>0</discardingThreshold>
         <queueSize>512</queueSize>
-        <!-- includeCallerData=true has performance cost; enabled for richer error context -->
-        <includeCallerData>true</includeCallerData>
-        <neverBlock>false</neverBlock>
+        <includeCallerData>false</includeCallerData>
+        <neverBlock>true</neverBlock>
         <appender-ref ref="FILE_ERROR"/>
     </appender>
 
     <!-- 5. Package-specific Loggers -->
-    <!-- Suppress verbose Spring Boot startup logs -->
     <logger name="org.springframework.boot" level="WARN"/>
     <logger name="org.springframework.web" level="WARN"/>
     <logger name="org.springframework.data" level="WARN"/>
     <logger name="org.hibernate" level="WARN"/>
 
-    <!-- Keep SQL queries visible in dev/docker -->
+    <!-- Keep SQL & app DEBUG logs visible only in local/dev/docker -->
     <springProfile name="local,dev,docker">
         <logger name="org.hibernate.SQL" level="DEBUG"/>
         <logger name="org.hibernate.type.descriptor.sql.BasicBinder" level="TRACE"/>
+        <logger name="vn.tr" level="DEBUG"/>
     </springProfile>
 
-    <!-- Application package -->
-    <logger name="vn.tr" level="DEBUG"/>
+    <!-- Production / staging: INFO để tránh tràn đĩa và lộ payload nhạy cảm -->
+    <springProfile name="!local &amp; !dev &amp; !docker">
+        <logger name="vn.tr" level="INFO"/>
+    </springProfile>
 
     <!-- 6. Root Logger Configurations per Profile -->
-
-    <!-- Local/Dev/Docker: Console + Async Files -->
     <springProfile name="local,dev,default,docker,test">
         <root level="INFO">
             <appender-ref ref="CONSOLE"/>
@@ -128,7 +127,6 @@
         </root>
     </springProfile>
 
-    <!-- Prod/Staging: Async Files Only (Performance) -->
     <springProfile name="!local &amp; !dev &amp; !default &amp; !docker &amp; !test">
         <root level="INFO">
             <appender-ref ref="ASYNC_INFO"/>
@@ -137,4 +135,3 @@
     </springProfile>
 
 </configuration>
-

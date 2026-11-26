@@ -12,11 +12,13 @@ import java.util.Objects;
 import java.util.Set;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import vn.tr.budget.business.helper.BudgetSecurityGuardHelper;
 import vn.tr.budget.dao.model.BudgetCategory;
 import vn.tr.budget.dao.service.BudgetCategoryService;
 import vn.tr.budget.data.criteria.BudgetCategorySearchCriteria;
@@ -27,6 +29,7 @@ import vn.tr.common.core.domain.data.PagedData;
 import vn.tr.common.core.domain.data.RefData;
 import vn.tr.common.core.enums.LifecycleStatus;
 import vn.tr.common.core.exception.base.EntityNotFoundException;
+import vn.tr.common.core.exception.base.InvalidDataException;
 import vn.tr.common.jpa.audit.AuditRollbackHelper;
 import vn.tr.common.jpa.helper.GenericUpsertHelper;
 import vn.tr.common.web.data.dto.BulkOperationResult;
@@ -54,6 +57,19 @@ public class BudgetCategoryBusiness {
   private final AuditRollbackHelper auditRollbackHelper;
   private final BusinessLogicHelper businessLogicHelper;
 
+  @Autowired(required = false)
+  private BudgetSecurityGuardHelper securityGuardHelper;
+
+  public void setSecurityGuardHelper(BudgetSecurityGuardHelper securityGuardHelper) {
+    this.securityGuardHelper = securityGuardHelper;
+  }
+
+  private BudgetSecurityGuardHelper guard() {
+    if (securityGuardHelper == null) {
+      securityGuardHelper = new BudgetSecurityGuardHelper();
+    }
+    return securityGuardHelper;
+  }
 
   public JpaRepository<BudgetCategory, Long> getInjectedRepo() {
     return budgetCategoryService.getRepository();
@@ -62,6 +78,7 @@ public class BudgetCategoryBusiness {
   /** Tạo mới BudgetCategory. */
   public BudgetCategoryData create(BudgetCategoryData data) {
     data.setId(null);
+    guard().assertNodeAccessIfPresent(data.getNodeId(), null);
     validateData(data);
     if (data.getStatus() == null) {
       data.setStatus(LifecycleStatus.ACTIVE);
@@ -102,6 +119,8 @@ public class BudgetCategoryBusiness {
         budgetCategoryService
             .findById(id)
             .orElseThrow(() -> new EntityNotFoundException(BudgetCategory.class, id));
+    guard().assertNodeAccessIfPresent(existing.getNodeId(), null);
+    guard().assertNodeAccessIfPresent(data.getNodeId(), null);
     data.setId(id);
     validateData(data);
     syncParentCategorySnapshot(data);
@@ -166,14 +185,21 @@ public class BudgetCategoryBusiness {
 
   /** Xoá mềm BudgetCategory. */
   public void delete(Long id) {
-    budgetCategoryService
-        .findById(id)
-        .orElseThrow(() -> new EntityNotFoundException(BudgetCategory.class, id));
+    BudgetCategory existing =
+        budgetCategoryService
+            .findById(id)
+            .orElseThrow(() -> new EntityNotFoundException(BudgetCategory.class, id));
+    guard().assertNodeAccessIfPresent(existing.getNodeId(), null);
     budgetCategoryService.delete(id);
   }
 
   /** Xoá mềm hàng loạt BudgetCategory. */
   public BulkOperationResult<Long> bulkDelete(Collection<Long> ids) {
+    if (ids != null && !ids.isEmpty()) {
+      for (BudgetCategory entity : budgetCategoryService.findAllByIds(ids)) {
+        guard().assertNodeAccessIfPresent(entity.getNodeId(), null);
+      }
+    }
     return businessLogicHelper.executeBulkDelete(
         ids,
         budgetCategoryService::findAllByIds,
@@ -187,10 +213,12 @@ public class BudgetCategoryBusiness {
   /** Lấy chi tiết BudgetCategory theo ID. */
   @Transactional(readOnly = true)
   public BudgetCategoryData findById(Long id) {
-    return budgetCategoryService
-        .findById(id)
-        .map(budgetCategoryMapper::toData)
-        .orElseThrow(() -> new EntityNotFoundException(BudgetCategory.class, id));
+    BudgetCategory entity =
+        budgetCategoryService
+            .findById(id)
+            .orElseThrow(() -> new EntityNotFoundException(BudgetCategory.class, id));
+    guard().assertNodeAccessIfPresent(entity.getNodeId(), null);
+    return budgetCategoryMapper.toData(entity);
   }
 
   /** Tìm kiếm BudgetCategory phân trang. */
@@ -208,6 +236,7 @@ public class BudgetCategoryBusiness {
         budgetCategoryService
             .findById(id)
             .orElseThrow(() -> new EntityNotFoundException(BudgetCategory.class, id));
+    guard().assertNodeAccessIfPresent(source.getNodeId(), null);
     BudgetCategoryData clonedData = budgetCategoryMapper.toData(source);
     clonedData.setId(null);
     clonedData.setCode(source.getCode() + "_COPY_" + System.currentTimeMillis() % 10000);
@@ -218,6 +247,11 @@ public class BudgetCategoryBusiness {
   /** Khôi phục phiên bản lịch sử JaVers. */
   @Transactional
   public BudgetCategoryData rollback(Long id, Long version) {
+    BudgetCategory existing =
+        budgetCategoryService
+            .findById(id)
+            .orElseThrow(() -> new EntityNotFoundException(BudgetCategory.class, id));
+    guard().assertNodeAccessIfPresent(existing.getNodeId(), null);
     return auditRollbackHelper.executeRollback(
         BudgetCategory.class,
         id,
@@ -258,6 +292,7 @@ public class BudgetCategoryBusiness {
    */
   @Transactional(readOnly = true)
   public Map<String, Object> getYearDomainConfig(Integer budgetYear, Long nodeId) {
+    guard().assertNodeAccessIfPresent(nodeId, null);
     int year = budgetYear != null ? budgetYear : LocalDate.now().getYear();
     List<String> groups = List.of("DOMAIN", "DOMAIN_GROUP");
 
@@ -312,6 +347,7 @@ public class BudgetCategoryBusiness {
    */
   @Transactional
   public BudgetCategoryData saveYearDomainConfig(BudgetCategoryData data) {
+    guard().assertNodeAccessIfPresent(data.getNodeId(), null);
     int year = data.getBudgetYear() != null ? data.getBudgetYear() : LocalDate.now().getYear();
     data.setBudgetYear(year);
 
@@ -395,21 +431,21 @@ public class BudgetCategoryBusiness {
   @Transactional
   public Map<String, Object> cloneYearDomainConfig(Map<String, Object> body) {
     int targetYear =
-        body != null && body.get("targetYear") != null
-            ? Integer.parseInt(String.valueOf(body.get("targetYear")))
-            : (body != null && body.get("toYear") != null
-                ? Integer.parseInt(String.valueOf(body.get("toYear")))
-                : LocalDate.now().getYear() + 1);
+        parseIntField(
+            body != null && body.get("targetYear") != null
+                ? body.get("targetYear")
+                : (body != null ? body.get("toYear") : null),
+            "targetYear",
+            LocalDate.now().getYear() + 1);
     int sourceYear =
-        body != null && body.get("sourceYear") != null
-            ? Integer.parseInt(String.valueOf(body.get("sourceYear")))
-            : (body != null && body.get("fromYear") != null
-                ? Integer.parseInt(String.valueOf(body.get("fromYear")))
-                : targetYear - 1);
-    Long nodeId =
-        body != null && body.get("nodeId") != null && !String.valueOf(body.get("nodeId")).isBlank()
-            ? Long.parseLong(String.valueOf(body.get("nodeId")))
-            : null;
+        parseIntField(
+            body != null && body.get("sourceYear") != null
+                ? body.get("sourceYear")
+                : (body != null ? body.get("fromYear") : null),
+            "sourceYear",
+            targetYear - 1);
+    Long nodeId = parseLongField(body != null ? body.get("nodeId") : null, "nodeId");
+    guard().assertNodeAccessIfPresent(nodeId, null);
     boolean overwrite =
         body != null && Boolean.parseBoolean(String.valueOf(body.getOrDefault("overwrite", "false")));
 
@@ -468,6 +504,30 @@ public class BudgetCategoryBusiness {
     cleaned = cleaned.replaceFirst("(?i)^(DOM|GRP)-" + year + "-(\\d+-)?", "");
     cleaned = cleaned.replaceFirst("(?i)^(DOM|GRP)_" + year + "_(\\d+_)?", "");
     return cleaned;
+  }
+
+  private static int parseIntField(Object raw, String fieldName, int defaultValue) {
+    if (raw == null || String.valueOf(raw).isBlank()) {
+      return defaultValue;
+    }
+    try {
+      return Integer.parseInt(String.valueOf(raw).trim());
+    } catch (NumberFormatException ex) {
+      throw new InvalidDataException(
+          "Giá trị số nguyên không hợp lệ cho trường '" + fieldName + "': " + raw, null);
+    }
+  }
+
+  private static Long parseLongField(Object raw, String fieldName) {
+    if (raw == null || String.valueOf(raw).isBlank()) {
+      return null;
+    }
+    try {
+      return Long.parseLong(String.valueOf(raw).trim());
+    } catch (NumberFormatException ex) {
+      throw new InvalidDataException(
+          "Giá trị định danh không hợp lệ cho trường '" + fieldName + "': " + raw, null);
+    }
   }
 
   /** Lấy danh sách rút gọn (Lookup Options) của Danh mục Loại - Khoản. */

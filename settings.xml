@@ -5,23 +5,23 @@
     <servers>
         <server>
             <id>nexus-repo</id>
-            <username>tr-deloyment</username>
-            <password>DnictPro@123</password>
+            <username>${env.NEXUS_USERNAME}</username>
+            <password>${env.NEXUS_PASSWORD}</password>
         </server>
         <server>
             <id>central</id>
-            <username>qZWt17</username>
-            <password>3vHJBiq1727jj7DRI7Cc4qhb9SssUXtb1</password>
+            <username>${env.CENTRAL_USERNAME}</username>
+            <password>${env.CENTRAL_PASSWORD}</password>
         </server>
         <server>
             <id>nexus-releases</id>
-            <username>tr-deloyment</username>
-            <password>DnictPro@123</password>
+            <username>${env.NEXUS_USERNAME}</username>
+            <password>${env.NEXUS_PASSWORD}</password>
         </server>
         <server>
             <id>nexus-snapshots</id>
-            <username>tr-deloyment</username>
-            <password>DnictPro@123</password>
+            <username>${env.NEXUS_USERNAME}</username>
+            <password>${env.NEXUS_PASSWORD}</password>
         </server>
     </servers>
 
@@ -29,9 +29,16 @@
         <mirror>
             <id>nexus-repo</id>
             <mirrorOf>nexus-repo</mirrorOf>
-            <name>Allow HTTP for TR Nexus repository</name>
+            <name>Allow HTTP for internal TR Nexus repository (49.156.54.118)</name>
             <url>http://49.156.54.118/nexus/repository/tr-public/</url>
             <blocked>false</blocked>
+        </mirror>
+        <mirror>
+            <id>maven-default-http-blocker</id>
+            <mirrorOf>external:http:*,!nexus-repo</mirrorOf>
+            <name>Block insecure plaintext HTTP repositories</name>
+            <url>http://0.0.0.0/</url>
+            <blocked>true</blocked>
         </mirror>
     </mirrors>
 
@@ -39,7 +46,7 @@
         <profile>
             <id>tr-standard</id>
             <repositories>
-                <!-- 1. Ưu tiên Nexus nội bộ chứa tr-common và proxy Maven Central -->
+                <!-- 1. Ưu tiên Nexus nội bộ chứa tr-common và proxy Maven Central (HTTPS) -->
                 <repository>
                     <id>nexus-repo</id>
                     <name>TR Nexus Repository</name>

@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Optional;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
@@ -17,6 +18,7 @@ import org.springframework.transaction.annotation.Transactional;
 import vn.tr.budget.dao.model.BudgetUnitConfig;
 import vn.tr.budget.data.criteria.BudgetUnitConfigSearchCriteria;
 import vn.tr.common.core.utils.ServiceUtils;
+import vn.tr.common.security.abac.OrgSubtreeAuthorizationHelper;
 
 /**
  * Triển khai Service cho BudgetUnitConfig.
@@ -29,6 +31,9 @@ import vn.tr.common.core.utils.ServiceUtils;
 public class BudgetUnitConfigServiceImpl implements BudgetUnitConfigService {
 
   private final BudgetUnitConfigRepo repo;
+
+  @Autowired(required = false)
+  private OrgSubtreeAuthorizationHelper orgSubtreeAuthorizationHelper;
 
   @Override
   public Optional<BudgetUnitConfig> findById(Long id) {
@@ -63,7 +68,7 @@ public class BudgetUnitConfigServiceImpl implements BudgetUnitConfigService {
   @Transactional
   public void deleteByIds(Collection<Long> ids) {
     if (ObjectUtil.isNotEmpty(ids)) {
-      repo.softDeleteByIds(ids);
+      repo.softDeleteByIds(ids, BudgetQueryHelper.resolveCurrentAppCode());
     }
   }
 
@@ -71,7 +76,12 @@ public class BudgetUnitConfigServiceImpl implements BudgetUnitConfigService {
   public Page<BudgetUnitConfig> findAll(BudgetUnitConfigSearchCriteria searchCriteria, Pageable pageable) {
     BudgetUnitConfigSearchCriteria criteria =
         ObjectUtil.defaultIfNull(searchCriteria, new BudgetUnitConfigSearchCriteria());
-    Specification<BudgetUnitConfig> spec = BudgetUnitConfigSpecifications.quickSearch(criteria);
+    OrgSubtreeAuthorizationHelper.OrgSubtreeScope scope =
+        orgSubtreeAuthorizationHelper != null
+            ? orgSubtreeAuthorizationHelper.resolveCurrentCallerScope()
+            : null;
+    Specification<BudgetUnitConfig> spec =
+        BudgetUnitConfigSpecifications.quickSearch(criteria, scope);
     if (pageable == null || pageable.isUnpaged()) {
       Sort sort =
           BudgetQueryHelper.buildSafeSort(
@@ -93,7 +103,9 @@ public class BudgetUnitConfigServiceImpl implements BudgetUnitConfigService {
 
   @Override
   public Optional<BudgetUnitConfig> findByCodeIgnoreCaseIncludingDeleted(String code) {
-    List<BudgetUnitConfig> results = repo.findAllByCodeIgnoreCaseIncludingDeletedSorted(code);
+    List<BudgetUnitConfig> results =
+        repo.findAllByCodeIgnoreCaseIncludingDeletedSorted(
+            code, BudgetQueryHelper.resolveCurrentAppCode());
     return ServiceUtils.checkDuplicateAndReturnFirst(log, "BudgetUnitConfig", code, results, BudgetUnitConfig::getId);
   }
 

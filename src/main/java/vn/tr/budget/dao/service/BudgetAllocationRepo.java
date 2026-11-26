@@ -33,23 +33,34 @@ public interface BudgetAllocationRepo
   boolean existsByNameIgnoreCase(String name);
 
   @Query(
-      "SELECT a FROM BudgetAllocation a WHERE a.code = :code ORDER BY a.deletedAt ASC NULLS FIRST, a.updatedAt DESC")
-  List<BudgetAllocation> findAllByCodeIgnoreCaseIncludingDeletedSorted(@Param("code") String code);
+      value =
+          "SELECT * FROM budget_allocation WHERE LOWER(code) = LOWER(:code) AND app_code = :appCode "
+              + "ORDER BY deleted_at ASC NULLS FIRST, updated_at DESC",
+      nativeQuery = true)
+  List<BudgetAllocation> findAllByCodeIgnoreCaseIncludingDeletedSorted(
+      @Param("code") String code, @Param("appCode") String appCode);
+
+  default List<BudgetAllocation> findAllByCodeIgnoreCaseIncludingDeletedSorted(String code) {
+    return findAllByCodeIgnoreCaseIncludingDeletedSorted(
+        code, BudgetQueryHelper.resolveCurrentAppCode());
+  }
 
   @Modifying(clearAutomatically = true)
   @Query(
-      "UPDATE BudgetAllocation a SET a.deletedAt = CURRENT_TIMESTAMP, a.version = (a.version + 1) WHERE a.id IN :ids")
-  void softDeleteByIds(@Param("ids") Collection<Long> ids);
-
-  @Query(value = "SELECT * FROM budget_allocation WHERE id = :id LIMIT 1", nativeQuery = true)
-  Optional<BudgetAllocation> findByIdIncludingDeleted(@Param("id") Long id);
+      "UPDATE BudgetAllocation a SET a.deletedAt = CURRENT_TIMESTAMP, a.version = (a.version + 1) "
+          + "WHERE a.id IN :ids AND a.appCode = :appCode")
+  void softDeleteByIds(@Param("ids") Collection<Long> ids, @Param("appCode") String appCode);
 
   @Query(
       value =
-          "SELECT * FROM budget_allocation WHERE id = :id AND (app_code = :appCode OR :appCode IS NULL) LIMIT 1",
+          "SELECT * FROM budget_allocation WHERE id = :id AND app_code = :appCode LIMIT 1",
       nativeQuery = true)
   Optional<BudgetAllocation> findByIdIncludingDeletedByAppCode(
       @Param("id") Long id, @Param("appCode") String appCode);
+
+  default Optional<BudgetAllocation> findByIdIncludingDeleted(Long id) {
+    return findByIdIncludingDeletedByAppCode(id, BudgetQueryHelper.resolveCurrentAppCode());
+  }
 
   @Lock(LockModeType.PESSIMISTIC_WRITE)
   @Query("SELECT a FROM BudgetAllocation a WHERE a.id = :id")
@@ -65,8 +76,8 @@ public interface BudgetAllocationRepo
 
   @Query(
       "SELECT COUNT(a), "
-          + "COALESCE(SUM(CASE WHEN UPPER(COALESCE(a.workflowStatus, '')) IN ('APPROVED', 'EXECUTING') THEN 1 ELSE 0 END), 0), "
-          + "COALESCE(SUM(CASE WHEN UPPER(COALESCE(a.workflowStatus, '')) = 'SUBMITTED' THEN 1 ELSE 0 END), 0), "
+          + "COALESCE(SUM(CASE WHEN UPPER(COALESCE(a.workflowStatus, '')) IN ('APPROVED', 'SELF_APPROVED', 'EXECUTING') THEN 1 ELSE 0 END), 0), "
+          + "COALESCE(SUM(CASE WHEN UPPER(COALESCE(a.workflowStatus, '')) IN ('PENDING_APPROVAL', 'SUBMITTED') THEN 1 ELSE 0 END), 0), "
           + "COALESCE(SUM(CASE WHEN UPPER(COALESCE(a.itemType, '')) = 'REVENUE' THEN a.effectiveAmount ELSE 0 END), 0), "
           + "COALESCE(SUM(CASE WHEN UPPER(COALESCE(a.itemType, '')) = 'REVENUE' THEN a.disbursedAmount ELSE 0 END), 0), "
           + "COALESCE(SUM(CASE WHEN UPPER(COALESCE(a.itemType, 'EXPENDITURE')) <> 'REVENUE' THEN a.initialAmount ELSE 0 END), 0), "
