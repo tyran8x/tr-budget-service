@@ -115,7 +115,7 @@ pipeline {
                         if command -v gitleaks >/dev/null 2>&1; then
                             gitleaks detect --source . --no-git --redact
                         fi
-                        if grep -rnE '([0-9]{8,10}:AA[0-9A-Za-z_-]{30,}|ssl[.]insecure=true|[J]PA_DDL_AUTO:-update|[D]nictPro@123|3vHJBiq1727)' \
+                        if grep -rnE '([0-9]{8,10}:AA[0-9A-Za-z_-]{30,}|ssl[.]insecure=true|[J]PA_DDL_AUTO:-update|[D]nictPro@123|[3]vHJBiq1727)' \
                             Jenkinsfile settings.xml Dockerfile tr-budget-service.sh src/main/resources 2>/dev/null; then
                             echo "❌ Security Gate G1 failed: secret or insecure runtime flag detected!"
                             exit 1
@@ -330,7 +330,13 @@ pipeline {
             }
         }
         cleanup {
-            sh 'rm -f *.jar'
+            script {
+                try {
+                    sh 'rm -f *.jar'
+                } catch (Exception e) {
+                    echo "⚠️ Cleanup skipped: ${e.message}"
+                }
+            }
         }
     }
 }
